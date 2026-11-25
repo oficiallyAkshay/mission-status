@@ -121,8 +121,8 @@ export function stripSvg({ title, detail, state, time }: StripInput): string {
   const tint = state === 'running' ? ACCENT : state === 'done' ? GREEN : '#D67278'
   const mark =
     state === 'running'
-      ? // Still, like the item badge: a ring with a dot, no turning arc that would jump at each redraw.
-        `<circle cx="12" cy="${H / 2}" r="4" fill="none" stroke="${tint}" stroke-opacity=".5" stroke-width="1.5"/><circle cx="12" cy="${H / 2}" r="2" fill="${tint}"/>`
+      ? // Turns once every 1.2 s, started at the wall clock's place in that turn, so a redraw does not jump.
+        `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" begin="-${((Date.now() % 1200) / 1000).toFixed(2)}s" repeatCount="indefinite"/></circle>`
       : `<circle cx="12" cy="${H / 2}" r="3.5" fill="${tint}"/>`
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">` +
@@ -167,13 +167,16 @@ export function badgeSvg(state: 'done' | 'now' | 'next' | 'dot', clock: number, 
       `<circle cx="${c}" cy="${c}" r="${c - 1}" fill="url(#${id}g)"/><path d="M${c - 4} ${c + 0.4}l${S * 0.13} ${S * 0.13} ${S * 0.27}-${S * 0.28}" fill="none" stroke="#fff" stroke-width="${S / 10}" stroke-linecap="round" stroke-linejoin="round"/></svg>`
     )
   if (state === 'now') {
-    // In progress, drawn still: a faint ring with a solid accent dot. A turning spinner restarted at every redraw and
-    // jumped, so the badge carries no motion.
+    // A circle spinner: a faint ring with a bright arc that turns once a second. Each redraw starts the turn at the
+    // wall clock's place in the second, so a redraw continues the turn instead of jumping back to the top.
     const r = c - 2
+    const arc = 2 * Math.PI * r
+    const begin = `-${(((clock || Date.now()) % 1000) / 1000).toFixed(2)}s`
     return (
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}.bd{fill:${LIGHT.accent}}}</style>` +
-      `<circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".45" stroke-width="2"/>` +
-      `<circle class="bd" cx="${c}" cy="${c}" r="${(r * 0.45).toFixed(2)}" fill="${ACCENT}"/></svg>`
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}}</style>` +
+      `<circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".22" stroke-width="2"/>` +
+      `<circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-linecap="round" stroke-dasharray="${(arc * 0.28).toFixed(2)} ${arc.toFixed(2)}">` +
+      `<animateTransform attributeName="transform" type="rotate" from="0 ${c} ${c}" to="360 ${c} ${c}" dur="1s" begin="${begin}" repeatCount="indefinite"/></circle></svg>`
     )
   }
   return (

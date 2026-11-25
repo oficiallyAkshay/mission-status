@@ -44,7 +44,8 @@ test('light theme: the dark look keeps its colours', () => {
   expect(waitsLineSvg()).toContain('.wa{stroke:#8B8A85}')
 })
 
-test('in-progress marks are still: no badge or helper strip carries an animation', () => {
-  for (const svg of [badgeSvg('now', 0, 16), badgeSvg('now', 1234, 20), stripSvg({ title: 'Scan', detail: null, state: 'running', time: '1 min' })])
-    expect(/<animate|@keyframes|animation:/.test(svg)).toBe(false)
+test('spinners start at the wall clock\'s place in their turn, so a redraw continues the turn', () => {
+  const at = (svg: string) => /begin="-([\d.]+)s"/.exec(svg)?.[1]
+  expect(at(badgeSvg('now', 1_700_000_000_250, 16))).toBe('0.25')
+  expect(at(badgeSvg('now', 1_700_000_000_900, 16))).toBe('0.90')
 })
