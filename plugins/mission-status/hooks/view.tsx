@@ -244,29 +244,13 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       )
     const STEP = BADGE + 1
     // A rail cell: the wait line when on. A space row keeps its height with an empty drawing when no line runs through.
-    // A line that fills its cell whatever the row's height: the cell clips a tall drawing placed out of the flow, so a
-    // row that wraps or grows never leaves a gap in the line.
-    const TALL = 600
-    const lineFill = (on: boolean, key: string, minHeight = 0, flow = false) => (
-      <Box key={key} position="relative" overflow="hidden" flexGrow={1} minHeight={minHeight}>
-        {on && Svg !== undefined && (
-          <Box position="absolute" top={0} left={0} width="100%">
-            {svg(flow ? flowLineSvg(TALL) : waitsLineSvg(TALL), flow ? 'Line to the next stage' : 'Wait line', TALL)}
-          </Box>
-        )}
-      </Box>
-    )
-    const railBox = (on: boolean, height: number, key: string, _keepHeight = false) => (
-      <Box width={STEP} flexShrink={0} key={key} flexDirection="column" minHeight={height}>
-        {lineFill(on, `${key}-fill`, height)}
-      </Box>
-    )
-    // An item's badge with the trunk above and below it, each part filling its share of the row.
-    const badgeCell = (state: 'done' | 'now' | 'next', up: boolean, down: boolean, alt: string, key: string) => (
-      <Box width={STEP} flexShrink={0} flexDirection="column" key={key}>
-        {lineFill(up, `${key}-up`)}
-        {svg(badgeSvg(state, 0, 16), alt, 16)}
-        {lineFill(down, `${key}-down`)}
+    const railBox = (on: boolean, height: number, key: string, keepHeight = false) => (
+      <Box width={STEP} flexShrink={0} key={key}>
+        {on && Svg !== undefined
+          ? svg(waitsLineSvg(height), 'Wait line', height)
+          : keepHeight && Svg !== undefined
+            ? svg(spaceSvg(height), 'Space', height)
+            : <Text>{''}</Text>}
       </Box>
     )
     const prefix = (rails: boolean[], height: number, key: string) => rails.map((on, i) => railBox(on, height, `${key}-r${i}`))
@@ -294,15 +278,13 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         const down = i < order.length - 1
         const up = i > 0
         rows.push(
-          <Box flexDirection="row" alignItems="stretch" gap={0} key={`${key}-row`}>
+          <Box flexDirection="row" alignItems="center" gap={0} key={`${key}-row`}>
             {prefix(rails, 20, `${key}-row`)}
-            {Svg !== undefined ? (
-              badgeCell(state, up, down, `${x.name}: ${state === 'done' ? 'done' : state === 'now' ? 'in progress' : 'not started'}`, `${key}-badge`)
-            ) : (
-              <Box width={STEP} flexShrink={0}>
-                <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>
-              </Box>
-            )}
+            <Box width={STEP} flexShrink={0}>
+              {Svg !== undefined
+                ? svg(badgeSvg(state, 0, 16, up, down), `${x.name}: ${state === 'done' ? 'done' : state === 'now' ? 'in progress' : 'not started'}`, 20)
+                : <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>}
+            </Box>
             <Box flexGrow={1} flexShrink={1}>
               {/* Body style for every item; the badge carries the state, the colour only steps back for done and later items. */}
               <Text color={state === 'now' ? undefined : SUBTEXT} wrap="wrap">
@@ -785,14 +767,9 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                 const to = s.ends?.[k] ?? null
                 rows.push(
                   <Box flexDirection="column" gap={0} key={`flow-${k}`}>
-                    <Box flexDirection="row" alignItems="stretch" gap={1} paddingRight={1}>
-                      {/* The flow line runs through the badge cell, top to bottom, so folded stages join with no gap. */}
-                      <Box width={5} flexShrink={0} flexDirection="column">
-                        {lineFill(k > 0, `fold-up-${k}`, 4, true)}
-                        <Box flexDirection="row" justifyContent="center">
-                          {Svg !== undefined ? svg(badgeSvg('done', 0, 14), `${name}: done`, 14) : <Text color="success">✓</Text>}
-                        </Box>
-                        {lineFill(!isLast, `fold-down-${k}`, 4, true)}
+                    <Box flexDirection="row" alignItems="center" gap={1} paddingX={1}>
+                      <Box width={BADGE} flexShrink={0}>
+                        {Svg !== undefined ? svg(badgeSvg('done', 0, 14), `${name}: done`, 14) : <Text color="success">✓</Text>}
                       </Box>
                       <Text dimColor>{name}</Text>
                       {exits.length > 0 && <Text color="success" size="caption">{`✓ ${exits.map(x => x.when).join(' · ')}`}</Text>}
@@ -802,6 +779,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                         {hasMore ? <Button key={`open-${k}`} label="+" plain dimColor onPress={() => toggle(k)} /> : <Text>{''}</Text>}
                       </Box>
                     </Box>
+                    {!isLast && Svg !== undefined && svg(flowLineSvg(8), 'Line to the next stage', 8, `fold-line-${k}`)}
                   </Box>,
                 )
                 return
