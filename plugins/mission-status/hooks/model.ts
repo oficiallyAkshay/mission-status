@@ -24,6 +24,7 @@ export const TEMPLATES: Record<string, string[]> = {
   'board-batch': ['Intake', 'Plan', 'Build', 'Review', 'Merge'],
   writing: ['Outline', 'Draft', 'Review', 'Publish'],
   migration: ['Plan', 'Dry run', 'Migrate', 'Verify', 'Clean up'],
+  'plan-review': ['Intake', 'Draft', 'Review waves', 'Your rows', 'Hand off'],
 }
 export const HYPOTHESIS_STATES: readonly HypothesisState[] = ['open', 'testing', 'ruled out', 'confirmed']
 
