@@ -540,3 +540,13 @@ test('running helpers show under the item in progress, as its children', async (
   expect(order).toEqual(['Smriti deep: in progress', 'Helper lens taste: running', 'Merge wait: not started'])
   await ui.unmount()
 })
+
+test('badges and trunk lines draw at a fixed 16 px width, so a column never stretches them', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'One', status: 'done' }, { phase: 1, name: 'Two', status: 'now' }] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const badges = (await ui.findAll({ type: 'Svg' })).filter(x => /^(One|Two): /.test(String((x as any).props?.alt ?? '')))
+  expect(badges.length).toBe(2)
+  for (const b of badges) expect((b as any).props?.width).toBe(16)
+  await ui.unmount()
+})

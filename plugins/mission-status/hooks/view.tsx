@@ -152,8 +152,9 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     }
 
     // isInteractive draws the picture in a sandboxed frame, where its <title> tooltips show on hover.
-    const svg = (source: string, alt: string, height: number, key?: string, isInteractive?: boolean) =>
-      Svg === undefined ? null : <Svg key={key} source={source} alt={alt} height={height > 0 ? height : undefined} isInteractive={isInteractive === true ? true : undefined} />
+    // width: a fixed pixel width. A drawing in a column box is stretched to the column's width without it.
+    const svg = (source: string, alt: string, height: number, key?: string, isInteractive?: boolean, width?: number) =>
+      Svg === undefined ? null : <Svg key={key} source={source} alt={alt} height={height > 0 ? height : undefined} width={width} isInteractive={isInteractive === true ? true : undefined} />
     const row = (left: RenderChildren, right: RenderChildren, key?: string) => (
       <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2} key={key}>
         {left}
@@ -263,9 +264,9 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const railBox = (on: boolean, height: number, key: string, keepHeight = false) => (
       <Box width={STEP} flexShrink={0} key={key}>
         {on && Svg !== undefined
-          ? svg(waitsLineSvg(height), 'Wait line', height)
+          ? svg(waitsLineSvg(height), 'Wait line', height, undefined, undefined, 16)
           : keepHeight && Svg !== undefined
-            ? svg(spaceSvg(height), 'Space', height)
+            ? svg(spaceSvg(height), 'Space', height, undefined, undefined, 16)
             : <Text>{''}</Text>}
       </Box>
     )
@@ -299,16 +300,17 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         const down = i < order.length - 1
         const up = i > 0
         const label = state === 'now' && (x.since ?? null) !== null ? `${x.name}  ·  00:00` : state === 'done' && (x.doneAt ?? null) !== null ? `${x.name}  ·  12:00 PM EST` : x.name
-        const rowH = 20 * linesOf(label + (ciPart ?? ''), depth, rails.length)
+        // A text line draws about 24 px high, not 20: the badge column fills the rest with the trunk, so no gap opens below.
+        const rowH = 24 * linesOf(label + (ciPart ?? ''), depth, rails.length)
         const word = state === 'done' ? 'done' : state === 'now' ? 'in progress' : state === 'failed' ? 'failed' : 'not started'
         rows.push(
           <Box flexDirection="row" alignItems="flex-start" gap={0} key={`${key}-row`}>
             {prefix(rails, rowH, `${key}-row`)}
             <Box width={STEP} flexShrink={0} flexDirection="column">
               {Svg !== undefined
-                ? svg(state === 'failed' ? failedBadgeSvg(16, up, down) : badgeSvg(state, 0, 16, up, down), `${x.name}: ${word}`, 20)
+                ? svg(state === 'failed' ? failedBadgeSvg(16, up, down) : badgeSvg(state, 0, 16, up, down), `${x.name}: ${word}`, 20, undefined, undefined, 16)
                 : <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>}
-              {Svg !== undefined && rowH > 20 && down && svg(waitsLineSvg(rowH - 20), 'Wait line', rowH - 20)}
+              {Svg !== undefined && rowH > 20 && down && svg(waitsLineSvg(rowH - 20), 'Wait line', rowH - 20, undefined, undefined, 16)}
             </Box>
             <Box flexGrow={1} flexShrink={1}>
               {/* Body style for every item; the badge carries the state, the colour only steps back for done and later items. */}
