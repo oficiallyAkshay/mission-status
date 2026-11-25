@@ -6,6 +6,7 @@ on:
     paths: ['site/**', '.github/workflows/pages.yml']
   workflow_dispatch:
 permissions: {}
+# One deploy at a time, as GitHub's Pages starter does; a run keyed by commit could deploy an older tree last.
 concurrency:
   group: pages
   cancel-in-progress: true
@@ -13,6 +14,7 @@ jobs:
   # Two jobs, as GitHub's own Pages workflow: the deploy reads the artifact only after the build job has finished it.
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     steps:
@@ -25,6 +27,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       pages: write
       id-token: write

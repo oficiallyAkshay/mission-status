@@ -77,13 +77,13 @@ const CHAT = [
   ['I’ll start by reading how the current flow works, then check what the tests cover.', 0],
   ['Read src/search/index.ts', 1], ['Read src/search/query.ts', 1],
   ['The query builder keeps state in two places. I’ll move it into one store first so the save button has a single source.', 0],
-  ['Edited src/search/store.ts (+48 −12)', 1], ['Ran npm test — 41 passed, 2 failed', 1],
+  ['Edited src/search/store.ts (+48 −12)', 1], ['Ran npm test: 41 passed, 2 failed', 1],
   ['Two tests fail because they assumed the old shape. I’ll update the fixtures rather than the code, since the new shape is the intended one.', 0],
-  ['Edited test/fixtures/search.json', 1], ['Ran npm test — 43 passed', 1],
+  ['Edited test/fixtures/search.json', 1], ['Ran npm test: 43 passed', 1],
   ['Next I’ll add the saved list. It needs pagination for people with many searches, so I’ll reuse the list component from settings.', 0],
-  ['Searched for "PagedList" — 6 results', 1], ['Edited src/search/SavedList.tsx (+112)', 1],
+  ['Searched for "PagedList": 6 results', 1], ['Edited src/search/SavedList.tsx (+112)', 1],
   ['I also noticed the empty state says nothing useful, so I wrote a short line that tells people how to save their first search.', 0],
-  ['Started a helper: check accessibility of the new list', 1], ['Helper finished — 2 contrast fixes', 1],
+  ['Started a helper: check accessibility of the new list', 1], ['Helper finished: 2 contrast fixes', 1],
   ['Both contrast fixes are applied. Now running the full suite again before I open the pull request.', 0],
 ]
 
@@ -484,22 +484,24 @@ if (!REDUCED) {
   setInterval(chatLine, 3200)
 }
 
-// The Footfall bar: the repository's numbers from its store branch. Hidden until the file reads (a private
-// repository, or before the first Footfall run). `?footfall-sample` shows sample cells, labelled, for a preview.
-const FF_URL = 'https://raw.githubusercontent.com/oficiallyAkshay/mission-status/footfall/footfall.numbers.json'
-async function footfall() {
-  const bar = document.querySelector('.ff-bar')
-  let metrics = {}
-  try { const res = await fetch(FF_URL, { cache: 'no-cache' }); if (res.ok) metrics = (await res.json()).metrics ?? {} } catch {}
-  for (const [k, m] of Object.entries(metrics)) {
-    const cell = document.createElement('div'); cell.className = 'm'
-    const label = document.createElement('span'); label.className = 'l'; label.append(document.createElement('i'), String(m.label ?? ''))
-    const value = document.createElement('b'); value.textContent = String(m.display ?? '')
-    cell.append(label, value); bar.append(cell)
-    const hero = document.querySelector(`#hero-meta [data-k="${k}"] dd`); if (hero) hero.textContent = String(m.display ?? '')
+// The repository numbers, in the hero and the footer: stars and forks from GitHub, clones and views from the
+// clonometer files on the badges branch. A small count shows as a floor ("< 10"), never as an exact low number.
+// A source that does not answer keeps the floor already in the page.
+const REPO_API = 'https://api.github.com/repos/oficiallyAkshay/mission-status'
+const BADGES = 'https://raw.githubusercontent.com/oficiallyAkshay/mission-status/badges/'
+const floorOf = (n, floor) => (n < floor ? `< ${floor}` : n.toLocaleString('en-US'))
+async function getJson(url) { try { const r = await fetch(url, { cache: 'no-cache' }); return r.ok ? await r.json() : null } catch { return null } }
+async function repoNumbers() {
+  const [repo, clones, views] = await Promise.all([getJson(REPO_API), getJson(`${BADGES}clones.json`), getJson(`${BADGES}views.json`)])
+  const got = {
+    stars: typeof repo?.stargazers_count === 'number' ? floorOf(repo.stargazers_count, 10) : null,
+    forks: typeof repo?.forks_count === 'number' ? floorOf(repo.forks_count, 10) : null,
+    clones: typeof clones?.total === 'number' ? floorOf(clones.total, 50) : null,
+    views: typeof views?.total === 'number' ? floorOf(views.total, 50) : null,
   }
-  // Before the first read (a private repository), the footer shows the same floors as the hero, so it never sits empty.
-  if (bar.children.length === 0) for (const d of document.querySelectorAll('#hero-meta > div')) {
+  for (const [k, v] of Object.entries(got)) { const dd = document.querySelector(`#hero-meta [data-k="${k}"] dd`); if (dd && v !== null) dd.textContent = v }
+  const bar = document.querySelector('.ff-bar')
+  for (const d of document.querySelectorAll('#hero-meta > div')) {
     const cell = document.createElement('div'); cell.className = 'm'
     const label = document.createElement('span'); label.className = 'l'; label.append(document.createElement('i'), d.querySelector('dt').textContent)
     const value = document.createElement('b'); value.textContent = d.querySelector('dd').textContent
@@ -507,7 +509,7 @@ async function footfall() {
   }
   bar.hidden = bar.children.length === 0
 }
-footfall()
+repoNumbers()
 
 // The end: copy both install commands, fit the wordmark to the page width, and ease the closing parts in.
 function theEnd() {

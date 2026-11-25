@@ -53,6 +53,13 @@ The plugin checks this repository's latest release at start and every six hours,
 | ci | Lints the workflows, scans for secrets, validates and tests the plugin, and checks that the version moved |
 | release | Tags and releases each new plugin version on main |
 | clonometer | Counts clones and views every hour onto the badges branch; it needs the TRAFFIC_TOKEN secret |
+| codeql | Scans the code for security faults on each pull request, each push to main and weekly |
+| scorecard | Scores the repository's security practices for the OpenSSF Scorecard badge, weekly and on each push to main |
+| pages | Publishes the website in `site/` on each push to main that changes it |
+
+## Report a security problem
+
+Report it privately: open the repository's Security tab and choose "Report a vulnerability". Do not open a public issue. You get a reply within 14 days.
 
 ## Before you start
 
@@ -90,7 +97,8 @@ To see the pane while you work, copy the plugin into a session's mods folder wit
 | `plugins/mission-status/types/index.d.ts` | The state contract |
 | `plugins/mission-status/tests/` | The tests, run by `claude plugin test` |
 | `docs/` | The product plan, the telemetry field list and the README's pictures |
-| `scripts/` | Checks and the development copy |
+| `site/` | The website, with its copy of the drawing code in `site/vendor/` |
+| `scripts/` | Checks, the development copy and the social preview cards (`social-card.mjs`) |
 
 ## Licence
 

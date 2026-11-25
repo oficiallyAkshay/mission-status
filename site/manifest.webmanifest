@@ -1,0 +1,13 @@
+{
+  "name": "mission-status",
+  "short_name": "mission-status",
+  "description": "A live progress pane for Claude Code in the Claude desktop app.",
+  "start_url": "./",
+  "display": "browser",
+  "background_color": "#F5F1EA",
+  "theme_color": "#F5F1EA",
+  "icons": [
+    { "src": "apple-touch-icon.png", "sizes": "180x180", "type": "image/png" },
+    { "src": "mark.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

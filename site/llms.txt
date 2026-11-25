@@ -1,0 +1,12 @@
+# mission-status
+
+> An open-source Claude Code plugin that adds a live progress pane beside the chat in the Claude desktop app: the goal, the stages, what done means for each stage, and where the work is now.
+
+- [Repository and README](https://github.com/oficiallyAkshay/mission-status): install, fit, comparison, security and limits
+- [Usage counts](https://github.com/oficiallyAkshay/mission-status/blob/main/docs/telemetry.md): every event and field the plugin can send, and how to turn it off
+- [Licence](https://github.com/oficiallyAkshay/mission-status/blob/main/LICENSE): MIT
+
+Install from a Claude Code session in the Claude desktop app:
+
+    /plugin marketplace add oficiallyAkshay/mission-status
+    /plugin install mission-status@mission-status

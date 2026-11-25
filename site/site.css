@@ -155,17 +155,6 @@ section h2 { font-size: clamp(28px, 3.2vw, 42px); letter-spacing: -.03em; line-h
 .foot .wordmark { color: var(--ink); }
 .credit { font-size: 13px; }
 
-@media (max-width: 900px) {
-  .hero { grid-template-columns: 1fr; }
-  .hero-copy { padding: 28px 16px 32px; }
-  .missions { grid-template-columns: 1fr 1fr; }
-  .desk { min-height: 640px; }
-  .window { right: 16px; width: 760px; top: 32px; }
-  .window-body { grid-template-columns: 1fr min(400px, calc(100vw - 32px)); }
-  .vs, .use-grid { grid-template-columns: 1fr; }
-  .shape { grid-template-columns: 1fr; gap: 28px; }
-  .nav nav a:not(.repo) { display: none; }
-}
 @media (prefers-reduced-motion: reduce) { .card.enter, .rise, .missions button, .window, .desk, .live-dot, .hl, .pane.swap * { animation: none !important; opacity: 1 !important; transform: none !important; } .hl { background-size: 100% 100%; } .reveal { opacity: 1; transform: none; transition: none; } .use:hover, .missions button:hover { transform: none; } }
 html.motion .reveal:not(.in) { opacity: 0; }
 
@@ -283,7 +272,6 @@ section.hero .custom { margin: 18px 0 0; max-width: 620px; }
 section.hero .desk { position: relative; height: 700px; margin-top: 36px; overflow: hidden; }
 section.hero .window { zoom: 1.12; left: -80px; right: max(16px, calc((100vw - var(--wrap)) / 2) - 0px); width: auto; top: 0; bottom: -30px; border-radius: 10px 10px 0 0; animation: rise 1s .3s var(--ease) both; }
 section.hero .window-body { grid-template-columns: 1fr 460px; }
-@media (max-width: 900px) { section.hero .hero-copy { padding-top: 40px; } section.hero .missions { gap: 0 16px; overflow-x: auto; flex-wrap: nowrap; } section.hero .missions button { white-space: nowrap; } section.hero .window { left: -420px; right: 16px; zoom: 1; } }
 
 .vs { align-items: start; }
 .vs-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
@@ -333,7 +321,6 @@ section.hero .window-body { grid-template-columns: 1fr 460px; }
 .src-feed li span { font-size: 18px; }
 .src-feed li.old { opacity: .45; }
 #src-pane { border-radius: 8px; min-height: 0; }
-@media (max-width: 900px) { .glance { height: auto; } .glance-sticky { position: static; height: auto; grid-template-columns: 1fr; } .src-grid { grid-template-columns: 1fr; } .vs-stats { grid-template-columns: repeat(2, 1fr); } }
 
 /* Round 3: subheading, five tabs, three chat treatments, two numbers a side, plan cards, costs, the exit. */
 section.hero h1 { margin-bottom: 14px; }
@@ -417,7 +404,6 @@ section.hero h1 { font-weight: 800; letter-spacing: -.035em; line-height: .98; }
 .src-r span { color: var(--muted); }
 .src.agent .src-r span { color: rgba(236, 234, 228, .6); }
 .src-r strong { font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
-@media (max-width: 900px) { .dmap { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .nav { position: absolute; top: 0; left: 0; right: 0; z-index: 5; background: none; box-shadow: none; clip-path: none; }
 section.hero .hero-copy { padding-top: 140px; }
@@ -505,7 +491,6 @@ section.hero .missions button { color: rgba(255, 255, 255, .72); }
 .cost-free { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 34px 0 0; }
 .cost-free b { margin-right: 6px; font-size: 15px; }
 .cost-free span { padding: 6px 12px; border-radius: 6px; background: #fff; border: 1px solid var(--line); font-size: 14px; font-weight: 600; }
-@media (max-width: 900px) { .cost-row { grid-template-columns: 1fr; } .cost-row b { text-align: left; } }
 @media (prefers-reduced-motion: reduce) { section.hero { animation: none; } .cost-bar i { width: var(--w); transition: none; } }
 .gs-inner .p-exit { background: rgba(22, 18, 40, .88); }
 .gs-inner .p-exit svg text { fill: #E6E2F2 !important; }
@@ -589,7 +574,6 @@ section.hero .window { bottom: 0; }
 .chips2 span { padding: 5px 10px; border-radius: 6px; background: #EEEAFE; color: var(--accent-ink); font-size: 13.5px; font-weight: 650; }
 .soon2 { margin-top: auto !important; padding-top: 14px; }
 .soon2 b { margin-right: 8px; padding: 3px 8px; border-radius: 4px; background: rgba(255, 255, 255, .92); color: #2A1660; font-size: 12px; }
-@media (max-width: 900px) { .subs-grid { grid-template-columns: 1fr; } }
 
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 /* The comparison as paired bars, one row per cost. */
@@ -608,7 +592,6 @@ section.hero .window { bottom: 0; }
 /* The closing wordmark: a live shader seen through the letters. */
 .tex-mark { position: absolute; left: 3vw; right: 3vw; bottom: 3%; height: 17vw; z-index: 1; pointer-events: none; }
 .tex-mark canvas { display: block; width: 100%; height: 100%; -webkit-mask-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1000 170'%3E%3Ctext x='500' y='140' text-anchor='middle' font-family='-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif' font-weight='900' font-size='190' letter-spacing='-10' textLength='990' lengthAdjust='spacingAndGlyphs'%3Emission-status%3C/text%3E%3C/svg%3E"); mask-image: url("data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1000 170'%3E%3Ctext x='500' y='140' text-anchor='middle' font-family='-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif' font-weight='900' font-size='190' letter-spacing='-10' textLength='990' lengthAdjust='spacingAndGlyphs'%3Emission-status%3C/text%3E%3C/svg%3E"); -webkit-mask-size: 100% 100%; mask-size: 100% 100%; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; filter: drop-shadow(0 0 30px rgba(123, 92, 255, .6)); }
-@media (max-width: 900px) { .vb-head, .vb-row { grid-template-columns: 1fr; } .vb-head span:first-child { display: none; } }
 .nav nav { padding: 6px 16px; border-radius: 10px; background: rgba(18, 10, 42, .62); -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px); box-shadow: 0 0 0 1px rgba(255, 255, 255, .1); }
 .nav nav a { color: #fff; text-shadow: none; }
 /* A taller window, a smaller headline: more of the real pane in view. */
@@ -624,7 +607,6 @@ section.hero .missions { gap: 0 22px; }
 section.hero .desk { height: clamp(620px, 84vh, 900px); margin-top: 72px; align-self: stretch; }
 section.hero .window { left: auto; right: max(16px, calc((100vw - var(--wrap)) / 2)); width: 640px; top: 40px; }
 section.hero .window-body { grid-template-columns: 1fr 460px; }
-@media (max-width: 900px) { section.hero { grid-template-columns: 1fr; } section.hero .desk { margin-top: 0; } section.hero .window { right: 16px; width: 560px; } }
 section.hero .window-body { grid-template-columns: minmax(0, 1fr) 460px; }
 section.hero .chat-head { justify-content: flex-start; }
 
@@ -642,7 +624,6 @@ section.hero .chat-head { justify-content: flex-start; }
 .sv-nums span { margin: 0 6px; color: var(--muted); font-weight: 400; }
 .sv-nums .nv { color: var(--accent-ink); }
 .sv-pct { font-size: 34px; font-weight: 850; letter-spacing: -.04em; text-align: right; color: #2E8A57; font-variant-numeric: tabular-nums; }
-@media (max-width: 900px) { .sv-head { display: none; } .sv-row { grid-template-columns: 1fr auto; } .sv-bar { grid-column: 1 / -1; } }
 
 .gs-quiet .gs-inner { width: 560px; zoom: 1.45; }
 .quiet2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
@@ -662,7 +643,7 @@ section.hero .chat-head { justify-content: flex-start; }
 .subs-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .shapes { display: grid; gap: 9px; margin-top: 6px; }
 .own { display: grid; gap: 8px; min-height: 250px; align-content: start; margin-top: 6px; }
-.own-save { display: flex; align-items: center; gap: 10px; margin-top: 12px !important; }
+.own-save { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px !important; }
 .own-save button { font: 650 14px var(--font); padding: 8px 14px; border-radius: 8px; border: 0; background: #fff; color: #2A1660; opacity: .7; cursor: default; }
 .own-save b { padding: 3px 8px; border-radius: 4px; background: rgba(255, 255, 255, .2); color: #fff; font-size: 12px; }
 
@@ -708,7 +689,6 @@ section.hero .missions button[data-key="agent"] { flex-basis: 100%; justify-cont
 section.hero .missions button[data-key="agent"] span { color: #fff; -webkit-text-fill-color: #fff; background: none; }
 section.hero .missions button[data-key="agent"] .spark { color: #fff; }
 section.hero .missions button[data-key="agent"][aria-checked="true"] { border-image: none; box-shadow: 0 0 0 3px #fff, 0 14px 40px rgba(200, 109, 215, .6); }
-@media (max-width: 900px) { section.hero { height: auto; } section.hero .desk { height: 720px; } section.hero .window { left: -300px; right: 16px; } }
 
 /* Footfall's serif for headings; a white left pane; value first, access second. */
 h1, h2, .gf h3, .sub-tile h3, .tex-word, .wordmark { font-family: var(--serif); }
@@ -876,7 +856,6 @@ section.hero .missions button[data-key="agent"].burst .spark { animation: spin 1
 .motion .wall.in .wl-row { opacity: 1; transform: none; }
 .motion .wall.in .wl-row:nth-child(2) { transition-delay: 120ms; }
 .motion .wall.in .wl-row:nth-child(3) { transition-delay: 240ms; }
-@media (max-width: 700px) { .wall { padding: 80px 0 70px; } .wl-row { grid-template-columns: 1fr; padding: 24px 0; } .wl-new { font-size: clamp(72px, 24vw, 110px); } }
 /* Shapes and own: nine template rows cascade in; the agent's own set changes calmly. */
 .tshape { grid-template-columns: 112px minmax(0, 1fr); gap: 12px; opacity: 0; transform: translateY(10px); transition: opacity .6s var(--ease) calc(var(--r) * 90ms), transform .6s var(--ease) calc(var(--r) * 90ms); }
 .shapes.in .tshape { opacity: 1; transform: none; }
@@ -890,7 +869,6 @@ section.hero .missions button[data-key="agent"].burst .spark { animation: spin 1
 .own-card { padding: 10px 14px; border-radius: 9px; background: rgba(22, 18, 40, .78); border: 1px dashed rgba(243, 184, 216, .7); color: #fff; font-weight: 650; font-size: 15px; opacity: 0; transform: translateY(12px); transition: opacity .5s var(--ease), transform .5s var(--ease); }
 .own-card.in { opacity: 1; transform: none; }
 .own-card.out { opacity: 0; transform: translateY(10px); }
-@media (max-width: 480px) { .tshape { grid-template-columns: 88px minmax(0, 1fr); gap: 8px; font-size: 14px; } .tshape u { width: 100%; min-width: 0; flex: 1 1 0; } }
 @media (prefers-reduced-motion: reduce) { .tshape, .tshape u, .own-card { opacity: 1; transform: none; transition: none; } }
 
 /* Idea B: the three claims as one sentence with large live numbers. */
@@ -898,7 +876,6 @@ section.hero .missions button[data-key="agent"].burst .spark { animation: spin 1
 .wl-say .wl-n { display: inline-flex; align-items: baseline; gap: .12em; color: var(--accent-ink); font-weight: 850; font-variant-numeric: tabular-nums; }
 .wl-say .wl-new { font: inherit; color: inherit; letter-spacing: inherit; line-height: inherit; }
 .wl-say .wl-old { font-size: .34em; font-weight: 650; color: var(--muted); align-self: flex-start; margin-top: .3em; }
-@media (max-width: 700px) { .wl-say { max-width: none; } }
 /* The end: the texture, the install block, the repository numbers and the closing wordmark. */
 .texture { height: 1080px; margin-top: 90px; background: #0F0C18; }
 .tex { align-items: flex-start; gap: 22px; }
@@ -940,7 +917,6 @@ html.motion .tex-end:not(.in) > * { opacity: 0; transform: translateY(18px); }
 .foot-word i { font-style: normal; color: var(--accent); }
 html.motion .foot:not(.in) .foot-word span { transform: translateY(45%); }
 .foot-word:hover i { color: #B4A9FF; }
-@media (max-width: 700px) { .texture { height: 1000px; } .tex-cmd pre { padding: 18px 14px 64px; font-size: 12.5px; } .tex-cmd code { width: auto; white-space: pre-wrap; overflow-wrap: anywhere; } .tex-copy { top: auto; bottom: 12px; } .tex-end { padding-bottom: 48px; } }
 
 /* Idea F: the footer numbers in large type, beside "Open source. MIT." */
 .foot-in { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 28px 48px; }
@@ -952,7 +928,6 @@ html.motion .foot:not(.in) .foot-word span { transform: translateY(45%); }
 .foot-meta { margin: 0; font-size: 16px; color: var(--muted); }
 .foot-meta b { display: block; font-size: clamp(22px, 2.4vw, 30px); font-weight: 800; letter-spacing: -.02em; color: var(--ink); margin-bottom: 6px; }
 /* Phone width: the hero's numbers wrap and the window stays inside the page. */
-@media (max-width: 700px) { .repo-stats { flex-wrap: wrap; width: auto; } .repo-stats div { min-width: 0; flex: 1 1 40%; } section.hero { overflow-x: clip; } }
 
 /* Struck figures read as plain numbers: normal weight, readable size, on the baseline. */
 .wl-say .wl-old { font-size: .4em; font-weight: 500; letter-spacing: 0; color: #6E6A78; align-self: baseline; margin: 0 0 0 .1em; text-decoration: line-through; text-decoration-thickness: .07em; text-decoration-color: #6E6A78; }
@@ -1008,7 +983,6 @@ html.motion .foot:not(.in) .foot-word span { transform: translateY(45%); }
 .qa-a { overflow: hidden; }
 .qa-a > p { margin: 0; max-width: 56ch; font-size: 17px; line-height: 1.55; color: #4A4656; }
 .qa[open] .qa-a > p { padding-bottom: 22px; }
-@media (max-width: 800px) { .faq { grid-template-columns: 1fr; padding: 80px 0 60px; } .faq h2 { position: static; } .qa summary { font-size: 18px; } }
 
 /* Works with: integrations and what it is built on, as a quiet logo wall. */
 .logos { padding: 110px 0 40px; }
@@ -1021,7 +995,6 @@ html.motion .foot:not(.in) .foot-word span { transform: translateY(45%); }
 .lw-d { font-size: 14.5px; line-height: 1.4; color: #5C5868; }
 .motion .lw { opacity: 0; transform: translateY(12px); transition: opacity .7s var(--ease), transform .7s var(--ease); }
 .motion .logos.in .lw { opacity: 1; transform: none; }
-@media (max-width: 900px) { .lw-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 /* The lockup: the patch, then MISSION over STATUS in Roboto Mono, both words one width. */
 .lockup { display: inline-flex; align-items: center; gap: 12px; text-decoration: none; color: var(--ink); }
@@ -1031,7 +1004,6 @@ html.motion .foot:not(.in) .foot-word span { transform: translateY(45%); }
 .lk-t b:first-child { letter-spacing: .02em; }
 .lk-t b:last-child { letter-spacing: .123em; color: var(--accent-ink); }
 .lw.soon .lw-ico { color: #8E889C; }
-.lw b em { font-style: normal; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent-ink); margin-left: 6px; vertical-align: 2px; }
 @media (min-width: 901px) { .lw-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
 /* Lockup 4 (the owner's pick): one line, MISSION/STATUS, with a purple slash. */
@@ -1040,8 +1012,6 @@ html.motion .foot:not(.in) .foot-word span { transform: translateY(45%); }
 
 /* Works-with: four across; Coming soon is a small purple word beside the name. */
 @media (min-width: 901px) { .lw-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-.lw.lw-soon .lw-ico { color: #8E889C; }
-.lw b em { display: inline; background: none; padding: 0; border-radius: 0; font-style: normal; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent-ink); margin-left: 8px; vertical-align: 2px; }
 
 /* The interactive install: a large button that plays the install in the command block. */
 .tex-install { display: inline-flex; align-items: center; gap: 12px; margin: 26px auto 20px; padding: 18px 30px; border: 0; border-radius: 14px; background: #8B7CF6; color: #fff; font: 800 20px/1 var(--font); letter-spacing: -.01em; cursor: pointer; box-shadow: 0 14px 40px -14px rgba(139, 124, 246, .9); transition: transform .35s var(--ease), background .35s var(--ease), box-shadow .35s var(--ease); }
@@ -1071,3 +1041,52 @@ section.hero .pick .missions button[data-key="agent"] { flex: 1 0 100%; }
 section.hero .pick { gap: 10px 6px; }
 section.hero .pick .pick-h { font-size: 20px; margin-right: 4px; }
 section.hero .pick .missions button:not([data-key="agent"]) { padding: 9px 10px; gap: 6px; }
+
+/* Narrow screens. Every max-width block lives here, after all the wide rules, so no later wide rule can undo it. Keep new ones here. */
+@media (max-width: 900px) {
+  .hero { grid-template-columns: 1fr; }
+  .hero-copy { padding: 28px 16px 32px; }
+  .missions { grid-template-columns: 1fr 1fr; }
+  .desk { min-height: 640px; }
+  .window { right: 16px; width: 760px; top: 32px; }
+  .window-body { grid-template-columns: 1fr min(400px, calc(100vw - 32px)); }
+  .vs, .use-grid { grid-template-columns: 1fr; }
+  .shape { grid-template-columns: 1fr; gap: 28px; }
+  .nav nav a:not(.repo) { display: none; }
+}
+@media (max-width: 900px) { section.hero .hero-copy { padding-top: 40px; } section.hero .missions { gap: 0 16px; overflow-x: auto; flex-wrap: nowrap; } section.hero .missions button { white-space: nowrap; } section.hero .window { left: -420px; right: 16px; zoom: 1; } }
+@media (max-width: 900px) { .glance { height: auto; } .glance-sticky { position: static; height: auto; grid-template-columns: 1fr; } .src-grid { grid-template-columns: 1fr; } .vs-stats { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 900px) { .dmap { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 900px) { .cost-row { grid-template-columns: 1fr; } .cost-row b { text-align: left; } }
+@media (max-width: 900px) { .subs-grid { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .vb-head, .vb-row { grid-template-columns: 1fr; } .vb-head span:first-child { display: none; } }
+@media (max-width: 900px) { section.hero { grid-template-columns: 1fr; } section.hero .desk { margin-top: 0; } section.hero .window { right: 16px; width: 560px; } }
+@media (max-width: 900px) { .sv-head { display: none; } .sv-row { grid-template-columns: 1fr auto; } .sv-bar { grid-column: 1 / -1; } }
+@media (max-width: 900px) { section.hero { height: auto; } section.hero .desk { height: 720px; } section.hero .window { left: -300px; right: 16px; } }
+@media (max-width: 700px) { .wall { padding: 80px 0 70px; } .wl-row { grid-template-columns: 1fr; padding: 24px 0; } .wl-new { font-size: clamp(72px, 24vw, 110px); } }
+@media (max-width: 480px) { .tshape { grid-template-columns: 88px minmax(0, 1fr); gap: 8px; font-size: 14px; } .tshape u { width: 100%; min-width: 0; flex: 1 1 0; } }
+@media (max-width: 700px) { .wl-say { max-width: none; } }
+@media (max-width: 700px) { .texture { height: 1000px; } .tex-cmd pre { padding: 18px 14px 64px; font-size: 12.5px; } .tex-cmd code { width: auto; white-space: pre-wrap; overflow-wrap: anywhere; } .tex-copy { top: auto; bottom: 12px; } .tex-end { padding-bottom: 48px; } }
+@media (max-width: 700px) { .repo-stats { flex-wrap: wrap; width: auto; } .repo-stats div { min-width: 0; flex: 1 1 40%; } section.hero { overflow-x: clip; } }
+@media (max-width: 800px) { .faq { grid-template-columns: 1fr; padding: 80px 0 60px; } .faq h2 { position: static; } .qa summary { font-size: 18px; } }
+@media (max-width: 900px) { .lw-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+/* Phone layout of the hero and the glance story. The hero shows the pane alone, whole; the glance keeps its scroll story, copy above the drawing. */
+@media (max-width: 700px) {
+  section.hero .hero-copy { padding-top: 104px; }
+  section.hero .desk { height: 640px; margin-top: 28px; }
+  section.hero .window { left: 16px; right: 16px; width: auto; zoom: 1; }
+  section.hero .window-body { grid-template-columns: minmax(0, 1fr); }
+  section.hero .chat { display: none; }
+  .glance { height: 640vh; }
+  .glance-sticky { position: sticky; top: 0; height: 100svh; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); gap: 8px; align-items: stretch; padding-top: 32px; padding-bottom: 16px; }
+  .glance-feats { height: 132px; }
+  .gf h3 { font-size: 34px; }
+  .gf p { font-size: 17px; }
+  .gs-stage { height: auto; min-height: 0; }
+  .gs-inner, .gs-wide .gs-inner, .gs-quiet .gs-inner { width: min(100%, 380px); zoom: 1.08; }
+}
+.qa-a a { color: var(--accent-ink); font-weight: 650; }
+/* Footer: the repository's security and build badges under "Open source. MIT." */
+.foot-badges { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 0; }
+.foot-badges a { display: inline-flex; padding: 2px 0; border-radius: 4px; }
+.foot-badges img { display: block; height: 20px; width: auto; }

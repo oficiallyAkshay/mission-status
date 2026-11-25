@@ -10,7 +10,6 @@ import { registerOnboarding } from './onboarding'
 import { registerUpdate } from './update'
 import { registerDoc } from './doc'
 import { registerQuiet } from './quiet'
-import { registerInfer } from './infer'
 
 // The holdback (metrics.tsx decides it): a measurement session with no pane and no standing rule.
 const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
@@ -122,7 +121,6 @@ export const register: Register = on => {
   registerUpdate(on)
   registerDoc(on)
   registerQuiet(on)
-  registerInfer(on)
 
   on('session.start', async ($, e, next) => {
     await $.tool.register({
