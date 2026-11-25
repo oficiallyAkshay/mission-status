@@ -40,7 +40,14 @@ mission-status is a live progress pane for Claude Code in the Claude desktop app
 - you work in the terminal or an editor: the pane shows only in the Claude desktop app;
 - you want progress bars above the prompt: [zycck/claude-mods](https://github.com/zycck/claude-mods) draws those.
 
-Add this repository as a plugin marketplace in Claude Code, then install mission-status from it; the steps are in [CONTRIBUTING](.github/CONTRIBUTING.md).
+Install it from a Claude Code session in the Claude desktop app:
+
+```
+/plugin marketplace add oficiallyAkshay/mission-status
+/plugin install mission-status@mission-status
+```
+
+The pane opens by itself once a session does real work, and `/mission-status` opens it at any time.
 
 ## How it compares
 
