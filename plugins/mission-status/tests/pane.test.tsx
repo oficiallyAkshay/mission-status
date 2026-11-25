@@ -306,6 +306,16 @@ test('a wait is a full sentence', async ($, on) => {
   await ui.unmount()
 })
 
+test('a wait is a quiet subtitle, and keeps an acronym as written', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', stage: 'ship', phase: 3, waitingOn: 'CI on PR 5' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const line = (await ui.findAll({ type: 'Text' })).find(x => /^Waiting on CI on PR 5/.test(String(x.text ?? '')))
+  expect(line).toBeTruthy()
+  expect(line?.props?.color).not.toBe('warning')
+  await ui.unmount()
+})
+
 test('empty: before any update', async $ => {
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await text(ui, /^No progress yet\. The agent sends the first state/)).toBeTruthy()

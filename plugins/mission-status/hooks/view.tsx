@@ -390,9 +390,11 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
           {isOpen && itemTree(k)}
           {state === 'now' &&
             s.waitingOn !== null && (
-              <Box marginTop={1} borderStyle="single" borderColor="warning" paddingX={1}>
-                <Text color="warning" wrap="wrap">
-                  {`Waiting on ${s.waitingOn.charAt(0).toLowerCase()}${s.waitingOn.slice(1)}`}
+              // A wait is a normal state, not a fault: a quiet subtitle under the stage, no warning box. The first letter
+              // drops to lower case only for a plain word, so CI and PR stay as written.
+              <Box paddingLeft={INDENT}>
+                <Text color={SUBTEXT} wrap="wrap">
+                  {`Waiting on ${/^[A-Z][a-z]/.test(s.waitingOn) ? s.waitingOn.charAt(0).toLowerCase() + s.waitingOn.slice(1) : s.waitingOn}`}
                   <Text dimColor>{`  ·  ${age(s.waitingSince, t)}`}</Text>
                 </Text>
               </Box>
