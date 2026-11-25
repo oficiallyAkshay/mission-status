@@ -198,16 +198,21 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                   </Text>
                 )}
               </Box>
-              {state === 'now' && (x.since ?? null) !== null && (
-                <Box flexShrink={0}>
-                  <Text size="caption" color={ACCENT}>{clockOf(Date.now() - (x.since ?? Date.now()))}</Text>
-                </Box>
-              )}
-              {kids.length > 0 && (
-                <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
+              {/* One time column and one control column on every row, so all timers line up with the stage timer. */}
+              <Box width={FIG} flexShrink={0} flexDirection="row" justifyContent="flex-end">
+                {state === 'now' && (x.since ?? null) !== null ? (
+                  <Text color={ACCENT}>{clockOf(Date.now() - (x.since ?? Date.now()))}</Text>
+                ) : (
+                  <Text>{''}</Text>
+                )}
+              </Box>
+              <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
+                {kids.length > 0 ? (
                   <Button key={`open-${key}`} label={isOpen ? '−' : '+'} plain dimColor onPress={() => toggleKey(key)} />
-                </Box>
-              )}
+                ) : (
+                  <Text>{''}</Text>
+                )}
+              </Box>
             </Box>
             {(() => {
               const mine = s.links.filter(l => l.item !== null && l.item.toLowerCase() === x.name.toLowerCase())
