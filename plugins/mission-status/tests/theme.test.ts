@@ -44,8 +44,7 @@ test('light theme: the dark look keeps its colours', () => {
   expect(waitsLineSvg()).toContain('.wa{stroke:#8B8A85}')
 })
 
-test('spinners start at the wall clock\'s place in their turn, so a redraw continues the turn', () => {
-  const at = (svg: string) => /begin="-([\d.]+)s"/.exec(svg)?.[1]
-  expect(at(badgeSvg('now', 1_700_000_000_250, 16))).toBe('0.250')
-  expect(at(badgeSvg('now', 1_700_000_000_907, 16))).toBe('0.907')
+test('a spinner\'s source never changes, so a redraw keeps the same drawing and the turn runs on', () => {
+  expect(badgeSvg('now', 1_700_000_000_250, 16)).toBe(badgeSvg('now', 1_700_000_000_907, 16))
+  expect(stripSvg({ title: 'Scan', detail: null, state: 'running', time: '1 min' })).toBe(stripSvg({ title: 'Scan', detail: null, state: 'running', time: '1 min' }))
 })
