@@ -549,7 +549,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       const mine = book.steps.map((x, k) => ({ x, k })).filter(({ x }) => isMine(x))
       const nowStep = book.steps.find(x => x.status === 'now') ?? null
       const waitText = (x: RunbookStep) => (x.waitsOn === null ? null : /^(you|your)\b/i.test(x.waitsOn) ? `Needs ${x.waitsOn}` : `Waits on ${x.waitsOn}`)
-      const summaryLine = [`${doneN} of ${m} done`, mine.length > 0 ? `${mine.length} need you` : null, nowStep !== null ? `now: ${nowStep.name}` : null]
+      // Each fact shows once: the count of waits is the card's heading, and a step in the card carries no wait line below.
+      const summaryLine = [`${doneN} of ${m} done`, nowStep !== null ? `now: ${nowStep.name}` : null]
         .filter(Boolean)
         .join('  ·  ')
       const stepRow = (x: RunbookStep, k: number, key: string) => (
@@ -565,9 +566,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               {x.name}
             </Text>
             {x.note !== null && <Text size="caption" color={NOTE} wrap="wrap">{x.note}</Text>}
-            {x.status !== 'done' && waitText(x) !== null && (
-              <Text size="caption" color={isMine(x) ? 'warning' : SUBTEXT} wrap="wrap">{waitText(x)}</Text>
-            )}
+            {x.status !== 'done' && !isMine(x) && waitText(x) !== null && <Text size="caption" color={SUBTEXT} wrap="wrap">{waitText(x)}</Text>}
           </Box>
         </Box>
       )
@@ -582,7 +581,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
           {book.href !== null && linkRow([{ label: 'Open the runbook', href: book.href }], 'runbook-link')}
           {mine.length > 0 && (
             <Box flexDirection="column" gap={0} borderStyle="single" borderColor="warning" borderDimColor paddingX={1}>
-              <Text weight="semibold" color="warning">Needs you</Text>
+              <Text weight="semibold" color="warning">{`Needs you  ·  ${mine.length}`}</Text>
               {mine.map(({ x, k }) => (
                 <Text key={`mine-${k}`} wrap="wrap">
                   <Text color={SUBTEXT}>{`${k + 1}  `}</Text>
