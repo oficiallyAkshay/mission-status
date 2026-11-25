@@ -1,6 +1,8 @@
 export type Count = { label: string; when?: string; n?: number; m?: number; text?: string; phase?: number; href?: string; hrefLabel?: string }
 export type ItemStatus = 'done' | 'now' | 'next' | 'failed'
-export type Item = { phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null }
+// id: the agent's stable id for its item (from the name when the agent sends none). The task-list steps are the
+// pane's own items, kept apart in `tasks`: no agent write deletes them.
+export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null }
 export type StepStatus = 'done' | 'now' | 'next'
 export type StageKey = 'plan' | 'build' | 'fix' | 'cause' | 'review' | 'ship'
 export type HypothesisState = 'open' | 'testing' | 'ruled out' | 'confirmed'
@@ -28,7 +30,25 @@ export type Summary = {
   ends: (number | null)[]
   change: { label: string; from: string; at: number } | null
   at: number
+  // The write counter: every write adds one; an older write never replaces a newer one.
+  version?: number
+  // Set by the pane: the pane opened by itself and waits for the agent's first state.
+  waitingForAgent?: boolean
+  // Set by the pane after 2 ignored reminders; the view shows "May be out of date".
+  mayBeOutOfDate?: boolean
 } | null
+// The freshness triggers' own record (store.ts): tool calls, the stale window and the reminders.
+export type Fresh = {
+  calls: number
+  lastAgentAt: number | null
+  agentVersion: number
+  windowFrom: number
+  steps: number
+  stale: boolean
+  held: boolean
+  outstanding: number
+  ignored: number
+}
 export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null }
 export type Activity = { text: string; prev: string | null; at: number } | null
 export type Pr = { number: number; state: string; url: string; title: string; isDraft?: boolean; review?: string; merge?: string; ci?: 'passing' | 'failing' | 'running' | 'none' }
@@ -39,6 +59,8 @@ declare module 'claude-code' {
   interface PluginState {
     'mission-status': { summary: Shaped<Summary>; live: Shaped<Live | null>; now: number; open: string[] | null; activity: Activity; tasks: Task[]
       // Wave 1: consent and metrics (metrics.tsx, onboarding.tsx), auto-update (update.tsx)
-      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null }
+      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null
+      // Wave 1: freshness triggers (store.ts)
+      fresh: Fresh }
   }
 }

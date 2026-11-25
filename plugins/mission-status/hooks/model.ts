@@ -100,6 +100,7 @@ export function asItem(raw: unknown): Item | undefined {
   const parent = str(o.parent)
   const text = str(o.text)
   return {
+    id: str(o.id) ?? idOf(name),
     phase: Math.round(phase),
     name: cap(name),
     status: ITEM_STATES.find(x => x === o.status) ?? 'next',
@@ -136,11 +137,16 @@ export function normalize(raw: Summary): Summary {
     waitingOn: typeof r.waitingOn === 'string' ? r.waitingOn : null,
     waitingSince: typeof r.waitingSince === 'number' ? r.waitingSince : 0,
     counts: Array.isArray(r.counts) ? (r.counts as Count[]) : [],
-    items: Array.isArray(r.items) ? (r.items as Item[]).map(x => ({ ...x, after: x.after ?? null, parent: x.parent ?? null, when: x.when ?? null })) : [],
+    items: Array.isArray(r.items)
+      ? (r.items as Item[]).map(x => ({ ...x, id: x.id ?? idOf(x.name), after: x.after ?? null, parent: x.parent ?? null, when: x.when ?? null }))
+      : [],
     starts: Array.isArray(r.starts) ? (r.starts as (number | null)[]) : phases.map(() => null),
     ends: Array.isArray(r.ends) ? (r.ends as (number | null)[]) : phases.map(() => null),
     change: (r.change as { label: string; from: string; at: number } | null) ?? null,
     at: typeof r.at === 'number' ? r.at : 0,
+    version: typeof r.version === 'number' ? r.version : 0,
+    waitingForAgent: r.waitingForAgent === true,
+    mayBeOutOfDate: r.mayBeOutOfDate === true,
   }
 }
 
@@ -218,4 +224,226 @@ export function asLink(raw: unknown): CardLink | undefined {
   if (href === null) return undefined
   const phase = num(o.phase)
   return { phase: phase === undefined ? null : Math.round(phase), item: str(o.item), label: str(o.label) ?? 'Open', href }
+}
+
+// ---- The schema's guards: size cap, validation, item ids, patches (v1 scope item 1) ----
+
+// The size cap of one agent update and of the stored state.
+export const CAP_BYTES = 32 * 1024
+// The freshness triggers (product plan, "How the state stays current").
+export const AUTO_OPEN_CALLS = 5 // the pane opens by itself at the 5th tool call with no agent state
+export const STALE_MS = 10 * 60_000 // 10 minutes of tool calls with no agent update
+export const STALE_STEPS = 3 // or 3 task-list steps started with no agent update
+export const IGNORED_AFTER = 3 // a reminder is ignored when 3 tool calls pass, or the turn ends, with no update
+export const IGNORED_LIMIT = 2 // after 2 ignored reminders the state is marked "May be out of date"
+export const UPDATE_TOOL = 'mcp__mission-status__update'
+
+// The standing rule: in the system prompt, and put back into the context after each compaction.
+export const RULE =
+  '# Progress pane\nKeep the progress pane current with mcp__mission-status__update at every meaningful change. ' +
+  'At each update, look again at the stages: keep a template only while it fits the work, and send new stages when the work changes. ' +
+  'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those. ' +
+  'Give each item a stable id, and send small item changes as patch operations.'
+
+// The one-line reminder the pane adds to the agent's next step.
+export const REMINDER = 'Progress pane: the state is stale. Send the current state with mcp__mission-status__update now.'
+export const FIRST_REMINDER =
+  'Progress pane: it opened by itself from the task list and waits for you. Send the first state with mcp__mission-status__update now.'
+export const HOLD_TEXT =
+  'Progress pane: the state is stale. Before you end the turn, send the current state with mcp__mission-status__update.'
+
+// A stable id from a name: lower case, words joined by hyphens.
+export const idOf = (name: string): string =>
+  name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'item'
+
+// The UTF-8 size of a value as JSON, without TextEncoder (the hooks module has no web globals).
+export function bytesOf(value: unknown): number {
+  const text = JSON.stringify(value) ?? ''
+  let n = 0
+  for (let k = 0; k < text.length; k++) {
+    const c = text.charCodeAt(k)
+    if (c < 0x80) n += 1
+    else if (c < 0x800) n += 2
+    else if (c >= 0xd800 && c <= 0xdbff) {
+      n += 4
+      k += 1
+    } else n += 3
+  }
+  return n
+}
+
+// Tokens as the plan estimates them: characters / 4.
+export const tokensOf = (value: unknown): number => Math.ceil((JSON.stringify(value) ?? '').length / 4)
+
+// The fields the engine or the test kit puts on a tool call's input, never part of the state.
+const CALL_KEYS = new Set(['tool', 'agentId', 'tool_use_id', 'toolUseId'])
+export const argsOf = (e: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(e).filter(([k]) => !CALL_KEYS.has(k)))
+
+export type PatchOp = { op: 'add' | 'remove' | 'change'; id?: string; [field: string]: unknown }
+export const PATCH_OPS = ['add', 'remove', 'change'] as const
+// Task-list steps belong to the pane; an agent item may not take their id space.
+const PANE_ID = /^task:/i
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v)
+const isText = (v: unknown) => typeof v === 'string' && v.trim() !== ''
+const isNum = (v: unknown) => typeof v === 'number' && Number.isFinite(v)
+
+function checkItemFields(o: Record<string, unknown>, where: string, whole: boolean, errors: string[]): void {
+  if (whole || o.name !== undefined) if (!isText(o.name)) errors.push(`${where}: name must be a non-empty string`)
+  if (whole || o.phase !== undefined) if (!isNum(o.phase) || (o.phase as number) < 0) errors.push(`${where}: phase must be a number from 0`)
+  if (o.status !== undefined && !ITEM_STATES.includes(o.status as ItemStatus)) errors.push(`${where}: status must be one of ${ITEM_STATES.join(', ')}`)
+  if (o.id !== undefined && !isText(o.id)) errors.push(`${where}: id must be a non-empty string`)
+  if (isText(o.id) && PANE_ID.test(String(o.id))) errors.push(`${where}: id ${String(o.id)} belongs to the pane's task list`)
+  for (const k of ['after', 'parent', 'note', 'when', 'text'] as const)
+    if (o[k] !== undefined && o[k] !== null && typeof o[k] !== 'string') errors.push(`${where}: ${k} must be a string`)
+  for (const k of ['n', 'm'] as const) if (o[k] !== undefined && !isNum(o[k])) errors.push(`${where}: ${k} must be a number`)
+}
+
+// Every error in an agent update, in plain words; none means the update is valid. A failed update writes nothing.
+export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVersion = 0): string[] {
+  const errors: string[] = []
+  const size = bytesOf(args)
+  if (size > CAP_BYTES) return [`the update is ${Math.ceil(size / 1024)} KB; the cap is 32 KB`]
+  if (old === null) {
+    if (!isText(args.project)) errors.push('the first state needs project')
+    if (!isNum(args.phase)) errors.push('the first state needs phase')
+  }
+  if (args.project !== undefined && !isText(args.project)) errors.push('project must be a non-empty string')
+  if (args.phase !== undefined && (!isNum(args.phase) || (args.phase as number) < 0)) errors.push('phase must be a number from 0')
+  if (args.stage !== undefined && !STAGE_KEYS.includes(args.stage as StageKey)) errors.push(`stage must be one of ${STAGE_KEYS.join(', ')}`)
+  if (args.template !== undefined && !(typeof args.template === 'string' && args.template in TEMPLATES))
+    errors.push(`template must be one of ${Object.keys(TEMPLATES).join(', ')}`)
+  if (args.phases !== undefined) {
+    const ok = Array.isArray(args.phases) && args.phases.length >= 2 && args.phases.length <= 8 && args.phases.every(isText)
+    if (!ok) errors.push('phases must be 2 to 8 non-empty strings')
+  }
+  if (args.version !== undefined) {
+    if (!isNum(args.version) || !Number.isInteger(args.version) || (args.version as number) < 1) errors.push('version must be a whole number from 1')
+    else if ((args.version as number) <= agentVersion)
+      errors.push(`version ${String(args.version)} is older than the stored version ${agentVersion}; send ${agentVersion + 1} or more`)
+  }
+  for (const k of ['goalLine', 'symptom', 'waitingOn'] as const)
+    if (args[k] !== undefined && args[k] !== null && typeof args[k] !== 'string') errors.push(`${k} must be a string or null`)
+  for (const k of ['items', 'patch', 'counts', 'hypotheses', 'links', 'active'] as const)
+    if (args[k] !== undefined && !Array.isArray(args[k])) errors.push(`${k} must be a list`)
+  if (args.items !== undefined && args.patch !== undefined) errors.push('send items (the whole list) or patch (changes), not both')
+  if (Array.isArray(args.items)) {
+    const seen = new Set<string>()
+    args.items.forEach((raw, k) => {
+      if (!isObj(raw)) return void errors.push(`items[${k}] must be an object`)
+      checkItemFields(raw, `items[${k}]`, true, errors)
+      const id = isText(raw.id) ? String(raw.id) : isText(raw.name) ? idOf(String(raw.name)) : null
+      if (id !== null && seen.has(id)) errors.push(`items[${k}]: id ${id} is used twice`)
+      if (id !== null) seen.add(id)
+    })
+  }
+  if (Array.isArray(args.patch)) {
+    const ids = new Set((old?.items ?? []).map(x => x.id ?? idOf(x.name)))
+    args.patch.forEach((raw, k) => {
+      const where = `patch[${k}]`
+      if (!isObj(raw)) return void errors.push(`${where} must be an object`)
+      const op = raw.op
+      if (!PATCH_OPS.includes(op as PatchOp['op'])) return void errors.push(`${where}: op must be add, remove or change`)
+      if (op === 'add') {
+        checkItemFields(raw, where, true, errors)
+        const id = isText(raw.id) ? String(raw.id) : isText(raw.name) ? idOf(String(raw.name)) : null
+        if (id !== null && ids.has(id)) errors.push(`${where}: id ${id} exists; use change`)
+        if (id !== null) ids.add(id)
+        return
+      }
+      if (!isText(raw.id)) return void errors.push(`${where}: ${String(op)} needs the item's id`)
+      const id = String(raw.id)
+      if (PANE_ID.test(id)) return void errors.push(`${where}: id ${id} belongs to the pane's task list`)
+      if (!ids.has(id)) return void errors.push(`${where}: no item has id ${id}`)
+      if (op === 'remove') ids.delete(id)
+      else checkItemFields({ ...raw, id: undefined }, where, false, errors)
+    })
+  }
+  if (Array.isArray(args.counts))
+    args.counts.forEach((raw, k) => {
+      if (!isObj(raw) || !(isText(raw.when) || isText(raw.label))) errors.push(`counts[${k}] needs when`)
+    })
+  if (Array.isArray(args.hypotheses))
+    args.hypotheses.forEach((raw, k) => {
+      if (!isObj(raw) || !isText(raw.text)) errors.push(`hypotheses[${k}] needs text`)
+      else if (raw.state !== undefined && !HYPOTHESIS_STATES.includes(raw.state as HypothesisState))
+        errors.push(`hypotheses[${k}]: state must be one of ${HYPOTHESIS_STATES.join(', ')}`)
+    })
+  if (Array.isArray(args.links))
+    args.links.forEach((raw, k) => {
+      if (!isObj(raw) || !isText(raw.href)) errors.push(`links[${k}] needs href`)
+    })
+  return errors
+}
+
+// The tool result for an update that failed: the pane keeps the last good view.
+export const refusalOf = (errors: string[]): string =>
+  `The pane kept the last good view and wrote nothing. Fix and send again: ${errors.join('; ')}.`
+
+// Patch operations on the agent's items, applied in order (checkUpdate has passed them).
+export function applyPatch(items: Item[], patch: unknown[]): Item[] {
+  let next = [...items]
+  for (const raw of patch) {
+    if (!isObj(raw)) continue
+    const { op, ...fields } = raw
+    if (op === 'add') {
+      const item = asItem(fields)
+      if (item !== undefined) next.push(item)
+      continue
+    }
+    const id = str(fields.id)
+    const k = next.findIndex(x => (x.id ?? idOf(x.name)) === id)
+    if (k < 0) continue
+    if (op === 'remove') {
+      next = next.filter((_, j) => j !== k)
+      continue
+    }
+    const was = next[k] as Item
+    const merged = asItem({ ...was, ...Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)), id: was.id })
+    if (merged !== undefined) next[k] = merged
+  }
+  return next
+}
+
+// The state the pane builds by itself when the agent sends none by the 5th tool call: a Custom type whose stages
+// are the task-list steps (2 to 8 of them), or one Work stage. waitingForAgent marks it "Waiting for the agent" (the view
+// renders the words).
+export function autoSummary(steps: Task[], at: number, project = 'This session'): { summary: NonNullable<Summary>; steps: Task[] } {
+  const byStep = steps.length >= 2 && steps.length <= 8
+  const phases = byStep ? steps.map(x => cap(clip(x.name, 40))) : ['Work']
+  const current = byStep ? Math.max(0, steps.findIndex(x => x.status !== 'done')) : 0
+  const phase = byStep && steps.every(x => x.status === 'done') ? phases.length : current
+  return {
+    summary: {
+      project,
+      ticket: null,
+      links: [],
+      goalLine: null,
+      stage: 'build',
+      phases,
+      phase,
+      symptom: null,
+      hypotheses: [],
+      waitingOn: null,
+      waitingSince: at,
+      counts: [],
+      items: [],
+      active: [],
+      template: 'custom',
+      starts: phases.map((_, k) => (k === phase ? at : null)),
+      ends: phases.map(() => null),
+      change: null,
+      at,
+      version: 1,
+      waitingForAgent: true,
+      mayBeOutOfDate: false,
+    },
+    steps: byStep ? steps.map((x, k) => ({ ...x, phase: k })) : steps.map(x => ({ ...x, phase: 0 })),
+  }
+}
+
+// How many steps a task-list call started: steps that are now in progress and were not before.
+export function stepsStarted(before: Task[], after: Task[]): number {
+  return after.filter(x => x.status === 'now' && before.find(y => y.name === x.name)?.status !== 'now').length
 }

@@ -1,9 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PHASES, STAGE_KEYS, TEMPLATES, actionOf, applyPlan, arrivalOf, asCount, asHypothesis, asItem, cap, figureOf, normalize, num, str } from './model'
+import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, arrivalOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, refusalOf, stepsStarted, str } from './model'
 import { poll } from './readers'
-import { CLOCK_MS, PANE, PR_EVERY, TICK_MS, TITLE, say, tick } from './store'
+import { CLOCK_MS, PANE, PR_EVERY, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, say, tick } from './store'
 import { renderPane } from './view'
 import { registerMetrics } from './metrics'
 import { registerOnboarding } from './onboarding'
@@ -29,7 +29,9 @@ export const register: Register = on => {
         'place of a count line in the chat. Write all text in ASD-STE100 Simplified Technical English: each sentence has a ' +
         'subject and a verb, in the active voice and the present tense, about 20 words at most. Labels are one to four words. ' +
         'Every count has a denominator m where one exists. The pane itself reads the task list, git, pull requests and helpers. ' +
-        'At every update, look again at the stages: keep a template only while it fits, and change the stages when the work changes.',
+        'At every update, look again at the stages: keep a template only while it fits, and change the stages when the work changes. ' +
+        'The first call sends project, stage and phase; later calls send only what changed. Give each item a stable id; ' +
+        'send a small change to items as patch, not the whole list. The cap is 32 KB; an update that fails keeps the last good view and returns the errors.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -94,6 +96,7 @@ export const register: Register = on => {
             items: {
               type: 'object',
               properties: {
+                id: { type: 'string', description: 'A stable id, kept for the life of the item; the name in lower case when absent' },
                 phase: { type: 'number' },
                 name: { type: 'string', description: 'One to four words' },
                 status: { type: 'string', enum: ITEM_STATES },
@@ -107,6 +110,20 @@ export const register: Register = on => {
               },
               required: ['phase', 'name', 'status'],
             },
+          },
+          patch: {
+            type: 'array',
+            description:
+              'Item changes in place of the whole items list: {op:"add", id, phase, name, status, ...}, {op:"remove", id}, or {op:"change", id, and only the fields that change}.',
+            items: {
+              type: 'object',
+              properties: { op: { type: 'string', enum: PATCH_OPS }, id: { type: 'string' } },
+              required: ['op'],
+            },
+          },
+          version: {
+            type: 'number',
+            description: 'Optional: your own write counter, 1, 2, 3 and so on. The pane refuses a version that is not newer than the last one.',
           },
           counts: {
             type: 'array',
@@ -128,7 +145,6 @@ export const register: Register = on => {
             },
           },
         },
-        required: ['project', 'stage', 'phase'],
       },
       isDeferred: false,
     })
@@ -156,7 +172,10 @@ export const register: Register = on => {
     const result = await next(e)
     // Between tool calls the model thinks, as the chat shows.
     if (words !== null) await say($, 'Thinking').catch(() => undefined)
-    return result
+    // Freshness triggers count the main loop's tool calls, not the pane's own update or a helper's calls.
+    if (String(e.tool) === UPDATE_TOOL || e.agentId !== undefined || result.deny !== undefined) return result
+    const line = await afterToolCall($).catch(() => null)
+    return line === null ? result : { ...result, context: [...(result.context ?? []), line] }
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
   // Slotting: the pane reads the session's task list itself. A step goes into the stage that is in progress when the
@@ -166,12 +185,29 @@ export const register: Register = on => {
       const args = e as unknown as Record<string, unknown>
       const sum = await read($, summary)
       const at = sum === null ? 0 : Math.min(sum.phase, Math.max(0, sum.phases.length - 1))
-      await update($, tasks, list => applyPlan(list, args, at))
+      const before = await read($, tasks)
+      const after = await update($, tasks, list => applyPlan(list, args, at))
+      await noteSteps($, stepsStarted(before, after))
     } catch {
       // The task list is a nicety: a failed read never holds up the call.
     }
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+
+  // After each context compaction the standing rule goes back into the agent's context.
+  on('classic.SessionStart', async ($, e, next) => {
+    const result = await next(e)
+    if (e.source !== 'compact') return result
+    return { ...result, additionalContext: [...(result.additionalContext ?? []), RULE] }
+  }).catch(($, e, next) => next(e))
+
+  // A turn ends while the state is stale: hold the end once and ask the agent for an update.
+  on('classic.Stop', async ($, e, next) => {
+    const result = await next(e)
+    if (result.block !== undefined) return result
+    const hold = await atTurnEnd($, e.stop_hook_active)
+    return hold === null ? result : { ...result, block: hold }
+  }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
     await say($, 'Waiting for you').catch(() => undefined)
@@ -192,10 +228,7 @@ export const register: Register = on => {
         {
           id: 'mission-status:progress',
           scope: 'session' as const,
-          text:
-            '# Progress pane\nKeep the progress pane current with mcp__mission-status__update at every meaningful change. ' +
-            'At each update, look again at the stages: keep a template only while it fits the work, and send new stages when the work changes. ' +
-            'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those.',
+          text: RULE,
         },
       ],
     }
@@ -208,10 +241,34 @@ export const register: Register = on => {
   })
 
   on('tool.call', { tool: 'mcp__mission-status__update' }, async ($, e) => {
-    const args = e as unknown as Record<string, unknown>
+    const args = argsOf(e as unknown as Record<string, unknown>)
     const at = Date.now()
-    await update($, summary, stored => {
+    // Validation: a state that fails writes nothing, so the pane keeps the last good view; the errors go back to the agent.
+    const agentVersion = await agentVersionOf($)
+    const first = checkUpdate(args, normalize(await read($, summary)), agentVersion)
+    if (first.length > 0) return { deny: refusalOf(first) }
+    const out = { errors: [] as string[] }
+    const written = await update($, summary, stored => {
       const old = normalize(stored)
+      // Checked again inside the write: another writer may have changed the state since the check above.
+      out.errors = checkUpdate(args, old, agentVersion)
+      if (out.errors.length > 0) return stored
+      const next = build(old)
+      if (bytesOf(next) > CAP_BYTES) {
+        out.errors = ['the state would pass the 32 KB cap; send fewer or shorter items']
+        return stored
+      }
+      return next
+    })
+    if (out.errors.length > 0) return { deny: refusalOf(out.errors) }
+    await agentUpdated($, num(args.version))
+    await tick($)
+    // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
+    await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+    void poll($)
+    return { result: `The pane shows the new state (version ${written?.version ?? 0}).` }
+
+    function build(old: Summary): NonNullable<Summary> {
       const stage = STAGE_KEYS.find(k => k === args.stage) ?? old?.stage ?? 'build'
       const custom = (Array.isArray(args.phases) ? args.phases : []).map(str).filter((x): x is string => x !== null).map(cap)
       const picked = typeof args.template === 'string' ? TEMPLATES[args.template] : undefined
@@ -236,17 +293,19 @@ export const register: Register = on => {
       const movedPair = counts
         .map(c => ({ c, was: old?.counts.find(x => x.label === c.label) }))
         .find(({ c, was }) => was !== undefined && figureOf(was) !== figureOf(c))
-      const items =
-        args.items === undefined
-          ? (old?.items ?? [])
-          : (Array.isArray(args.items) ? args.items : [])
-              .map(asItem)
-              .filter((x): x is Item => x !== undefined)
-              // An item in progress keeps the time it went in progress, for its runtime timer.
-              .map(x => {
-                const was = old?.items.find(y => y.name === x.name)
-                return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null }
-              })
+      // Agent items only: the task list's steps are the pane's own items, kept in tasks, so no agent write deletes them.
+      const items = (
+        Array.isArray(args.patch)
+          ? applyPatch(old?.items ?? [], args.patch)
+          : args.items === undefined
+            ? (old?.items ?? [])
+            : (Array.isArray(args.items) ? args.items : []).map(asItem).filter((x): x is Item => x !== undefined)
+      )
+        // An item in progress keeps the time it went in progress, for its runtime timer; a full list and a patch alike.
+        .map(x => {
+          const was = old?.items.find(y => (y.id ?? idOf(y.name)) === (x.id ?? idOf(x.name)))
+          return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null }
+        })
       const waitingRaw = str(args.waitingOn)
       // Stage times: a stage starts when the phase first reaches it and ends when the phase passes it. Stages passed
       // before the pane first saw the work have no times.
@@ -295,13 +354,11 @@ export const register: Register = on => {
         items,
         change: movedPair !== undefined && movedPair.was !== undefined ? { label: movedPair.c.label, from: figureOf(movedPair.was), at } : (old?.change ?? null),
         at,
+        version: (old?.version ?? 0) + 1,
+        waitingForAgent: false,
+        mayBeOutOfDate: false,
       }
-    })
-    await tick($)
-    // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
-    await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
-    void poll($)
-    return { result: 'The pane shows the new state.' }
+    }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => renderPane($, e))
