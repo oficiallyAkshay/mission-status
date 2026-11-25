@@ -77,6 +77,7 @@ The plugin keeps itself current: it checks this repository's latest release at s
 - Checks: `scripts/check.sh` runs `claude plugin validate` and `claude plugin test` with the desktop app's own engine.
 - A change to the plugin raises `version` in `plugins/mission-status/.claude-plugin/plugin.json`; CI fails the pull request otherwise. Each merged version becomes a release.
 - The site: `site/`.
+- How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md). Notes for coding agents: [AGENTS.md](AGENTS.md).
 
 ## Licence
 
