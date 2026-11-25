@@ -12,12 +12,16 @@ const url = process.argv[2] || 'http://127.0.0.1:8765/'
 if (!process.env.PLAYWRIGHT) throw new Error('Set PLAYWRIGHT to the package.json of a project that has playwright.')
 const { chromium } = createRequire(process.env.PLAYWRIGHT)('playwright')
 
-// The card keeps the mark, the headline, the sub-line and the pane; it drops every control and the repository numbers.
+// The card keeps the mark, the headline, the sub-line and the whole pane; it drops the chat, every control and the
+// repository numbers.
 const CARD_CSS = `
   section.hero .pick, section.hero .access { display: none !important; }
   section.hero h1 { font-size: 66px !important; line-height: 1.02 !important; }
   section.hero .subhead { font-size: 26px !important; margin: 18px 0 0 !important; }
-  section.hero .hero-copy { justify-content: center !important; }
+  section.hero .hero-copy { justify-content: center !important; padding-left: 56px !important; width: auto !important; margin: 0 !important; }
+  section.hero .chat { display: none !important; }
+  section.hero .window-body { grid-template-columns: minmax(0, 1fr) !important; }
+  section.hero .window { left: 48px !important; right: 48px !important; width: auto !important; }
 `
 const cards = [
   { out: 'site/og.png', width: 1200, height: 630 },
