@@ -1060,3 +1060,14 @@ html.motion .foot:not(.in) .foot-word span { transform: translateY(45%); }
 .foot .ff-bar .m b { font-size: clamp(32px, 3.4vw, 46px); letter-spacing: -.03em; color: #F5F1EA; }
 .foot .ff-bar .m .l { font-size: 16px; color: #C9C3D6; }
 .tex-note { color: #C9C3D6; }
+
+/* "Pick a mission" sits inline with its mission buttons, as the first item of the row. */
+section.hero .pick { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+section.hero .pick .pick-h { margin: 0 6px 0 0; font-size: clamp(20px, 1.7vw, 24px); line-height: 1; white-space: nowrap; }
+section.hero .pick .missions { display: contents; }
+section.hero .pick { gap: 10px 8px; }
+section.hero .pick .missions button:not([data-key="agent"]) { padding: 9px 12px; font-size: 14.5px; }
+section.hero .pick .missions button[data-key="agent"] { flex: 1 0 100%; }
+section.hero .pick { gap: 10px 6px; }
+section.hero .pick .pick-h { font-size: 20px; margin-right: 4px; }
+section.hero .pick .missions button:not([data-key="agent"]) { padding: 9px 10px; gap: 6px; }
