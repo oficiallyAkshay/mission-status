@@ -25,7 +25,12 @@ export const TEMPLATES: Record<string, string[]> = {
   writing: ['Outline', 'Draft', 'Review', 'Publish'],
   migration: ['Plan', 'Dry run', 'Migrate', 'Verify', 'Clean up'],
   'plan-review': ['Intake', 'Draft', 'Review waves', 'Your rows', 'Hand off'],
+  // A Smriti learning pass: the five steps of a light pass, and the steps of a deep pass.
+  'smriti-light': ['Discover', 'Judge', 'Curate', 'Guardrail', 'Route'],
+  'smriti-deep': ['Size', 'Origin', 'Lenses', 'Curate', 'Screen', 'File', 'Yield'],
 }
+// The most sub-phases one item's line holds.
+export const MAX_SUB = 8
 export const HYPOTHESIS_STATES: readonly HypothesisState[] = ['open', 'testing', 'ruled out', 'confirmed']
 
 
@@ -183,7 +188,20 @@ export function asItem(raw: unknown): Item | undefined {
     m: num(o.m),
     text: text === null ? undefined : cap(text),
     pr: asPrRef(o.pr),
+    ...subPhases(o),
   }
+}
+
+// An item's sub-phases: a short dot-separated line under its name, the one at step shown bold and the others faint.
+// steps null clears the line. A step outside the list shows every sub-phase faint.
+function subPhases(o: Record<string, unknown>): { steps?: string[] | null; step?: number | null } {
+  const out: { steps?: string[] | null; step?: number | null } = {}
+  if (o.steps === null) out.steps = null
+  else if (Array.isArray(o.steps)) out.steps = o.steps.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map(x => cap(x.trim())).slice(0, MAX_SUB)
+  const step = num(o.step)
+  if (o.step === null) out.step = null
+  else if (step !== undefined) out.step = Math.round(step)
+  return out
 }
 
 export const figureOf = (c: Count) => (c.text !== undefined ? c.text : c.m === undefined ? `${c.n ?? ''}` : `${c.n ?? 0} of ${c.m}`)
@@ -383,6 +401,9 @@ function checkItemFields(o: Record<string, unknown>, where: string, whole: boole
   for (const k of ['after', 'parent', 'note', 'when', 'text'] as const)
     if (o[k] !== undefined && o[k] !== null && typeof o[k] !== 'string') errors.push(`${where}: ${k} must be a string`)
   for (const k of ['n', 'm'] as const) if (o[k] !== undefined && !isNum(o[k])) errors.push(`${where}: ${k} must be a number`)
+  if (o.steps !== undefined && o.steps !== null && !(Array.isArray(o.steps) && o.steps.length <= MAX_SUB && o.steps.every(isText)))
+    errors.push(`${where}: steps must be a list of at most ${MAX_SUB} names`)
+  if (o.step !== undefined && o.step !== null && !isNum(o.step)) errors.push(`${where}: step must be a number`)
   if (o.pr !== undefined && o.pr !== null && asPrRef(o.pr) === null) errors.push(`${where}: pr must be a pull request number, or owner/name#number`)
 }
 
