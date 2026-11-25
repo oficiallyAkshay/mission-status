@@ -1,4 +1,4 @@
-import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
+import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket, Runbook, RunbookStatus, RunbookStep } from '../types'
 
 
 // The stage bar of each kind of work: the stages it passes through, in order.
@@ -142,6 +142,7 @@ export function normalize(raw: Summary): Summary {
     at: typeof r.at === 'number' ? r.at : 0,
     version: typeof r.version === 'number' ? r.version : 0,
     repo: typeof r.repo === 'string' && r.repo.startsWith('/') ? r.repo : null,
+    runbooks: Array.isArray(r.runbooks) ? (r.runbooks as unknown[]).map(asRunbook).filter((x): x is Runbook => x !== undefined) : [],
     waitingForAgent: r.waitingForAgent === true,
     mayBeOutOfDate: r.mayBeOutOfDate === true,
   }
@@ -242,6 +243,7 @@ export const RULE =
   'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those. ' +
   'Give each item a stable id, and send small item changes as patch operations. ' +
   'When the work is in another repository than the session folder, send repo once. ' +
+  'When the session follows a runbook (a numbered procedure or checklist), send it as runbooks with each step\'s status, and keep it current. ' +
   'The pane is the only progress report. In the chat, write only what the person must do or decide to unblock the work ' +
   '(a decision, an approval, a step only they can do), and a direct answer when they ask a question. ' +
   'Send no progress lines, status, recaps, plans or narration in the chat: put them in the pane.'
@@ -300,6 +302,44 @@ function checkItemFields(o: Record<string, unknown>, where: string, whole: boole
 }
 
 // Every error in an agent update, in plain words; none means the update is valid. A failed update writes nothing.
+// ---- Runbooks: each one a tab beside Progress ----
+export const RUNBOOK_STATES = ['done', 'now', 'next', 'failed', 'blocked'] as const
+export const MAX_RUNBOOKS = 4
+export const MAX_STEPS = 60
+
+export function asRunbook(raw: unknown): Runbook | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const o = raw as Record<string, unknown>
+  const id = str(o.id)
+  if (id === null) return undefined
+  const steps = (Array.isArray(o.steps) ? o.steps : [])
+    .map(x => {
+      const s = (x ?? {}) as Record<string, unknown>
+      const name = str(s.name)
+      if (name === null) return undefined
+      const status = RUNBOOK_STATES.includes(s.status as RunbookStatus) ? (s.status as RunbookStatus) : 'next'
+      return { name, status, note: str(s.note), waitsOn: str(s.waitsOn) }
+    })
+    .filter((x): x is RunbookStep => x !== undefined)
+    .slice(0, MAX_STEPS)
+  return { id, title: str(o.title) ?? id, href: str(o.href), steps }
+}
+
+// Runbooks an update sends replace the stored ones with the same id; remove: true drops one.
+export function mergeRunbooks(old: Runbook[], raw: unknown[]): Runbook[] {
+  let next = [...old]
+  for (const x of raw) {
+    const o = (x ?? {}) as Record<string, unknown>
+    const id = str(o.id)
+    if (id === null) continue
+    next = next.filter(r => r.id !== id)
+    if (o.remove === true) continue
+    const r = asRunbook(o)
+    if (r !== undefined) next.push(r)
+  }
+  return next.slice(0, MAX_RUNBOOKS)
+}
+
 // A personal template's name: what the person calls it, kept short.
 export const TEMPLATE_NAME = /^[a-z0-9][a-z0-9-]{0,29}$/
 // $.store key: the person's own templates, name to stage list, shared by every session on this machine.
@@ -330,6 +370,22 @@ export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVe
   if (args.project !== undefined && !isText(args.project)) errors.push('project must be a non-empty string')
   if (args.phase !== undefined && (!isNum(args.phase) || (args.phase as number) < 0)) errors.push('phase must be a number from 0')
   if (args.stage !== undefined && !STAGE_KEYS.includes(args.stage as StageKey)) errors.push(`stage must be one of ${STAGE_KEYS.join(', ')}`)
+  if (args.runbooks !== undefined) {
+    if (!Array.isArray(args.runbooks)) errors.push('runbooks must be a list')
+    else
+      args.runbooks.forEach((raw, k) => {
+        if (!isObj(raw) || !isText(raw.id)) return void errors.push(`runbooks[${k}] needs id`)
+        if (raw.remove === true) return
+        if (!isText(raw.title)) errors.push(`runbooks[${k}] needs title`)
+        if (!Array.isArray(raw.steps) || raw.steps.length === 0 || raw.steps.length > MAX_STEPS) errors.push(`runbooks[${k}].steps must be 1 to ${MAX_STEPS} steps`)
+        else
+          raw.steps.forEach((st, j) => {
+            if (!isObj(st) || !isText(st.name)) errors.push(`runbooks[${k}].steps[${j}] needs name`)
+            else if (st.status !== undefined && !RUNBOOK_STATES.includes(st.status as RunbookStatus))
+              errors.push(`runbooks[${k}].steps[${j}]: status must be one of ${RUNBOOK_STATES.join(', ')}`)
+          })
+      })
+  }
   if (args.repo !== undefined && args.repo !== null && !(typeof args.repo === 'string' && args.repo.startsWith('/') && !args.repo.split('/').includes('..')))
     errors.push('repo must be an absolute folder path, or null for the session folder')
   if (args.saveTemplate !== undefined && !(typeof args.saveTemplate === 'string' && TEMPLATE_NAME.test(args.saveTemplate)))
