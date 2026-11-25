@@ -1037,3 +1037,26 @@ html.motion .foot:not(.in) .foot-word span { transform: translateY(45%); }
 /* Lockup 4 (the owner's pick): one line, MISSION/STATUS, with a purple slash. */
 .lk-t { flex-direction: row; align-items: center; font-size: 20px; line-height: 1; letter-spacing: .01em; color: var(--ink); }
 .lk-t i { font-style: normal; color: var(--accent-ink); margin: 0 .02em; }
+
+/* Works-with: four across; Coming soon is a small purple word beside the name. */
+@media (min-width: 901px) { .lw-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.lw.lw-soon .lw-ico { color: #8E889C; }
+.lw b em { display: inline; background: none; padding: 0; border-radius: 0; font-style: normal; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--accent-ink); margin-left: 8px; vertical-align: 2px; }
+
+/* The interactive install: a large button that plays the install in the command block. */
+.tex-install { display: inline-flex; align-items: center; gap: 12px; margin: 26px auto 20px; padding: 18px 30px; border: 0; border-radius: 14px; background: #8B7CF6; color: #fff; font: 800 20px/1 var(--font); letter-spacing: -.01em; cursor: pointer; box-shadow: 0 14px 40px -14px rgba(139, 124, 246, .9); transition: transform .35s var(--ease), background .35s var(--ease), box-shadow .35s var(--ease); }
+.tex-install:hover { transform: translateY(-2px); background: #9A8CFF; box-shadow: 0 20px 50px -14px rgba(139, 124, 246, 1); }
+.tex-install:focus-visible { outline: 3px solid #F3B8D8; outline-offset: 4px; }
+.tex-install .ti-ico { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: rgba(255, 255, 255, .2); font-size: 16px; }
+.tex-install.going { background: #6F5FE0; }
+.tex-install.done { background: #2E8A57; box-shadow: 0 14px 40px -14px rgba(46, 138, 87, .9); }
+.ti-cmd, .ti-ok, .ti-next { display: block; }
+.ti-ok { color: #6FBF86; margin: 2px 0 10px; }
+.ti-next { color: #B7ADFF; }
+
+/* Footer: readable on the dark ground, and a calmer type ramp between the numbers and their labels. */
+.foot-meta, .foot-meta b { color: #F5F1EA; }
+.foot-meta b { font-size: 22px; margin: 0; }
+.foot .ff-bar .m b { font-size: clamp(32px, 3.4vw, 46px); letter-spacing: -.03em; color: #F5F1EA; }
+.foot .ff-bar .m .l { font-size: 16px; color: #C9C3D6; }
+.tex-note { color: #C9C3D6; }
