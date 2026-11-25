@@ -389,3 +389,17 @@ test('done items show the time they were done, at every level of nesting', async
   expect(child).toMatch(/^Child  ·  \d{1,2}:\d{2} (AM|PM)$/)
   await ui.unmount()
 })
+
+test('an item whose pull request merged shows done at the merge time, with no agent update', async ($, on) => {
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    const out = e.argv[0] === 'gh' && e.argv[1] === 'pr' && e.argv[2] === 'view' ? JSON.stringify({ statusCheckRollup: [], mergedAt: '2026-11-25T02:00:00Z' }) : ''
+    return { value: { exitCode: out === '' ? 1 : 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  await start($, on, [], true)
+  await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'Ship it', status: 'now', pr: 7 }] })
+  await new Promise(r => setTimeout(r, 50))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await svgAlt(ui, /^Ship it: done$/)).toBeTruthy()
+  expect(await text(ui, /^Ship it  ·  \d{1,2}:\d{2} (AM|PM)$/)).toBeTruthy()
+  await ui.unmount()
+})

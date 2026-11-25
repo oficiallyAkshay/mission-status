@@ -63,7 +63,7 @@ export type Activity = { text: string; prev: string | null; at: number } | null
 export type Pr = { number: number; state: string; url: string; title: string; isDraft?: boolean; review?: string; merge?: string; ci?: 'passing' | 'failing' | 'running' | 'none' }
 export type Helper = { id: string; description: string; status: string; model: string | null; startTime: number }
 // CI of a pull request an item names: its state and when its checks started and finished.
-export type ItemCi = { state: 'running' | 'passing' | 'failing' | 'none'; start: number | null; end: number | null }
+export type ItemCi = { state: 'running' | 'passing' | 'failing' | 'none'; start: number | null; end: number | null; mergedAt?: number | null }
 export type Live = { helpers: Helper[]; prs: Pr[]; prsUnread: boolean; at: number; reads: number; git: Git; ci?: Record<string, ItemCi> }
 
 declare module 'claude-code' {
