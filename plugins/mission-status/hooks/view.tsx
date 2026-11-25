@@ -168,8 +168,6 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const itemCards = (list: Item[], depth: number): RenderChildren => {
       const names = new Set(list.map(x => x.name))
       const roots = list.filter(x => x.after === null || !names.has(x.after))
-      // Running in parallel: items in progress at the same time among these siblings.
-      const running = list.filter(x => x.status === 'now').length
       const row1 = (x: Item, waits: number): RenderChildren => {
         const kids = allItems.filter(y => y.parent === x.name && y.phase === x.phase)
         const key = `item-${x.name}`
@@ -227,7 +225,6 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       }
       return (
         <Box flexDirection="column" gap={0}>
-          {running > 1 && small(`${running} items run in parallel.`)}
           {roots.map(x => row1(x, 0))}
         </Box>
       )

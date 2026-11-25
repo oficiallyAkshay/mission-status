@@ -66,7 +66,8 @@ test('a stage opens to its items; an item that waits is indented, parallel items
   // the current stage opens by itself
   expect(await text(ui, /^Draw the columns$/)).toBe('Draw the columns')
   expect(await ui.find({ type: 'Svg', alt: /^Write the tests waits for Draw the columns\.$/ })).toBeTruthy()
-  expect(await text(ui, /^2 items run in parallel\.$/)).toBeTruthy()
+  // The spinners show what runs in parallel; no sentence repeats it.
+  expect(await text(ui, /items run in parallel/)).toBeUndefined()
   // a later stage stays closed until pressed
   expect(await text(ui, /^Open the pull request$/)).toBeUndefined()
   await ui.press({ key: 'open-3' })
