@@ -235,8 +235,9 @@ test('parent by id: a child that names its parent by id nests under it, and afte
   expect((await send($, { project: 'P', phases: ['Build', 'Close'], phase: 1, patch })).deny).toBeUndefined()
   const items = (await state($, 'summary')).items as { id?: string; parent: string | null; after: string | null }[]
   const smriti = items.find(x => x.id === 'wrap-step-4')
-  expect(smriti?.parent).toBe('Wrap up')
-  expect(smriti?.after).toBe('Remote off')
+  // Stored as the other item's id, so a rename of that item keeps its children and its waits.
+  expect(smriti?.parent).toBe('wrap-up')
+  expect(smriti?.after).toBe('wrap-step-3')
 })
 
 test('repo: the Merge card reads git in the repository the agent names', async ($, on) => {

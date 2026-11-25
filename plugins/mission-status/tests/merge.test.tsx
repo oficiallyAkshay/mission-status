@@ -85,6 +85,8 @@ async function boot($: any, on: any, w: World, entries: Record<string, unknown> 
   on('tool.register', () => ({ value: {} }))
   on('command.register', () => ({ value: { command: 'mission-status' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  // The pane is open: git and GitHub are read only while it is.
+  on('ui.panes', () => ({ value: [{ id: 'progress', title: 'Progress', isShown: true, isFocused: false, isPlaced: true }] }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.settle()
@@ -95,6 +97,9 @@ const send = async ($: any, clock: { settle: () => Promise<void> }, args: Record
   await clock.settle()
 }
 
+
+// The poll tick: the plugin polls every 5 s; git and GitHub keep their own, longer turns.
+const TICK = 5_000
 
 test('merge card: hidden when git is missing', async ($, on) => {
   const { clock, calls } = await boot($, on, { git: 'missing', gh: 'ok', prs: [OPEN_PR] })
@@ -141,13 +146,13 @@ test('merge card: an open pull request shows its state, CI and review', async ($
   expect(await mountText($, /^Review needed$/)).toBe('Review needed')
 })
 
-test('poll timing: git every 5 s at all times, GitHub every 60 s while a pull request is open', async ($, on) => {
+test('poll timing: git every 15 s while the pane is open, GitHub every 60 s while a pull request is open', async ($, on) => {
   const { clock, calls, shared } = await boot($, on, { gh: 'ok', prs: [OPEN_PR] })
   const git0 = calls.gitStatus
-  for (let k = 0; k < 12; k++) await clock.advance(GIT_MS)
-  // 12 more polls 5 s apart, 60 s in all: 12 more git reads; GitHub at 0 and 60 s.
+  for (let k = 0; k < 12; k++) await clock.advance(TICK)
+  // 12 polls 5 s apart, 60 s in all: a git read every 15 s, 4 more; GitHub at 0 and 60 s.
   expect(git0).toBe(1)
-  expect(calls.gitStatus).toBe(13)
+  expect(calls.gitStatus).toBe(5)
   expect(calls.gh).toBe(2)
   expect(shared()?.prs[0]?.number).toBe(7)
 })
@@ -156,21 +161,21 @@ test('poll timing: with no open pull request GitHub waits 5 minutes, or reads wh
   const w: World = { gh: 'ok', prs: [] }
   const { clock, calls, shared } = await boot($, on, w)
   expect(calls.gh).toBe(1)
-  for (let k = 0; k < 12; k++) await clock.advance(GIT_MS)
+  for (let k = 0; k < 12; k++) await clock.advance(TICK)
   expect(calls.gh).toBe(1)
   // A push moves the upstream: a pull request may exist now.
   w.upstream = 'u2'
   w.prs = [OPEN_PR]
-  await clock.advance(GIT_MS)
+  await clock.advance(TICK)
   expect(calls.gh).toBe(2)
   expect(shared()?.prs[0]?.number).toBe(7)
 })
 
 test('poll timing: with no pull request and no change, GitHub reads again after 5 minutes', async ($, on) => {
   const { clock, calls } = await boot($, on, { gh: 'ok', prs: [] })
-  for (let k = 0; k < 59; k++) await clock.advance(GIT_MS)
+  for (let k = 0; k < 59; k++) await clock.advance(TICK)
   expect(calls.gh).toBe(1)
-  await clock.advance(GIT_MS)
+  await clock.advance(TICK)
   expect(calls.gh).toBe(2)
 })
 
@@ -179,12 +184,12 @@ test('backoff: a failed GitHub read waits 60 s, then 120 s, up to 10 minutes, an
   const w: World = { gh: 'ok', prs: [OPEN_PR] }
   const { clock, calls, shared } = await boot($, on, w)
   w.gh = 'fail'
-  for (let k = 0; k < 12; k++) await clock.advance(GIT_MS)
+  for (let k = 0; k < 12; k++) await clock.advance(TICK)
   expect(calls.gh).toBe(2)
   // 55 s later: still inside the 60 s wait.
-  for (let k = 0; k < 11; k++) await clock.advance(GIT_MS)
+  for (let k = 0; k < 11; k++) await clock.advance(TICK)
   expect(calls.gh).toBe(2)
-  await clock.advance(GIT_MS)
+  await clock.advance(TICK)
   expect(calls.gh).toBe(3)
   const r = await shared($)
   expect(r?.failures).toBe(2)
@@ -192,7 +197,7 @@ test('backoff: a failed GitHub read waits 60 s, then 120 s, up to 10 minutes, an
   expect(r?.prs[0]?.number).toBe(7)
   // A good read clears the backoff.
   w.gh = 'ok'
-  for (let k = 0; k < 24; k++) await clock.advance(GIT_MS)
+  for (let k = 0; k < 24; k++) await clock.advance(TICK)
   expect(shared()?.failures).toBe(0)
 })
 
@@ -330,4 +335,20 @@ test('poll timing: an agent update reads GitHub at once, before its 60 s turn', 
   expect(calls.gh).toBe(before)
   await send($, clock)
   expect(calls.gh).toBe(before + 1)
+})
+
+test('background cut: with the pane closed, git and GitHub are not read', async ($, on) => {
+  const clock = mock.clock(on, { now: Date.now() })
+  const calls = host(on, { gh: 'ok', prs: [OPEN_PR] })
+  on('store.get', () => ({ value: undefined }))
+  on('store.set', () => ({ value: undefined }))
+  on('tool.register', () => ({ value: {} }))
+  on('command.register', () => ({ value: { command: 'mission-status' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('ui.panes', () => ({ value: [] }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  for (let k = 0; k < 12; k++) await clock.advance(TICK)
+  expect(calls.gitStatus).toBe(0)
+  expect(calls.gh).toBe(0)
 })

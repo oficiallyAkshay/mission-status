@@ -97,6 +97,16 @@ function badgeSvg(state, clock, size = 20, up, down) {
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>.bn{stroke:#A8A69E;stroke-opacity:.55}@media (prefers-color-scheme:light){.bn{stroke:${LIGHT.grey};stroke-opacity:.8}}</style><circle class="bn" cx="${c}" cy="${c}" r="${c - 2.5}" fill="none" stroke-width="1.5"/></svg>`;
 }
+function failedBadgeSvg(size = 16, up, down) {
+  const S = size;
+  const c = S / 2;
+  const k = S * 0.18;
+  const mark = `<style>.bf{stroke:#E5484D}@media (prefers-color-scheme:light){.bf{stroke:#C4314B}}</style><circle class="bf" cx="${c}" cy="${c}" r="${c - 1.5}" fill="none" stroke-width="1.6"/><path class="bf" d="M${c - k} ${c - k} L${c + k} ${c + k} M${c + k} ${c - k} L${c - k} ${c + k}" stroke-width="1.6" stroke-linecap="round"/>`;
+  if (up === void 0 && down === void 0) return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}">${mark}</svg>`;
+  const pad = (20 - S) / 2;
+  const stub = (y1, y2) => `<path class="wa" d="M8 ${y1} V${y2}" stroke-width="1.5"/>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="20">${WAITS_STYLE}` + (up === true ? stub(0, pad) : "") + (down === true ? stub(20 - pad, 20) : "") + `<g transform="translate(${(16 - S) / 2} ${pad})">${mark}</g></svg>`;
+}
 const WAITS_STYLE = `<style>.wa{stroke:${LINE}}@media (prefers-color-scheme:light){.wa{stroke:${LIGHT.grey}}}</style>`;
 function waitsLineSvg(height = 20) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="${height}">${WAITS_STYLE}<path class="wa" d="M8 0 V${height}" stroke-width="1.5"/></svg>`;
@@ -182,6 +192,7 @@ export {
   badgeSvg,
   barWindow,
   exitSvg,
+  failedBadgeSvg,
   flowLineSvg,
   prIconSvg,
   spaceSvg,

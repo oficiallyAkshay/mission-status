@@ -4,8 +4,8 @@ import type { Fresh, MetricsSession, Summary, Task } from '../types'
 import { STALE_STEPS } from './model'
 import { FRESH0, PANE } from './store'
 
-// Anonymous metrics, sent only after consent. What is sent, field by field, is in docs/telemetry.md; a test holds this
-// file to that list. Nothing here reads a session id, an account, a path or any text the person or the agent wrote:
+// Anonymous metrics, sent only after consent. What is sent, field by field, is in docs/telemetry.md; keep the two in step.
+// Nothing here reads a session id, an account, a path or any text the person or the agent wrote:
 // prompts are sorted on the device into yes or no, and only the word leaves.
 
 // PostHog Cloud US. The key is PostHog's public, write-only project token, so anyone may read it; it can only add
@@ -170,7 +170,7 @@ const noticeAtom = atom({ plugin: 'mission-status', key: 'metricsNoticeShown' } 
 const holdbackAtom = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
 const tasksAtom = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 const summaryAtom = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
-const sessionAtom = atom({ plugin: 'mission-status', key: 'metricsSession' } as const, null as MetricsSession | null)
+const sessionAtom = atom({ plugin: 'mission-status', key: 'metricsSession' } as const, null as Stored | null)
 
 // $.store keys: the install id, and the consent choice kept across sessions by /pane-metrics.
 export const ID_KEY = 'metricsId'
@@ -179,9 +179,10 @@ export const NOTICE_KEY = 'metricsNoticeShown'
 
 // What one session counts. The counts that must outlive a reload (an auto-update mid-session) sit in $.state, in
 // metricsSession; the queue and the render count start over with the module.
-let session: MetricsSession = { holdback: false, calls: 0, realWork: false }
+// paneSent: pane_shown is sent once per session, also across a reload.
+type Stored = MetricsSession
+let session: Stored = { holdback: false, calls: 0, realWork: false }
 let paneSeen = false
-let paneSent = false
 let asks: boolean[] = []
 let renders = 0
 let queue: Queued[] = []
@@ -190,7 +191,7 @@ let disabled = false
 
 function reset(): void {
   session = { holdback: false, calls: 0, realWork: false }
-  paneSeen = paneSent = false
+  paneSeen = false
   asks = []
   renders = 0
   queue = []
@@ -202,11 +203,14 @@ async function save($: EngineInterface): Promise<void> {
   await update($, sessionAtom, () => kept)
 }
 
+// A stored "no" beats the session's own value: /pane-metrics off in one session stops every open session. Without a
+// stored "no", the session value comes first, then a stored "yes".
 async function consentOf($: EngineInterface): Promise<'yes' | 'no' | null> {
+  const kept = await $.store.get(CONSENT_KEY)
+  if (kept === 'no') return 'no'
   const v = await read($, consentAtom)
   if (v === 'yes' || v === 'no') return v
-  const kept = await $.store.get(CONSENT_KEY)
-  return kept === 'yes' || kept === 'no' ? kept : null
+  return kept === 'yes' ? kept : null
 }
 
 async function noticeShown($: EngineInterface): Promise<boolean> {
@@ -275,8 +279,8 @@ async function reachRealWork($: EngineInterface): Promise<void> {
   await track($, 'session_real_work', { holdback: yn(session.holdback) })
   for (const a of asks) await track($, 'progress_ask', { progress: yn(a), holdback: yn(session.holdback) })
   asks = []
-  if (paneSeen && !paneSent) {
-    paneSent = true
+  if (paneSeen && session.paneSent !== true) {
+    session = { ...session, paneSent: true }
     await track($, 'pane_shown', { holdback: yn(session.holdback) })
   }
 }
@@ -325,10 +329,13 @@ export function registerMetrics(on: On): void {
   // Each hook carries a match-all matcher: the pane's own hooks on these events have none, and two without one are refused.
   on('session.start', { cwd: ANY }, async ($, e, next) => {
     reset()
+    // Each step stands alone: the command and the flush timer exist even when the start fails.
     await quiet(async () => {
       disabled = Boolean(await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'))
-      await startSession($)
-      await $.command.register({ name: 'pane-metrics', description: 'Anonymous metrics for the progress pane: on or off' })
+    })
+    await quiet(() => startSession($))
+    await quiet(() => $.command.register({ name: 'pane-metrics', description: 'Anonymous metrics for the progress pane: on or off' }).then(() => undefined))
+    await quiet(async () => {
       $.clock.every(FLUSH_MS, () => void quiet(() => flush($)))
     })
     return next(e)
@@ -359,8 +366,9 @@ export function registerMetrics(on: On): void {
     renders += 1
     if (!paneSeen) {
       paneSeen = true
-      if (session.realWork && !paneSent) {
-        paneSent = true
+      if (session.realWork && session.paneSent !== true) {
+        session = { ...session, paneSent: true }
+        // Drawing is pure and cannot write state: the flag is stored with the next tool call's save.
         void quiet(() => track($, 'pane_shown', { holdback: yn(session.holdback) }))
       }
     }
@@ -410,11 +418,16 @@ export function registerMetrics(on: On): void {
       return { text: disabled ? 'Metrics are on, but CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC stops all sends.' : 'Metrics are on. The field list is in docs/telemetry.md.' }
     }
     if (arg === 'off') {
-      await $.store.set(CONSENT_KEY, 'no')
-      await update($, consentAtom, () => 'no')
-      await $.store.delete(ID_KEY)
+      // The session turns off first, so a failed write never leaves it sending.
       queue = []
       asks = []
+      await update($, consentAtom, () => 'no').catch(() => undefined)
+      const isKept = await $.store.set(CONSENT_KEY, 'no').then(
+        () => true,
+        () => false,
+      )
+      await $.store.delete(ID_KEY).catch(() => undefined)
+      if (!isKept) return { text: 'Metrics are off in this session, but the choice could not be saved. Type /pane-metrics off again later.' }
       return { text: 'Metrics are off. The install id is deleted, and nothing more is sent.' }
     }
     if (!(await on_($))) return { text: 'Metrics are off. Type /pane-metrics on to turn them on.' }

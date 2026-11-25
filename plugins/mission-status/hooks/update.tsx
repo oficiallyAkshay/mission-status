@@ -228,10 +228,12 @@ async function reloadPlugins($: EngineInterface) {
   if (!isRun) return void (await fail($, s?.version ?? null))
   // The reload ends this module and its timers: this timer firing means the old code still runs.
   // The reload command waits for an idle session, so the limit allows a person typing for a while.
-  $.clock.after(RELOAD_LIMIT_MS, async () => {
-    const x = await read($, updateState)
-    if (x?.phase === 'reloading' && x.version === s?.version) await fail($, x.version)
-  })
+  $.clock.after(RELOAD_LIMIT_MS, () =>
+    void (async () => {
+      const x = await read($, updateState)
+      if (x?.phase === 'reloading' && x.version === s?.version) await fail($, x.version)
+    })().catch(() => {}),
+  )
 }
 
 // After a load: a reload that brought the new version shows "Updated to"; one that brought the old version back is a
@@ -244,7 +246,7 @@ export async function settle($: EngineInterface): Promise<void> {
   if (s.phase === 'reloading' && s.version) {
     if (s.version === me.version) {
       await set($, () => ({ phase: 'updated', version: me.version, failures: 0, at: now }))
-      $.clock.after(UPDATED_SHOWN_MS, () => void set($, x => (x?.phase === 'updated' && x.at === now ? { ...x, phase: 'idle' } : x)))
+      $.clock.after(UPDATED_SHOWN_MS, () => void set($, x => (x?.phase === 'updated' && x.at === now ? { ...x, phase: 'idle' } : x)).catch(() => {}))
     } else await fail($, s.version)
   } else if (s.phase === 'updating') await set($, x => ({ ...base(x), phase: 'pending' }))
   else if (s.phase === 'updated' && now - s.at >= UPDATED_SHOWN_MS) await set($, x => ({ ...base(x), phase: 'idle' }))
@@ -272,13 +274,15 @@ export function registerUpdate(on: On): void {
   })
   // Every end reason: the matcher keeps this hook apart from register.tsx's own turn.complete hook.
   on('turn.complete', { reason: ['answer', 'aborted', 'refusal', 'error'] }, async ($, e, next) => {
-    const r = await next(e)
-    if (e.agentId === undefined) {
-      isInTurn = false
-      // After the turn ends, never during it: the install and the reload start once this dispatch resolves.
-      $.clock.after(0, () => void afterTurn($).catch(() => {}))
+    try {
+      return await next(e)
+    } finally {
+      if (e.agentId === undefined) {
+        isInTurn = false
+        // After the turn ends, never during it: the install and the reload start once this dispatch resolves.
+        $.clock.after(0, () => void afterTurn($).catch(() => {}))
+      }
     }
-    return r
   })
 }
 

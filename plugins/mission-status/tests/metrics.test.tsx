@@ -348,7 +348,7 @@ test('holdback: 1 in 10 consenting real-work sessions in the 30 days after relea
   expect(n > 800 && n < 1200).toBe(true)
 })
 
-test('holdback: the decision is written at the 5th tool call and sent with session_real_work', async ($, on) => {
+test('holdback: the decision is written at the session start and sent with session_real_work', async ($, on) => {
   const w = await start($, on, { store: consented })
   await work($, 5)
   const value = holdbackOf(w)

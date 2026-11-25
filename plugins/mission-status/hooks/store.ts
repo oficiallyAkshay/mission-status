@@ -38,6 +38,18 @@ export async function tick($: EngineInterface): Promise<void> {
   } catch {}
 }
 
+// The 1 s clock: it writes only while a timer shows, that is while a stage, an item, a task step or a helper is in
+// progress in the stored state. Otherwise it returns at once.
+export async function tickIfTimer($: EngineInterface): Promise<void> {
+  try {
+    const s = normalize(await read($, summary))
+    let shows = s !== null && (s.phase < s.phases.length || s.active.length > 0 || s.items.some(i => i.status === 'now'))
+    if (!shows) shows = (await read($, tasks)).some(t => t.status === 'now')
+    if (!shows) shows = ((await read($, live))?.helpers ?? []).some(h => h.status === 'running')
+    if (shows) await tick($)
+  } catch {}
+}
+
 
 // ---- Freshness triggers (product plan, "How the state stays current") ----
 
@@ -75,7 +87,8 @@ async function markOutOfDate($: EngineInterface, f: Fresh): Promise<void> {
   await update($, summary, s => {
     const old = normalize(s)
     if (old === null || old.mayBeOutOfDate === true) return s
-    return { ...old, mayBeOutOfDate: true, version: (old.version ?? 0) + 1 }
+    // normalize leaves the agent's version out, so it is carried over from the stored value.
+    return { ...old, agentVersion: (s as { agentVersion?: number } | null)?.agentVersion, mayBeOutOfDate: true, version: (old.version ?? 0) + 1 } as Summary
   })
 }
 

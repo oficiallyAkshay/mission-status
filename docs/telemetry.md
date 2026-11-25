@@ -1,6 +1,6 @@
 # Anonymous metrics
 
-mission-status can send a few anonymous events about how the progress pane is used, so the owner can see whether the pane works. On by default; nothing is sent until the notice has shown once; off at any time with the switch or /pane-metrics off. This page lists every event and every field. The code is `plugins/mission-status/hooks/metrics.tsx`, and a test holds the code to this list.
+mission-status can send a few anonymous events about how the progress pane is used, so the owner can see whether the pane works. On by default; nothing is sent until the notice has shown once; off at any time with the switch or /pane-metrics off. This page lists every event and every field. The code is `plugins/mission-status/hooks/metrics.tsx`. No test compares the code with this list: the owner checks the two when either changes.
 
 ## Turn it on or off
 
@@ -59,7 +59,7 @@ The list is `PROGRESS_WORDS` in `metrics.tsx`. A change to it changes the measur
 
 ## The holdback
 
-For 30 days after the release date (`RELEASE_AT` in `metrics.tsx`), on installs with metrics on (the notice seen) only, a random 1 in 10 real-work sessions is a holdback: that session shows no pane and gets no standing rule, so the agent works as it would without the pane. The holdback sessions are the comparison group for the progress-question measure. The choice is made on your Mac at the 5th tool call and kept for that session only. Installs that turned metrics off, that have not seen the notice, or that set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, never get a holdback. After the 30 days, nobody does.
+For 30 days after the release date (`RELEASE_AT` in `metrics.tsx`), on installs with metrics on (the notice seen) only, a random 1 in 10 real-work sessions is a holdback: that session shows no pane and gets no standing rule, so the agent works as it would without the pane. The holdback sessions are the comparison group for the progress-question measure. The choice is made on your Mac when the session starts, before the first tool call, and kept for that session only. Installs that turned metrics off, that have not seen the notice, or that set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, never get a holdback. After the 30 days, nobody does.
 
 ## The id, honestly
 

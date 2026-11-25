@@ -46,7 +46,9 @@ export function applyPlan(list: Task[], args: Record<string, unknown>, phase: nu
         const was = list.find(x => x.name === name)
         const since = status === 'now' ? (was?.status === 'now' ? (was.since ?? Date.now()) : Date.now()) : null
         const doneAt = status === 'done' ? (was?.status === 'done' ? (was.doneAt ?? Date.now()) : Date.now()) : null
-        return { name, status, phase: was?.phase ?? phase, since, doneAt }
+        // A step that starts now goes to the stage that runs now, as advance and start move it.
+        const moved = status === 'now' && was !== undefined && was.status !== 'now'
+        return { name, status, phase: moved ? phase : (was?.phase ?? phase), since, doneAt }
       })
       .filter(x => x.name !== '')
   }
@@ -189,6 +191,7 @@ export function asItem(raw: unknown): Item | undefined {
     text: text === null ? undefined : cap(text),
     pr: asPrRef(o.pr),
     ...subPhases(o),
+    taskStep: str(o.taskStep),
   }
 }
 
@@ -238,6 +241,7 @@ export function normalize(raw: Summary): Summary {
     runbooks: Array.isArray(r.runbooks) ? (r.runbooks as unknown[]).map(asRunbook).filter((x): x is Runbook => x !== undefined) : [],
     waitingForAgent: r.waitingForAgent === true,
     mayBeOutOfDate: r.mayBeOutOfDate === true,
+    agentVersion: typeof r.agentVersion === 'number' ? r.agentVersion : 0,
   }
 }
 
@@ -398,7 +402,7 @@ function checkItemFields(o: Record<string, unknown>, where: string, whole: boole
   if (o.status !== undefined && !ITEM_STATES.includes(o.status as ItemStatus)) errors.push(`${where}: status must be one of ${ITEM_STATES.join(', ')}`)
   if (o.id !== undefined && !isText(o.id)) errors.push(`${where}: id must be a non-empty string`)
   if (isText(o.id) && PANE_ID.test(String(o.id))) errors.push(`${where}: id ${String(o.id)} belongs to the pane's task list`)
-  for (const k of ['after', 'parent', 'note', 'when', 'text'] as const)
+  for (const k of ['after', 'parent', 'note', 'when', 'text', 'taskStep'] as const)
     if (o[k] !== undefined && o[k] !== null && typeof o[k] !== 'string') errors.push(`${where}: ${k} must be a string`)
   for (const k of ['n', 'm'] as const) if (o[k] !== undefined && !isNum(o[k])) errors.push(`${where}: ${k} must be a number`)
   if (o.steps !== undefined && o.steps !== null && !(Array.isArray(o.steps) && o.steps.length <= MAX_SUB && o.steps.every(isText)))
@@ -492,12 +496,17 @@ export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVe
           })
       })
   }
+  if (Array.isArray(args.runbooks)) {
+    const ids = new Set((old?.runbooks ?? []).map(r => r.id))
+    for (const raw of args.runbooks) if (isObj(raw) && isText(raw.id)) raw.remove === true ? ids.delete(String(raw.id).trim()) : ids.add(String(raw.id).trim())
+    if (ids.size > MAX_RUNBOOKS) errors.push(`at most ${MAX_RUNBOOKS} runbooks show; remove one first with {id, remove: true}`)
+  }
   if (args.repo !== undefined && args.repo !== null && !(typeof args.repo === 'string' && args.repo.startsWith('/') && !args.repo.split('/').includes('..')))
     errors.push('repo must be an absolute folder path, or null for the session folder')
   if (args.saveTemplate !== undefined && !(typeof args.saveTemplate === 'string' && TEMPLATE_NAME.test(args.saveTemplate)))
     errors.push('saveTemplate must be a name of 1 to 30 lower-case letters, digits and dashes')
-  if (typeof args.saveTemplate === 'string' && args.saveTemplate in TEMPLATES) errors.push(`saveTemplate ${args.saveTemplate} is a built-in template; pick another name`)
-  if (args.template !== undefined && !(typeof args.template === 'string' && (args.template in TEMPLATES || args.template in personal)))
+  if (typeof args.saveTemplate === 'string' && Object.hasOwn(TEMPLATES, args.saveTemplate)) errors.push(`saveTemplate ${args.saveTemplate} is a built-in template; pick another name`)
+  if (args.template !== undefined && !(typeof args.template === 'string' && (Object.hasOwn(TEMPLATES, args.template) || Object.hasOwn(personal, args.template))))
     errors.push(`template must be one of ${[...Object.keys(TEMPLATES), ...Object.keys(personal)].join(', ')}`)
   if (args.phases !== undefined) {
     const ok = Array.isArray(args.phases) && args.phases.length >= 2 && args.phases.length <= 8 && args.phases.every(isText)
@@ -515,12 +524,22 @@ export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVe
   if (args.items !== undefined && args.patch !== undefined) errors.push('send items (the whole list) or patch (changes), not both')
   // An item named as its own stage repeats the card's title: refused, with the fix in the error.
   {
-    const stages = Array.isArray(args.phases) ? (args.phases as unknown[]).map(String) : typeof args.template === 'string' && args.template in TEMPLATES ? (TEMPLATES[args.template] ?? []) : (old?.phases ?? [])
+    const picked = typeof args.template === 'string' ? (Object.hasOwn(TEMPLATES, args.template) ? TEMPLATES[args.template] : Object.hasOwn(personal, args.template) ? personal[args.template] : undefined) : undefined
+    const stages = Array.isArray(args.phases)
+      ? (args.phases as unknown[]).map(String)
+      : picked !== undefined
+        ? picked
+        : typeof args.stage === 'string' && STAGE_KEYS.includes(args.stage as StageKey) && args.stage !== old?.stage
+          ? PHASES[args.stage as StageKey]
+          : (old?.phases ?? [])
     const same = (name: unknown, phase: unknown) =>
       typeof name === 'string' && typeof phase === 'number' && (stages[Math.round(phase)] ?? '').trim().toLowerCase() === name.trim().toLowerCase()
     const listed = Array.isArray(args.items) ? (args.items as unknown[]) : []
     const patched = Array.isArray(args.patch) ? (args.patch as unknown[]) : []
-    for (const raw of [...listed, ...patched]) {
+    // A change of stages is checked against the stored items it keeps, so no item ends up named as its stage.
+    const touched = new Set(patched.filter(isObj).map(x => String(x.id ?? '')))
+    const kept = Array.isArray(args.items) ? [] : (old?.items ?? []).filter(x => !touched.has(x.id ?? idOf(x.name))).map(x => ({ id: x.id, name: x.name, phase: x.phase }))
+    for (const raw of [...listed, ...patched, ...kept]) {
       if (!isObj(raw)) continue
       const base = isText(raw.id) ? (old?.items ?? []).find(x => (x.id ?? idOf(x.name)) === raw.id) : undefined
       const name = raw.name ?? base?.name
@@ -577,25 +596,51 @@ export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVe
   return errors
 }
 
-// parent and after name an item by its name or by its id: an id becomes that item's name, so the cards nest and wait
-// the same either way. A name wins over an id that reads the same.
+// parent and after name an item by its id or by its name; each is stored as the item's id, so the cards nest and wait
+// the same either way, and a rename of the item keeps its children and its waits.
 export function linkRefs(items: Item[]): Item[] {
-  const named = (ref: string | null, phase: number): string | null => {
-    if (ref === null || items.some(y => y.phase === phase && y.name === ref)) return ref
-    const hit = items.find(y => y.phase === phase && (y.id ?? idOf(y.name)).toLowerCase() === ref.toLowerCase())
-    return hit === undefined ? ref : hit.name
+  const asId = (ref: string | null, phase: number, self: Item): string | null => {
+    const hit = findRef(items, ref, phase, self)
+    return hit === undefined ? ref : (hit.id ?? idOf(hit.name))
   }
-  return items.map(x => ({ ...x, parent: named(x.parent, x.phase), after: named(x.after, x.phase) }))
+  return items.map(x => ({ ...x, parent: asId(x.parent, x.phase, x), after: asId(x.after, x.phase, x) }))
+}
+
+// An item named by another (as its parent or the item it waits for): by id first, then by name, in the same stage.
+// The agent is told to give each item a stable id, so a reference by id is the common case.
+export function findRef(items: Item[], ref: string | null | undefined, phase: number, self?: Item): Item | undefined {
+  if (ref === null || ref === undefined || ref.trim() === '') return undefined
+  const r = ref.trim().toLowerCase()
+  const inStage = items.filter(x => x.phase === phase && x !== self)
+  return (
+    inStage.find(x => (x.id ?? idOf(x.name)).toLowerCase() === r) ??
+    inStage.find(x => x.name.trim().toLowerCase() === r) ??
+    inStage.find(x => (x.id ?? idOf(x.name)) === idOf(ref))
+  )
+}
+
+// Siblings in the work's own order: the order the agent sent, moved only so an item comes after the one it waits for.
+export function workOrder(list: Item[], all: Item[]): Item[] {
+  const out: Item[] = []
+  const left = [...list]
+  // Each pass takes one item out, so the loop ends; a wait loop falls back to the sent order.
+  while (left.length > 0) {
+    const k = left.findIndex(x => {
+      const w = findRef(all, x.after, x.phase, x)
+      return w === undefined || !left.includes(w)
+    })
+    out.push(...left.splice(k < 0 ? 0 : k, 1))
+  }
+  return out
 }
 
 // Items whose parent chain comes back to themselves never draw: each such item is named.
 export function parentLoops(items: Item[]): string[] {
-  const byName = new Map(items.map(x => [`${x.phase}|${x.name}`, x]))
   const errors: string[] = []
   for (const x of items) {
     let at: Item | undefined = x
     for (let k = 0; k <= items.length && at?.parent != null; k++) {
-      at = byName.get(`${x.phase}|${at.parent}`)
+      at = findRef(items, at.parent, x.phase, at)
       if (at === x) {
         errors.push(`item ${x.name}: its parent chain comes back to itself`)
         break
