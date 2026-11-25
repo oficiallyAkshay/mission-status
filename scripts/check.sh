@@ -15,4 +15,6 @@ LOG=/tmp/mission-status-check-$(date +%s).log
     echo "[$(date -u +%FT%TZ)] type-check"; npx -y -p typescript@5.6.3 tsc -p "$TMP" 2>&1 && echo "type-check clean"
   else echo "type-check skipped: set CC_TYPES"; fi
   echo "[$(date -u +%FT%TZ)] tests"; "$CLAUDE" plugin test . 2>&1 | tail -4
+  # The site keeps a built copy of the drawing code; CI fails when it is stale.
+  echo "[$(date -u +%FT%TZ)] site copy"; (cd ../.. && node site/build.mjs >/dev/null 2>&1 && git diff --quiet -- site/vendor/bars.js && echo "site copy current" || echo "site/vendor/bars.js changed: commit it")
 } 2>&1 | tee "$LOG"
