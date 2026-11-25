@@ -50,6 +50,13 @@ jobs:
           fix: "false"
           verify: "true"
 
+      # The site draws the pane with the plugin's own drawing code. A stale copy
+      # shows an old pane, so the copy must match a fresh build of the source.
+      - name: site drawing code matches the plugin
+        run: |
+          node site/build.mjs
+          git diff --exit-code -- site/vendor/bars.js || { echo "site/vendor/bars.js is stale: run node site/build.mjs" >&2; exit 1; }
+
       - name: secrets scan
         uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
