@@ -1,5 +1,11 @@
 # mission-status
 
+<p>
+  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/license-MIT-5442D0"></a>
+  <a href="#updates"><img alt="clones of this repository, last seven days and all time" src="https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/oficiallyAkshay/mission-status/badges/clones.json&query=$.badge&label=clones&logo=github&logoColor=white"></a>
+  <a href="#updates"><img alt="views of this repository, last seven days and all time" src="https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/oficiallyAkshay/mission-status/badges/views.json&query=$.badge&label=views&logo=github&logoColor=white"></a>
+</p>
+
 Know where your agent stands, without reading through its work.
 
 mission-status is a live progress pane for Claude Code in the Claude desktop app. It sits beside the chat and shows the goal, the stages, what done means for each stage, and where the work is right now. The agent keeps it current, so you never ask "where are we?" again.
