@@ -142,3 +142,8 @@ test('after 2 ignored reminders the state is marked May be out of date; an agent
   await send($, BASE)
   expect((await state($, 'summary')).mayBeOutOfDate).toBe(false)
 })
+
+test('the standing rule keeps the chat to what unblocks the person', () => {
+  expect(RULE).toContain('only what the person must do or decide to unblock the work')
+  expect(RULE).toContain('Send no progress lines, status, recaps, plans or narration in the chat')
+})

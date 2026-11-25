@@ -240,8 +240,9 @@ export const RULE =
   'At each update, look again at the stages: keep a template only while it fits the work, and send new stages when the work changes. ' +
   'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those. ' +
   'Give each item a stable id, and send small item changes as patch operations. ' +
-  'The pane is the progress report, so keep the chat quiet: write in the chat only when something changed that the person must know, ' +
-  'or something needs the person (a decision, an approval, a step only they can do). Send no progress lines, recaps or narration in the chat.'
+  'The pane is the only progress report. In the chat, write only what the person must do or decide to unblock the work ' +
+  '(a decision, an approval, a step only they can do), and a direct answer when they ask a question. ' +
+  'Send no progress lines, status, recaps, plans or narration in the chat: put them in the pane.'
 
 // The one-line reminder the pane adds to the agent's next step.
 export const REMINDER = 'Progress pane: the state is stale. Send the current state with mcp__mission-status__update now.'
