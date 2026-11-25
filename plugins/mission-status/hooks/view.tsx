@@ -341,7 +341,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
             </Box>,
           )
         // The item's sub-phases on one dot-separated line, in place of child cards: the one that runs now in full-opacity
-        // body text, the rest faint.
+        // body text, the rest faint. Only an item in progress has a sub-phase that runs: a done, failed or later item
+        // shows every sub-phase faint, whatever its step says.
         if ((x.steps ?? []).length > 0)
           rows.push(
             <Box flexDirection="row" gap={0} key={`${key}-steps`}>
@@ -351,7 +352,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                 <Text size="caption" color={NOTE} wrap="wrap">
                   {(x.steps ?? []).map((name, j) => [
                     j > 0 ? ' · ' : '',
-                    j === x.step
+                    j === x.step && state === 'now'
                       ? <Text key={`${key}-step-${j}`} weight="bold" color="text">{name}</Text>
                       : name,
                   ])}
@@ -360,8 +361,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
             </Box>,
           )
         // The item's pull request CI: its state and how long the checks ran, or run so far.
-        // The helpers the session runs now sit under the item in progress, as its children: Smriti's lens jobs under
-        // its pass, a review's readers under the review.
+        // The helpers the session runs now sit under the item in progress, as its children: a review's readers under
+        // the review.
         if (Svg !== undefined && hostName !== null && x.phase === s.phase && x.name === hostName && running.length > 0) {
           running.slice(0, 6).forEach((helper, j) =>
             rows.push(

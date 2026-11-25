@@ -25,9 +25,6 @@ export const TEMPLATES: Record<string, string[]> = {
   writing: ['Outline', 'Draft', 'Review', 'Publish'],
   migration: ['Plan', 'Dry run', 'Migrate', 'Verify', 'Clean up'],
   'plan-review': ['Intake', 'Draft', 'Review waves', 'Your rows', 'Hand off'],
-  // A Smriti learning pass: the five steps of a light pass, and the steps of a deep pass.
-  'smriti-light': ['Discover', 'Judge', 'Curate', 'Guardrail', 'Route'],
-  'smriti-deep': ['Size', 'Origin', 'Lenses', 'Curate', 'Screen', 'File', 'Yield'],
 }
 // The most sub-phases one item's line holds.
 export const MAX_SUB = 8
