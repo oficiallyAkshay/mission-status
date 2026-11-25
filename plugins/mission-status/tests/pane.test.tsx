@@ -326,7 +326,7 @@ test('empty: before any update', async $ => {
   await ui.unmount()
 })
 
-test('runbooks: each one is a tab beside Progress, and its tab shows the steps with their states', async ($, on) => {
+test('runbooks: one runbook is a Runbook tab beside Progress; it shows what needs the person, then the steps', async ($, on) => {
   await start($, on)
   const runbook = {
     id: 'release',
@@ -342,12 +342,13 @@ test('runbooks: each one is a tab beside Progress, and its tab shows the steps w
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const buttons = await ui.findAll({ type: 'Button' })
   expect(buttons.some(x => x.key === 'tab-progress')).toBe(true)
-  expect(buttons.some(x => x.key === 'tab-release')).toBe(true)
+  expect(buttons.some(x => x.key === 'tab-release' && x.props?.label === 'Runbook')).toBe(true)
   expect(await text(ui, /^Project: P$/)).toBe('Project: P')
   await ui.press({ key: 'tab-release' })
-  expect(await text(ui, /^1 of 3 steps done/)).toBeTruthy()
-  expect(await text(ui, /^2\. Rewrite the history$/)).toBe('2. Rewrite the history')
-  expect(await text(ui, /^Waits on your yes$/)).toBe('Waits on your yes')
+  expect(await text(ui, /^1 of 3 done  ·  1 need you  ·  now: Rewrite the history$/)).toBeTruthy()
+  expect(await text(ui, /^Needs you$/)).toBe('Needs you')
+  expect(await text(ui, /^2  Rewrite the history$/)).toBe('2  Rewrite the history')
+  expect(await text(ui, /^Needs your yes$/)).toBe('Needs your yes')
   expect(await text(ui, /^Project: P$/)).toBeUndefined()
   await ui.press({ key: 'tab-progress' })
   expect(await text(ui, /^Project: P$/)).toBe('Project: P')

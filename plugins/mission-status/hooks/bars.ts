@@ -282,3 +282,17 @@ export function barWindow(t: TrackInput, start: number | null): { from: number; 
   while (to + 1 < n && fits(from, to + 1)) to += 1
   return { from, to }
 }
+
+// A runbook's rail: one short segment for each step, in its state's colour. It shows how far the runbook is, at a
+// glance, with no labels; the steps below carry the words.
+export function stepsRailSvg(states: readonly ('done' | 'now' | 'next' | 'failed' | 'blocked')[]): string {
+  const n = Math.max(1, states.length)
+  const gap = 0.6
+  const w = (100 - gap * (n - 1)) / n
+  const fill = { done: GREEN, now: ACCENT, next: '#808080', failed: '#D9534F', blocked: '#D4A13A' } as const
+  const op = { done: '1', now: '1', next: '.3', failed: '1', blocked: '.85' } as const
+  const bars = states
+    .map((st, k) => `<rect x="${(k * (w + gap)).toFixed(3)}%" y="0" width="${w.toFixed(3)}%" height="6" rx="3" fill="${fill[st]}" fill-opacity="${op[st]}"/>`)
+    .join('')
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="6">${bars}</svg>`
+}

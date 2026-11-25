@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, ProgressProps, RenderChildren, RenderInput, SvgProps } from 'claude-code'
-import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { barWindow, trackFits, badgeSvg, exitSvg, flowLineSvg, spaceSvg, waitsLineSvg, slideSvg, stripSvg, trackSvg } from './bars'
+import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket, RunbookStep } from '../types'
+import { barWindow, trackFits, stepsRailSvg, badgeSvg, exitSvg, flowLineSvg, spaceSvg, waitsLineSvg, slideSvg, stripSvg, trackSvg } from './bars'
 import { age, cap, clockOf, figureOf, normalize } from './model'
 import { prFacts } from './readers'
 import type { MergeLive } from './readers'
@@ -534,45 +534,67 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       runbooks.length === 0 ? null : (
         <Box flexDirection="row" gap={1} flexWrap="wrap" key="tabs">
           <Button key="tab-progress" label="Progress" variant={book === null ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => null)} />
+          {/* One runbook: its tab reads Runbook, and its title heads the view. Several: each tab carries its title. */}
           {runbooks.map(r => (
-            <Button key={`tab-${r.id}`} label={r.title} variant={book?.id === r.id ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => r.id)} />
+            <Button key={`tab-${r.id}`} label={runbooks.length === 1 ? 'Runbook' : r.title} variant={book?.id === r.id ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => r.id)} />
           ))}
         </Box>
       )
     if (book !== null) {
+      // The runbook view. First what needs the person, then the steps in order: done ones dim, the current one in the
+      // accent, the rest plain. A wait on the person reads "Needs your ...".
       const m = book.steps.length
       const doneN = book.steps.filter(x => x.status === 'done').length
-      const cur = book.steps.findIndex(x => x.status === 'now')
-      const waiting = book.steps.filter(x => x.status !== 'done' && x.waitsOn !== null).length
-      const stepColor = { done: undefined, now: ACCENT_TEXT, next: SUBTEXT, failed: 'error', blocked: 'warning' } as const
+      const isMine = (x: RunbookStep) => x.status !== 'done' && x.waitsOn !== null && /^(you|your)\b/i.test(x.waitsOn)
+      const mine = book.steps.map((x, k) => ({ x, k })).filter(({ x }) => isMine(x))
+      const nowStep = book.steps.find(x => x.status === 'now') ?? null
+      const waitText = (x: RunbookStep) => (x.waitsOn === null ? null : /^(you|your)\b/i.test(x.waitsOn) ? `Needs ${x.waitsOn}` : `Waits on ${x.waitsOn}`)
+      const summaryLine = [`${doneN} of ${m} done`, mine.length > 0 ? `${mine.length} need you` : null, nowStep !== null ? `now: ${nowStep.name}` : null]
+        .filter(Boolean)
+        .join('  ·  ')
+      const stepRow = (x: RunbookStep, k: number, key: string) => (
+        <Box flexDirection="row" gap={1} key={key}>
+          <Box width={BADGE} flexShrink={0}>
+            {Svg !== undefined
+              ? svg(badgeSvg(x.status === 'done' ? 'done' : x.status === 'now' ? 'now' : 'next', 0, 16), `Step ${k + 1}: ${x.status}`, 16)
+              : <Text>{x.status === 'done' ? '✓' : x.status === 'now' ? '●' : '○'}</Text>}
+          </Box>
+          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+            <Text wrap="wrap" dimColor={x.status === 'done'} color={x.status === 'now' ? ACCENT_TEXT : x.status === 'failed' ? 'error' : undefined}>
+              <Text color={SUBTEXT}>{`${k + 1}  `}</Text>
+              {x.name}
+            </Text>
+            {x.note !== null && <Text size="caption" color={NOTE} wrap="wrap">{x.note}</Text>}
+            {x.status !== 'done' && waitText(x) !== null && (
+              <Text size="caption" color={isMine(x) ? 'warning' : SUBTEXT} wrap="wrap">{waitText(x)}</Text>
+            )}
+          </Box>
+        </Box>
+      )
       return (
         <Box flexDirection="column" gap={1} paddingBottom={1}>
           {tabRow}
-          <Text size="heading" weight="semibold" wrap="wrap">{book.title}</Text>
-          {book.href !== null && linkRow([{ label: 'Runbook', href: book.href }], 'runbook-link')}
-          <Text color={SUBTEXT}>{`${doneN} of ${m} steps done${waiting > 0 ? `  ·  ${waiting} wait on someone` : ''}`}</Text>
-          {Svg !== undefined &&
-            svg(
-              trackSvg({ total: m, done: cur >= 0 ? cur : doneN, current: cur >= 0 ? `${cur + 1}. ${book.steps[cur]?.name ?? ''}` : null, isDone: doneN === m, doneLabel: 'All steps done', clock: 0, checks: book.steps.map(x => x.status === 'done') }),
-              `${doneN} of ${m} steps done`,
-              30,
-              'runbook-bar',
-            )}
           <Box flexDirection="column" gap={0}>
-            {book.steps.map((x, k) => (
-              <Box flexDirection="row" gap={1} key={`rb-${k}`}>
-                <Box width={BADGE} flexShrink={0}>
-                  {Svg !== undefined
-                    ? svg(badgeSvg(x.status === 'done' ? 'done' : x.status === 'now' ? 'now' : 'next', 0, 16), `Step ${k + 1}: ${x.status}`, 16)
-                    : <Text>{x.status === 'done' ? '✓' : x.status === 'now' ? '●' : '○'}</Text>}
-                </Box>
-                <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-                  <Text color={stepColor[x.status]} dimColor={x.status === 'done'} wrap="wrap">{`${k + 1}. ${x.name}`}</Text>
-                  {x.note !== null && <Text size="caption" color={NOTE} wrap="wrap">{x.note}</Text>}
-                  {x.waitsOn !== null && x.status !== 'done' && <Text size="caption" color={SUBTEXT} wrap="wrap">{`Waits on ${x.waitsOn}`}</Text>}
-                </Box>
-              </Box>
-            ))}
+            <Text size="heading" weight="semibold" wrap="wrap">{book.title}</Text>
+            <Text color={SUBTEXT} wrap="wrap">{summaryLine}</Text>
+          </Box>
+          {Svg !== undefined && svg(stepsRailSvg(book.steps.map(x => x.status)), `${doneN} of ${m} steps done`, 6, 'runbook-rail')}
+          {book.href !== null && linkRow([{ label: 'Open the runbook', href: book.href }], 'runbook-link')}
+          {mine.length > 0 && (
+            <Box flexDirection="column" gap={0} borderStyle="single" borderColor="warning" borderDimColor paddingX={1}>
+              <Text weight="semibold" color="warning">Needs you</Text>
+              {mine.map(({ x, k }) => (
+                <Text key={`mine-${k}`} wrap="wrap">
+                  <Text color={SUBTEXT}>{`${k + 1}  `}</Text>
+                  {x.name}
+                  <Text color={SUBTEXT}>{`  ·  ${x.waitsOn}`}</Text>
+                </Text>
+              ))}
+            </Box>
+          )}
+          <Box flexDirection="column" gap={0}>
+            <Text weight="semibold">Steps</Text>
+            {book.steps.map((x, k) => stepRow(x, k, `rb-${k}`))}
           </Box>
         </Box>
       )
