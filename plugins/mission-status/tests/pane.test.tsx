@@ -227,10 +227,11 @@ test('in-progress cards open by themselves and completed cards close; a press ho
   ]
   await send($, { project: 'P', stage: 'build', phase: 1, items: items(true) })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await text(ui, /^Old work$/)).toBeUndefined()
+  expect(await text(ui, /^Old work( |$)/)).toBeUndefined()
   expect(await text(ui, /^New work/)).toBeTruthy()
   await ui.press({ key: 'open-0' })
-  expect(await text(ui, /^Old work$/)).toBe('Old work')
+  // A done item carries the time it was done.
+  expect(await text(ui, /^Old work( |$)/)).toBeTruthy()
   await ui.unmount()
   await send($, { project: 'P', stage: 'build', phase: 1, items: items(false) })
   const ui2 = await $.ui.mount({ ...PANE, surface: 'desktop' })
@@ -372,5 +373,19 @@ test('a stage card lists done items first, then items in progress, then pending 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const names = (await ui.findAll({ type: 'Text' })).map(x => String(x.text ?? '').split(' ')[0]).filter(t => ['Later', 'Running', 'Finished'].includes(t))
   expect(names).toEqual(['Finished', 'Running', 'Later'])
+  await ui.unmount()
+})
+
+test('done items show the time they were done, at every level of nesting', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', stage: 'build', phase: 1, items: [
+    { phase: 1, name: 'Parent', status: 'now' },
+    { phase: 1, name: 'Child', status: 'next', parent: 'Parent' },
+  ] })
+  await send($, { patch: [{ op: 'change', id: 'child', status: 'done' }] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // The parent is in progress, so it opens by itself.
+  const child = (await ui.findAll({ type: 'Text' })).map(x => String(x.text ?? '')).find(t => t.startsWith('Child'))
+  expect(child).toMatch(/^Child  ·  \d{1,2}:\d{2} (AM|PM)$/)
   await ui.unmount()
 })

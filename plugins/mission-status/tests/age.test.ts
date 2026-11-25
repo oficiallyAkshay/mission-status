@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { agoOf } from '../hooks/view'
+import { agoOf, timeOfDay } from '../hooks/view'
 import { age, cap, clockOf } from '../hooks/model'
 import { trackSvg } from '../hooks/bars'
 
@@ -71,4 +71,10 @@ test('the header age reads seconds, then minutes, then hours', () => {
   expect(agoOf(42_000)).toBe('42s ago')
   expect(agoOf(5 * 60_000)).toBe('5m ago')
   expect(agoOf(2 * 3_600_000)).toBe('2h ago')
+})
+
+test('a done time reads as a clock time with AM or PM', () => {
+  const at = new Date(2026, 10, 25, 21, 5).getTime()
+  expect(timeOfDay(at)).toBe('9:05 PM')
+  expect(timeOfDay(new Date(2026, 10, 25, 0, 30).getTime())).toBe('12:30 AM')
 })

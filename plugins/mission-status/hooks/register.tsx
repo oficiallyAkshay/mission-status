@@ -370,7 +370,9 @@ export const register: Register = on => {
         // An item in progress keeps the time it went in progress, for its runtime timer; a full list and a patch alike.
         .map(x => {
           const was = old?.items.find(y => (y.id ?? idOf(y.name)) === (x.id ?? idOf(x.name)))
-          return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null }
+          // A done item keeps the time it was first seen done; an item sent already done gets the time of this update.
+          const doneAt = x.status === 'done' ? (was?.status === 'done' ? (was.doneAt ?? at) : at) : null
+          return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null, doneAt }
         })
       // An update that leaves waitingOn out keeps the wait; null clears it.
       const waitingRaw = args.waitingOn === undefined ? (old?.waitingOn ?? null) : str(args.waitingOn)

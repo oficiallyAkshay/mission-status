@@ -2,7 +2,7 @@ export type Count = { label: string; when?: string; n?: number; m?: number; text
 export type ItemStatus = 'done' | 'now' | 'next' | 'failed'
 // id: the agent's stable id for its item (from the name when the agent sends none). The task-list steps are the
 // pane's own items, kept apart in `tasks`: no agent write deletes them.
-export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null; pr?: string | null }
+export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null; pr?: string | null; doneAt?: number | null }
 export type StepStatus = 'done' | 'now' | 'next'
 export type StageKey = 'plan' | 'build' | 'fix' | 'cause' | 'review' | 'ship'
 export type HypothesisState = 'open' | 'testing' | 'ruled out' | 'confirmed'
@@ -58,7 +58,7 @@ export type Fresh = {
   turnEndAt?: number | null
 }
 export type MetricsSession = { holdback: boolean; calls: number; realWork: boolean }
-export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null }
+export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null; doneAt?: number | null }
 export type Activity = { text: string; prev: string | null; at: number } | null
 export type Pr = { number: number; state: string; url: string; title: string; isDraft?: boolean; review?: string; merge?: string; ci?: 'passing' | 'failing' | 'running' | 'none' }
 export type Helper = { id: string; description: string; status: string; model: string | null; startTime: number }
