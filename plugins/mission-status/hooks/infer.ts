@@ -186,8 +186,9 @@ export function withInferred(items: Item[], st: InferState | null): Item[] {
     if (x.parent === items[i]?.parent) return x
     let at: string | null = x.parent
     for (let n = 0; at !== null && n < 50; n++) {
-      if (at === x.name) return { ...x, parent: items[i]?.parent ?? null }
-      const up: Item | undefined = out.find(y => y.name === at && y.phase === x.phase)
+      // A parent names its item by name or by id (as the view nests them).
+      if (at === x.name || at === x.id) return { ...x, parent: items[i]?.parent ?? null }
+      const up: Item | undefined = out.find(y => (y.name === at || y.id === at) && y.phase === x.phase)
       at = up?.parent ?? null
     }
     return x
