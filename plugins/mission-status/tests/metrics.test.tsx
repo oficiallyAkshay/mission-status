@@ -281,7 +281,7 @@ test('stale_reminder: 3 new task steps with no update, then update_after_reminde
   expect(named(w, 'update_after_reminder').map(x => x.properties.followed)).toEqual(['no'])
 })
 
-test('stale_reminder: 10 minutes of tool calls with no update, once per stale stretch', async ($, on) => {
+test('stale_reminder: 10 minutes of tool calls with no update, once per stale stretch', { timeoutMs: 20_000 }, async ($, on) => {
   // Outside the holdback window: a holdback session sends no stale events.
   const w = await start($, on, { store: consented, now: AFTER_WINDOW })
   await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })

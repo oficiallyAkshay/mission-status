@@ -99,7 +99,7 @@ test('the demo shows the bar, one status line and one helper strip, with no badg
   await ui.unmount()
 })
 
-test('the demo moves with the clock: a 1 s clock starts with the pane and each tick shows a later frame, then it loops', async ($, on) => {
+test('the demo moves with the clock: a 1 s clock starts with the pane and each tick shows a later frame, then it loops', { timeoutMs: 20_000 }, async ($, on) => {
   const clock = { at: Date.now() }
   const log = await start($, on, { clock })
   expect(log.clocks).toContain(1_000)

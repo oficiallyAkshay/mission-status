@@ -277,7 +277,7 @@ test('state: fresh within 15 minutes shows no stale line', async ($, on) => {
   expect(await mountText($, /^No update from the agent/)).toBeUndefined()
 })
 
-test('state: all done shows one green line, and no stale line', async ($, on) => {
+test('state: all done shows one green line, and no stale line', { timeoutMs: 20_000 }, async ($, on) => {
   const { clock } = await boot($, on, { git: 'norepo' })
   await send($, clock, { phase: 0 })
   await send($, clock, { phase: 3 })

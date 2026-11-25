@@ -257,6 +257,8 @@ export async function pollRepo(
   return { repo, git: r.git, prs: r.prs, gh: r.gh, ghAt: r.ghAt, nextGhAt: r.nextGhAt, failures: r.failures }
 }
 
+let defaultBranch: string | null = null
+
 // The branch against main: commits ahead, files and lines changed, and files not yet committed.
 export async function readGit($: EngineInterface): Promise<Git> {
   const run = async (argv: string[]) => {
@@ -271,15 +273,19 @@ export async function readGit($: EngineInterface): Promise<Git> {
     if (sha === null || sha === '') return null
     branch = `detached at ${sha}`
   }
-  // The default branch: the remote's HEAD, else main or master, on the remote first.
-  const head = await run(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])
-  let main = head !== null && head !== '' ? head : 'main'
-  if (head === null || head === '')
-    for (const c of ['origin/main', 'origin/master', 'main', 'master'])
-      if (await run(['git', 'rev-parse', '--verify', '--quiet', c])) {
-        main = c
-        break
-      }
+  // The default branch: the remote's HEAD, else main or master, on the remote first. Found once per module load: the
+  // poll runs every 5 s and the answer does not change in a session.
+  if (defaultBranch === null) {
+    const head = await run(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])
+    defaultBranch = head !== null && head !== '' ? head : 'main'
+    if (head === null || head === '')
+      for (const c of ['origin/main', 'origin/master', 'main', 'master'])
+        if (await run(['git', 'rev-parse', '--verify', '--quiet', c])) {
+          defaultBranch = c
+          break
+        }
+  }
+  const main = defaultBranch
   const base = await run(['git', 'merge-base', 'HEAD', main])
   const ahead = base === null ? 0 : Number((await run(['git', 'rev-list', '--count', `${base}..HEAD`])) ?? 0)
   const behind = Number((await run(['git', 'rev-list', '--count', `HEAD..${main}`])) ?? 0)

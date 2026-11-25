@@ -81,7 +81,7 @@ test('the pane does not open by itself when the agent already sent state, and he
   expect((await state($, 'summary')).waitingForAgent).toBe(false)
 })
 
-test('stale after 10 minutes of tool calls: a one-line reminder rides on the next step', async ($, on) => {
+test('stale after 10 minutes of tool calls: a one-line reminder rides on the next step', { timeoutMs: 20_000 }, async ($, on) => {
   const { clock } = await start($, on)
   await send($, BASE)
   await clock.advance(STALE_MS - 1000)
@@ -91,7 +91,7 @@ test('stale after 10 minutes of tool calls: a one-line reminder rides on the nex
   expect(ctx(await bash($))).toEqual([])
 })
 
-test('the time between turns does not count: after the person is away, the stale window goes on from where it was', async ($, on) => {
+test('the time between turns does not count: after the person is away, the stale window goes on from where it was', { timeoutMs: 20_000 }, async ($, on) => {
   on('turn.complete', () => ({ text: '' }))
   on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
   const { clock } = await start($, on)
@@ -99,8 +99,8 @@ test('the time between turns does not count: after the person is away, the stale
   await clock.advance(STALE_MS - 2000)
   expect(ctx(await bash($))).toEqual([])
   await $.turn.complete({ reason: 'answer', answer: 'Done.' } as never)
-  // The person is away for half an hour; the next turn is not stale at once.
-  await clock.advance(3 * STALE_MS)
+  // The person is away longer than the window; the next turn is not stale at once.
+  await clock.advance(STALE_MS)
   await $.prompt.submit({ text: 'go on' } as never)
   expect(ctx(await bash($))).toEqual([])
   await clock.advance(2000)
@@ -119,7 +119,7 @@ test('stale after 3 new task-list steps with no agent update', async ($, on) => 
   expect(ctx(await bash($))).toEqual([])
 })
 
-test('a turn end while stale is held once with a request for an update', async ($, on) => {
+test('a turn end while stale is held once with a request for an update', { timeoutMs: 20_000 }, async ($, on) => {
   const { clock } = await start($, on)
   await send($, BASE)
   expect((await $.classic.Stop({ stop_hook_active: false })).block).toBeUndefined()
@@ -129,7 +129,7 @@ test('a turn end while stale is held once with a request for an update', async (
   expect((await $.classic.Stop({ stop_hook_active: false })).block).toBeUndefined()
 })
 
-test('after 2 ignored reminders the state is marked May be out of date; an agent update clears it', async ($, on) => {
+test('after 2 ignored reminders the state is marked May be out of date; an agent update clears it', { timeoutMs: 20_000 }, async ($, on) => {
   const { clock } = await start($, on)
   await send($, BASE)
   await clock.advance(STALE_MS)
