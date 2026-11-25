@@ -9,6 +9,9 @@ import { registerMetrics } from './metrics'
 import { registerOnboarding } from './onboarding'
 import { registerUpdate } from './update'
 
+// The holdback (metrics.tsx decides it): a measurement session with no pane and no standing rule.
+const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
+
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
@@ -155,7 +158,7 @@ export const register: Register = on => {
       void poll($, ticks % PR_EVERY === 0)
     })
     void poll($)
-    if ((await read($, summary)) !== null) void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+    if ((await read($, summary)) !== null && !(await read($, holdback))) void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
     return next(e)
   })
 
@@ -222,6 +225,8 @@ export const register: Register = on => {
   // A standing rule for the model: keep the pane current and look again at its stages.
   on('prompt.compose', async ($, e, next) => {
     const result = await next(e)
+    // A holdback session runs as if the pane were not installed: no standing rule.
+    if (await read($, holdback)) return result
     return {
       sections: [
         ...result.sections,
@@ -264,7 +269,7 @@ export const register: Register = on => {
     await agentUpdated($, num(args.version))
     await tick($)
     // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
-    await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+    if (!(await read($, holdback))) await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
     void poll($)
     return { result: `The pane shows the new state (version ${written?.version ?? 0}).` }
 

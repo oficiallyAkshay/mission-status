@@ -3,6 +3,9 @@ import type { EngineInterface } from 'claude-code'
 import type { Activity, Count, Fresh, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
 import { AUTO_OPEN_CALLS, FIRST_REMINDER, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, STALE_MS, STALE_STEPS, autoSummary, normalize } from './model'
 
+// The holdback (metrics.tsx decides it): a measurement session with no pane and no standing rule.
+const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
+
 export const PANE = 'progress'
 // The pane's one accent, the purple of the stage bar; the app's own accent is orange.
 export const ACCENT = '#8B7CF6'
@@ -107,6 +110,8 @@ export async function afterToolCall($: EngineInterface): Promise<string | null> 
     }
     return x
   })
+  // A holdback session gets no pane and no reminders.
+  if (await read($, holdback)) return null
   if (out.openAuto) {
     const steps = await read($, tasks)
     const built = autoSummary(steps, at)
