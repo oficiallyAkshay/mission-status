@@ -227,7 +227,7 @@ export function normalize(raw: Summary): Summary {
     waitingSince: typeof r.waitingSince === 'number' ? r.waitingSince : 0,
     counts: Array.isArray(r.counts) ? (r.counts as Count[]) : [],
     items: Array.isArray(r.items)
-      ? (r.items as Item[]).map(x => ({ ...x, id: x.id ?? idOf(x.name), after: x.after ?? null, parent: x.parent ?? null, when: x.when ?? null }))
+      ? linkRefs((r.items as Item[]).map(x => ({ ...x, id: x.id ?? idOf(x.name), after: x.after ?? null, parent: x.parent ?? null, when: x.when ?? null })))
       : [],
     starts: Array.isArray(r.starts) ? (r.starts as (number | null)[]) : phases.map(() => null),
     ends: Array.isArray(r.ends) ? (r.ends as (number | null)[]) : phases.map(() => null),
@@ -575,6 +575,17 @@ export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVe
       if (!isObj(raw) || !isText(raw.href)) errors.push(`links[${k}] needs href`)
     })
   return errors
+}
+
+// parent and after name an item by its name or by its id: an id becomes that item's name, so the cards nest and wait
+// the same either way. A name wins over an id that reads the same.
+export function linkRefs(items: Item[]): Item[] {
+  const named = (ref: string | null, phase: number): string | null => {
+    if (ref === null || items.some(y => y.phase === phase && y.name === ref)) return ref
+    const hit = items.find(y => y.phase === phase && (y.id ?? idOf(y.name)).toLowerCase() === ref.toLowerCase())
+    return hit === undefined ? ref : hit.name
+  }
+  return items.map(x => ({ ...x, parent: named(x.parent, x.phase), after: named(x.after, x.phase) }))
 }
 
 // Items whose parent chain comes back to themselves never draw: each such item is named.

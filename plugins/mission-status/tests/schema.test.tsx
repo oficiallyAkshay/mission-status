@@ -225,6 +225,20 @@ test('sub-phases: an item keeps its steps and the step that runs now; change mov
   expect(String((await send($, { patch: [{ op: 'change', id: 'smriti', steps: [...deep, 'A', 'B'] }] })).deny)).toContain('at most 8')
 })
 
+test('parent by id: a child that names its parent by id nests under it, and after by id waits on it', async ($, on) => {
+  await start($, on)
+  const patch = [
+    { op: 'add', id: 'wrap-up', phase: 1, name: 'Wrap up', status: 'now' },
+    { op: 'add', id: 'wrap-step-3', phase: 1, name: 'Remote off', status: 'done', parent: 'wrap-up' },
+    { op: 'add', id: 'wrap-step-4', phase: 1, name: 'Smriti deep', status: 'now', parent: 'wrap-up', after: 'wrap-step-3' },
+  ]
+  expect((await send($, { project: 'P', phases: ['Build', 'Close'], phase: 1, patch })).deny).toBeUndefined()
+  const items = (await state($, 'summary')).items as { id?: string; parent: string | null; after: string | null }[]
+  const smriti = items.find(x => x.id === 'wrap-step-4')
+  expect(smriti?.parent).toBe('Wrap up')
+  expect(smriti?.after).toBe('Remote off')
+})
+
 test('repo: the Merge card reads git in the repository the agent names', async ($, on) => {
   const dirs: (string | undefined)[] = []
   watch(on)

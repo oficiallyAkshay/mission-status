@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, prRefsIn, prRefsInLines, byteLength, skillSteps, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
+import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, linkRefs, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, prRefsIn, prRefsInLines, byteLength, skillSteps, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
 import { poll } from './readers'
 import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, tick } from './store'
 import { renderPane } from './view'
@@ -176,7 +176,7 @@ export const register: Register = on => {
           items: {
             type: 'array',
             description:
-              'The work inside each stage, drawn as nested cards. parent names the item that holds this one (cards nest to any depth). after names the sibling this one waits for. Siblings with no after run in parallel. when is the item\'s own exit clause, with n and m, n, or text as for counts.',
+              'The work inside each stage, drawn as nested cards. parent names the item that holds this one, by its id or name (cards nest to any depth). after names the sibling this one waits for, by its id or name. Siblings with no after run in parallel. when is the item\'s own exit clause, with n and m, n, or text as for counts.',
             items: {
               type: 'object',
               properties: {
@@ -442,7 +442,7 @@ export const register: Register = on => {
         .map(c => ({ c, was: old?.counts.find(x => x.label === c.label) }))
         .find(({ c, was }) => was !== undefined && figureOf(was) !== figureOf(c))
       // Agent items only: the task list's steps are the pane's own items, kept in tasks, so no agent write deletes them.
-      const items = (
+      const items = linkRefs(
         Array.isArray(args.patch)
           ? applyPatch(old?.items ?? [], args.patch)
           : args.items === undefined
