@@ -29,10 +29,11 @@
 <meta name="theme-color" content="#F5F1EA">
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What does it do?","acceptedAnswer":{"@type":"Answer","text":"It puts a live progress pane beside the chat: the goal, the stages, what done means, and where the work is now. It reads the session and draws. It never touches your code."}},{"@type":"Question","name":"Where does it work?","acceptedAnswer":{"@type":"Answer","text":"In Claude Code, in the Claude desktop app. The terminal and the editor extensions have no side pane. Codex plugins cannot add one yet."}},{"@type":"Question","name":"What does it cost?","acceptedAnswer":{"@type":"Answer","text":"Nothing to install: it is open source, MIT, and runs on the Claude plan you have. No API key, no new account. It uses a few tokens per stage change, far fewer than asking for a recap."}},{"@type":"Question","name":"Does it fit my kind of work?","acceptedAnswer":{"@type":"Answer","text":"Yes. Pick one of ten templates, or let the agent write the stages for your mission. The agent can also save your own stages as a template."}},{"@type":"Question","name":"Does it send anything home?","acceptedAnswer":{"@type":"Answer","text":"Anonymous usage numbers, never your words, files or names. The onboarding shows the switch, on by default; turn it off there or with /pane-metrics off. Each field is listed in docs/telemetry.md."}},{"@type":"Question","name":"How do I update or remove it?","acceptedAnswer":{"@type":"Answer","text":"It updates itself between turns. To remove it, run /plugin uninstall mission-status@mission-status."}}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What does it do?","acceptedAnswer":{"@type":"Answer","text":"It puts a live progress pane beside the chat: the goal, the stages, what done means, and where the work is now. It reads the session and draws. It never touches your code."}},{"@type":"Question","name":"Where does it work?","acceptedAnswer":{"@type":"Answer","text":"In Claude Code, in the Claude desktop app. The terminal and the editor extensions have no side pane. Codex plugins cannot add one yet."}},{"@type":"Question","name":"What does it cost?","acceptedAnswer":{"@type":"Answer","text":"Nothing to install: it is open source, MIT, and runs on the Claude plan you have. No API key, no new account. It uses a few tokens per stage change, far fewer than asking for a recap."}},{"@type":"Question","name":"Does it fit my kind of work?","acceptedAnswer":{"@type":"Answer","text":"Yes. Pick one of ten templates, or let the agent write the stages for your mission. The agent can also save your own stages as a template."}},{"@type":"Question","name":"Does it send anything home?","acceptedAnswer":{"@type":"Answer","text":"Anonymous usage numbers, never your words, files or names. The onboarding shows the switch, on by default; turn it off there or with /pane-metrics off. Each field is listed in docs/telemetry.md."}},{"@type":"Question","name":"How do I update or remove it?","acceptedAnswer":{"@type":"Answer","text":"It updates itself between turns; the onboarding lets you turn that off, and the pane then offers each new release. To remove it, run /plugin uninstall mission-status@mission-status."}}]}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="site.css">
+<noscript><style>section.hero .pick, #install, #end-install, .tex-note, .own-save { display: none; }</style></noscript>
 </head>
 <body>
 <header class="nav wrap">
@@ -72,7 +73,7 @@
           </div>
           <div class="side">
             <div class="col-head side-tab"><span>Mission status</span><span class="tools"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-6.5 6.5M10 20H4v-6M4 20l6.5-6.5"/></svg><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg></span></div>
-            <div class="pane" id="pane" aria-live="polite"></div>
+            <div class="pane" id="pane" aria-live="polite"><noscript><img class="pane-still" src="pane-still.png" width="440" alt="The pane on a feature mission: Plan and Build done, Test in progress with its items and a running helper, Deploy and Learn next, each with its gate."></noscript></div>
           </div>
         </div>
       </div>
@@ -94,7 +95,7 @@
         <div class="glance-feats" id="feats">
           <div class="gf"><h3>Where it is</h3><p>Every stage on one track, the current one lit.</p></div>
           <div class="gf"><h3>What done means</h3><p>Each stage says when it is finished.</p></div>
-          <div class="gf"><h3>That it is working</h3><p>A live timer and what the agent does right now.</p></div>
+          <div class="gf"><h3>That it is working</h3><p>A live timer, and the helpers the agent runs right now.</p></div>
           <div class="gf"><h3>The work inside</h3><p>Each stage lists its items: done, now, next.</p></div>
           <div class="gf"><h3>Everything it made, one click away</h3><p>Plans, documents, Claude artifacts and pages, linked on their stage.</p></div>
           <div class="gf"><h3>That it adapts</h3><p>When the work changes, the agent adds a stage.</p></div>
@@ -135,7 +136,7 @@
 <details class="qa"><summary>What does it cost?<i aria-hidden="true"></i></summary><div class="qa-a"><p>Nothing to install: it is open source, MIT, and runs on the Claude plan you have. No API key, no new account. It uses a few tokens per stage change, far fewer than asking for a recap.</p></div></details>
 <details class="qa"><summary>Does it fit my kind of work?<i aria-hidden="true"></i></summary><div class="qa-a"><p>Yes. Pick one of ten templates, or let the agent write the stages for your mission. The agent can also save your own stages as a template.</p></div></details>
 <details class="qa"><summary>Does it send anything home?<i aria-hidden="true"></i></summary><div class="qa-a"><p>Anonymous usage numbers, never your words, files or names. The onboarding shows the switch, on by default; turn it off there or with /pane-metrics off. Each field is listed in <a href="https://github.com/oficiallyAkshay/mission-status/blob/main/docs/telemetry.md">docs/telemetry.md</a>.</p></div></details>
-<details class="qa"><summary>How do I update or remove it?<i aria-hidden="true"></i></summary><div class="qa-a"><p>It updates itself between turns. To remove it, run /plugin uninstall mission-status@mission-status.</p></div></details>
+<details class="qa"><summary>How do I update or remove it?<i aria-hidden="true"></i></summary><div class="qa-a"><p>It updates itself between turns; the onboarding lets you turn that off, and the pane then offers each new release. To remove it, run /plugin uninstall mission-status@mission-status.</p></div></details>
     </div>
   </section>
 

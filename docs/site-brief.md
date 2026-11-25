@@ -16,4 +16,5 @@ The build brief for the mission-status site (Hastkala, page-skeletons section 8 
 | Type | The system sans (San Francisco on a Mac), one family, 800 for the headline. No web font to load. |
 | Proof | The demo runs the real drawing code. Every number on the page is from a sample session and is labelled "sample". |
 | Not on the page | Pricing, sign-up, testimonials, "we". The footer keeps the build and security badges (owner, 2026-11-25). |
+| Share card | The Claude desktop window with the chat beside the pane, as in the hero, so the card reads as a plugin inside the app and not a standalone app (owner, 2026-11-25). Drawn by `scripts/social-card.mjs`. |
 | States | No script: a still of the pane. Reduced motion: no auto-play, no scrolling chat; stages change only on click. |
