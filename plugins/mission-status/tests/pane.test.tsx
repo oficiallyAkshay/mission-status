@@ -64,7 +64,8 @@ test('a stage opens to its items; an item that waits is indented, parallel items
   })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   // the current stage opens by itself
-  expect(await text(ui, /^Draw the columns$/)).toBe('Draw the columns')
+  // an item in progress carries its runtime after its name
+  expect(await text(ui, /^Draw the columns  ·  \d\d:\d\d$/)).toBeTruthy()
   expect(await ui.find({ type: 'Svg', alt: /^Write the tests waits for Draw the columns\.$/ })).toBeTruthy()
   // The spinners show what runs in parallel; no sentence repeats it.
   expect(await text(ui, /items run in parallel/)).toBeUndefined()
@@ -73,7 +74,7 @@ test('a stage opens to its items; an item that waits is indented, parallel items
   await ui.press({ key: 'open-3' })
   expect(await text(ui, /^Open the pull request$/)).toBe('Open the pull request')
   await ui.press({ key: 'open-1' })
-  expect(await text(ui, /^Draw the columns$/)).toBeUndefined()
+  expect(await text(ui, /^Draw the columns/)).toBeUndefined()
   await ui.unmount()
 })
 
@@ -137,7 +138,7 @@ test('each item in progress shows its runtime', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'a', status: 'now' }, { phase: 1, name: 'b', status: 'next' }] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await text(ui, /^00:0\d$/)).toBeTruthy()
+  expect(await text(ui, /^A  ·  00:0\d$/)).toBeTruthy()
   await ui.unmount()
 })
 

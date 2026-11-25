@@ -177,9 +177,11 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         const followers = list.filter(y => y.after === x.name)
         return (
           <Box flexDirection="column" gap={0} key={key}>
-            <Box flexDirection="row" alignItems="center" gap={1}>
+            {/* The name line holds the elbow, the badge, the name with its time, and the control: the badge centres on
+                the name, not on the name and its note together. The note sits under the name. */}
+            <Box flexDirection="row" alignItems="center" gap={0}>
               {waits > 0 && (
-                <Box width={BADGE} flexShrink={0}>
+                <Box width={BADGE} flexShrink={0} flexDirection="row" justifyContent="flex-end">
                   {Svg !== undefined ? svg(waitsArrowSvg('#8B8A85'), `${x.name} waits for ${x.after ?? 'the item above'}.`, 18) : <Text dimColor>└</Text>}
                 </Box>
               )}
@@ -188,23 +190,11 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                   ? svg(badgeSvg(state, 0, 16), `${x.name}: ${state === 'done' ? 'done' : state === 'now' ? 'in progress' : 'not started'}`, 16)
                   : <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>}
               </Box>
-              <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+              <Box flexGrow={1} flexShrink={1} paddingLeft={1}>
                 <Text weight={state === 'now' ? 'semibold' : 'regular'} dimColor={state === 'done'} color={state === 'next' ? 'subtle' : undefined} wrap="wrap">
-                  {x.name}
+                  {/* An item in progress shows its runtime after its name, in the same colour. */}
+                  {state === 'now' && (x.since ?? null) !== null ? `${x.name}  ·  ${clockOf(Date.now() - (x.since ?? Date.now()))}` : x.name}
                 </Text>
-                {(x.note ?? null) !== null && (
-                  <Text size="caption" color={SUBTEXT} wrap="wrap">
-                    {x.note}
-                  </Text>
-                )}
-              </Box>
-              {/* One time column and one control column on every row, so all timers line up with the stage timer. */}
-              <Box width={FIG} flexShrink={0} flexDirection="row" justifyContent="flex-end">
-                {state === 'now' && (x.since ?? null) !== null ? (
-                  <Text color={ACCENT}>{clockOf(Date.now() - (x.since ?? Date.now()))}</Text>
-                ) : (
-                  <Text>{''}</Text>
-                )}
               </Box>
               <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
                 {kids.length > 0 ? (
@@ -214,6 +204,13 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                 )}
               </Box>
             </Box>
+            {(x.note ?? null) !== null && (
+              <Box paddingLeft={(waits > 0 ? BADGE : 0) + BADGE + 1} paddingRight={CHEV}>
+                <Text size="caption" color={SUBTEXT} wrap="wrap">
+                  {x.note}
+                </Text>
+              </Box>
+            )}
             {(() => {
               const mine = s.links.filter(l => l.item !== null && l.item.toLowerCase() === x.name.toLowerCase())
               return mine.length === 0 ? null : <Box paddingLeft={INDENT}>{linkRow(mine, `links-${key}`)}</Box>

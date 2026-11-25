@@ -231,8 +231,8 @@ export function tickerSvg(lines: { lead: string; text: string; tone: 'accent' | 
 // The connector for an item that waits for the one above it: a plain elbow down and right, no arrowhead.
 export function waitsArrowSvg(color: string): string {
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="18">` +
-    `<path d="M4 1 V7 Q4 10 7 10 H14" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/></svg>`
+    `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="18">` +
+    `<path d="M3 1 V7 Q3 10 6 10 H12" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/></svg>`
   )
 }
 
