@@ -44,6 +44,19 @@ export function timeOfDay(at: number): string {
   return `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
 }
 
+// A Claude artifact's address.
+export const isArtifact = (href: string) => /^https:\/\/claude\.ai\/(code\/)?artifact\/[\w-]+/i.test(href)
+
+// Opens an artifact inside the Claude desktop app through the session's own Artifact tool. If the tool is missing
+// or refuses, the address opens in the browser, as any web link does.
+export async function openArtifact($: EngineInterface, url: string): Promise<void> {
+  try {
+    await $.tool.call({ tool: 'Artifact', action: 'open', url } as never)
+  } catch {
+    $.ui.toast('The artifact could not open in the app.')
+  }
+}
+
 export function agoOf(ms: number): string {
   const sec = Math.max(0, Math.floor(ms / 1000))
   if (sec < 60) return `${sec}s ago`
@@ -226,7 +239,17 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       links.length === 0 ? null : (
         <Box flexDirection="row" gap={1} flexWrap="wrap" key={key}>
           {links.map((l, k) =>
-            isWebUrl(l.href)
+            isArtifact(l.href)
+              ? // A Claude artifact opens inside the desktop app: the press calls the session's Artifact tool, open action.
+                chip(
+                  <Markdown
+                    key={`art-${key}-${k}`}
+                    text={`[↗ ${l.label.replace(/[[\]]/g, '')}](${l.href})`}
+                    onLinkPress={() => void openArtifact($, l.href)}
+                  />,
+                  `${key}-${k}`,
+                )
+              : isWebUrl(l.href)
               ? chip(
                   <Text color={CHIP_INK} weight="semibold">
                     <Link href={l.href}>{`↗ ${l.label}`}</Link>

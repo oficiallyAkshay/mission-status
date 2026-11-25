@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { CAP_BYTES, asTemplates, skillSteps, templatesLine } from '../hooks/model'
+import { CAP_BYTES, asTemplates, prRefsInTranscript, skillSteps, templatesLine } from '../hooks/model'
 
 // About 4 characters per token.
 const tokensOf = (value: unknown): number => Math.ceil((JSON.stringify(value) ?? '').length / 4)
@@ -230,4 +230,14 @@ test('a skill gives its numbered steps: the bold lead names a step, else its fir
   const md = '# x\n\nIntro 1. not a step\n\n## Steps\n\n1. **Gather.** Read the context.\n2. Read the rules and the shape\n3. **Draw the hero.** Pick a layout.\n\n## Other\n\n1. Not this one\n'
   expect(skillSteps(md)).toEqual(['Gather', 'Read the rules and the shape', 'Draw the hero'])
   expect(skillSteps('1. One\n2. Two\n')).toEqual(['One', 'Two'])
+})
+
+test('a transcript gives every pull request its gh pr create calls made, and no other', () => {
+  const lines = [
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_A1","name":"Bash","input":{"command":"git push && gh pr create --title x"}}]}}',
+    '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_A1","content":"https://github.com/acme/app/pull/9\\n"}]}}',
+    '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_B2","name":"Bash","input":{"command":"gh pr view 3"}}]}}',
+    '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_B2","content":"https://github.com/acme/app/pull/3"}]}}',
+  ].join('\n')
+  expect(prRefsInTranscript(lines)).toEqual(['acme/app#9'])
 })

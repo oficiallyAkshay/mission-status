@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, prRefsIn, skillSteps, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
+import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, prRefsIn, prRefsInTranscript, skillSteps, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
 import { poll } from './readers'
 import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, tick } from './store'
 import { renderPane } from './view'
@@ -196,6 +196,12 @@ export const register: Register = on => {
     await $.command.register({ name: 'mission-status', description: 'Open the progress pane' })
     $.clock.every(CLOCK_MS, () => void tick($))
     $.clock.every(TICK_MS, () => void poll($))
+    // The PRs tab starts with every pull request this session made before now, read once from its transcript.
+    try {
+      const info = await $.session.info()
+      const found = prRefsInTranscript(await $.fs.read(info.transcriptPath).catch(() => ''))
+      if (found.length > 0) await update($, prRefs, list => [...new Set([...found, ...list])].slice(-30))
+    } catch {}
     void poll($)
     if ((await read($, summary)) !== null && !(await read($, holdback))) void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
     return next(e)
