@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str } from './model'
+import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
 import { poll } from './readers'
 import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, tick } from './store'
 import { renderPane } from './view'
@@ -59,8 +59,15 @@ export const register: Register = on => {
           },
           template: {
             type: 'string',
-            enum: Object.keys(TEMPLATES),
-            description: `A quick choice of stages: ${Object.entries(TEMPLATES).map(([k, v]) => `${k} (${v.join(', ')})`).join('; ')}. Pick one only when it fits; otherwise send phases.`,
+            description: `A quick choice of stages: ${Object.entries(TEMPLATES).map(([k, v]) => `${k} (${v.join(', ')})`).join('; ')}, or one of the person's own templates. Pick one only when it fits; otherwise send phases.`,
+          },
+          repo: {
+            type: ['string', 'null'],
+            description: "The repository folder the work is in, as an absolute path, when it is not the session's own folder. The Merge card reads git and pull requests there. null goes back to the session folder.",
+          },
+          saveTemplate: {
+            type: 'string',
+            description: "Saves this update's stages as the person's own template under this name (lower-case letters, digits and dashes), for any later session. Send it when the person asks to keep a set of stages.",
           },
           active: {
             type: 'array',
@@ -234,7 +241,7 @@ export const register: Register = on => {
         {
           id: 'mission-status:progress',
           scope: 'session' as const,
-          text: RULE,
+          text: RULE + templatesLine(asTemplates(await $.store.get(TEMPLATES_KEY).catch(() => undefined))),
         },
       ],
     }
@@ -252,13 +259,14 @@ export const register: Register = on => {
     // Validation: a state that fails writes nothing, so the pane keeps the last good view; the errors go back to the agent.
     const agentVersion = await agentVersionOf($)
     const before = normalize(await read($, summary))
-    const first = checkUpdate(args, before, agentVersion)
+    const personal = asTemplates(await $.store.get(TEMPLATES_KEY).catch(() => undefined))
+    const first = checkUpdate(args, before, agentVersion, personal)
     if (first.length > 0) return { deny: refusalOf(first) }
     const out = { errors: [] as string[] }
     const written = await update($, summary, stored => {
       const old = normalize(stored)
       // Checked again inside the write: another writer may have changed the state since the check above.
-      out.errors = checkUpdate(args, old, agentVersion)
+      out.errors = checkUpdate(args, old, agentVersion, personal)
       if (out.errors.length > 0) return stored
       const next = build(old)
       out.errors = parentLoops(next.items)
@@ -287,12 +295,18 @@ export const register: Register = on => {
     // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
     if (!(await read($, holdback))) await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
     void poll($)
-    return { result: `The pane shows the new state (version ${written?.version ?? 0}).` }
+    // A saved template: the stages this update left, under the person's name for them.
+    let saved = ''
+    if (typeof args.saveTemplate === 'string' && written !== null) {
+      await $.store.set(TEMPLATES_KEY, { ...personal, [args.saveTemplate]: written.phases }).catch(() => undefined)
+      saved = ` Saved the stages as template ${args.saveTemplate}.`
+    }
+    return { result: `The pane shows the new state (version ${written?.version ?? 0}).${saved}` }
 
     function build(old: Summary): NonNullable<Summary> {
       const stage = STAGE_KEYS.find(k => k === args.stage) ?? old?.stage ?? 'build'
       const custom = (Array.isArray(args.phases) ? args.phases : []).map(str).filter((x): x is string => x !== null).map(cap)
-      const picked = typeof args.template === 'string' ? TEMPLATES[args.template] : undefined
+      const picked = typeof args.template === 'string' ? (TEMPLATES[args.template] ?? personal[args.template]) : undefined
       const phases =
         custom.length >= 2 && custom.length <= 8
           ? custom
@@ -361,6 +375,7 @@ export const register: Register = on => {
         starts,
         ends,
         project: str(args.project) ?? old?.project ?? 'Project',
+        repo: args.repo === undefined ? (old?.repo ?? null) : str(args.repo),
         goalLine: args.goalLine === undefined ? (old?.goalLine ?? null) : str(args.goalLine),
         stage,
         phases,

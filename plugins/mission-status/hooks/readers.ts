@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Git, Helper, Live, Pr } from '../types'
+import type { Git, Helper, Live, Pr, Summary } from '../types'
 import { nowOf } from './store'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
@@ -60,10 +60,14 @@ const SAFE_GIT: Record<string, string> = {
   GIT_CONFIG_VALUE_2: '/dev/null',
 }
 
+// The folder the Merge card reads: the repository the agent named for the work, else the session's own folder.
+let repoDir: string | null = null
+const summaryAtom = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
+
 // One command; null when it exits with an error, 'missing' when it cannot start.
 async function runText($: EngineInterface, argv: string[], timeoutMs = 10_000): Promise<string | null | 'missing'> {
   try {
-    const r = await $.process.run(argv, { timeoutMs, env: argv[0] === 'git' ? SAFE_GIT : {} })
+    const r = await $.process.run(argv, { timeoutMs, env: argv[0] === 'git' ? SAFE_GIT : {}, ...(repoDir === null ? {} : { cwd: repoDir }) })
     return r.exitCode === 0 ? r.stdout.trim() : null
   } catch {
     return 'missing'
@@ -148,7 +152,7 @@ export async function readGh($: EngineInterface, branch: string): Promise<{ gh: 
   try {
     out = await $.process.run(
       ['gh', 'pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,state,url,title,isDraft,reviewDecision,mergeStateStatus,statusCheckRollup'],
-      { timeoutMs: 20_000 },
+      { timeoutMs: 20_000, ...(repoDir === null ? {} : { cwd: repoDir }) },
     )
   } catch {
     // The GitHub CLI cannot start: it is not installed.
@@ -170,6 +174,11 @@ export async function readGh($: EngineInterface, branch: string): Promise<{ gh: 
 
 // One poll, every 5 s from register.tsx; this file keeps the Merge card's own timing.
 export async function poll($: EngineInterface): Promise<void> {
+  const named = await read($, summaryAtom).then(x => (x as { repo?: string | null } | null)?.repo ?? null).catch(() => null)
+  if (named !== repoDir) {
+    repoDir = named
+    defaultBranch = null
+  }
   let helpers: Helper[] = []
   try {
     helpers = (await $.agent.list()).map(a => ({
