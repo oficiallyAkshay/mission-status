@@ -1,5 +1,5 @@
-# OpenSSF Scorecard: scores the repository's security practices weekly and on each push to main, publishes the
-# result for the README badge, and uploads the findings to the Security tab.
+# OpenSSF Scorecard: scores the repository's security practices weekly and on each push to main and uploads
+# the findings to the Security tab.
 name: scorecard
 on:
   branch_protection_rule:
