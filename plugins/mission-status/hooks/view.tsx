@@ -44,12 +44,6 @@ export function timeOfDay(at: number): string {
   return `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
 }
 
-// A claude.ai address (an artifact, a chat) opens in the Claude desktop app through its own claude:// scheme, not in
-// the browser. Every other web address opens as it is.
-export function inApp(href: string): string {
-  return /^https:\/\/claude\.ai\//i.test(href) ? href.replace(/^https:\/\//i, 'claude://') : href
-}
-
 export function agoOf(ms: number): string {
   const sec = Math.max(0, Math.floor(ms / 1000))
   if (sec < 60) return `${sec}s ago`
@@ -191,7 +185,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         return (
           <Text>
             {`${figure} `}
-            <Link href={inApp(c.href)}>{c.hrefLabel ?? 'Open'}</Link>
+            <Link href={c.href}>{c.hrefLabel ?? 'Open'}</Link>
           </Text>
         )
       if (c.text !== undefined)
@@ -235,7 +229,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
             isWebUrl(l.href)
               ? chip(
                   <Text color={CHIP_INK} weight="semibold">
-                    <Link href={inApp(l.href)}>{`↗ ${l.label}`}</Link>
+                    <Link href={l.href}>{`↗ ${l.label}`}</Link>
                   </Text>,
                   `${key}-${k}`,
                 )
@@ -695,7 +689,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
           </Box>
           {s.ticket !== null && (
             <Text>
-              {s.ticket.url !== null && isWebUrl(s.ticket.url) ? <Link href={inApp(s.ticket.url)}>{s.ticket.ref}</Link> : s.ticket.ref}
+              {s.ticket.url !== null && isWebUrl(s.ticket.url) ? <Link href={s.ticket.url}>{s.ticket.ref}</Link> : s.ticket.ref}
               {s.ticket.title !== null ? <Text dimColor>{`  ${s.ticket.title}`}</Text> : null}
             </Text>
           )}
