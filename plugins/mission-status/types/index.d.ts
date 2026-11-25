@@ -64,7 +64,7 @@ export type Fresh = {
   turnUpdated?: boolean
 }
 export type MetricsSession = { holdback: boolean; calls: number; realWork: boolean; paneSent?: boolean }
-// The state marker (infer.ts): Sarvam's marks (by item key, with the status the item had when marked), the parents it
+// The state marker (infer.ts): Jev's marks (by item key, with the status the item had when marked), the parents it
 // placed, the item keys already seen, and its own counts of requests, input tokens and refusals in a row.
 export type InferState = { marks: Record<string, { status: ItemStatus; from: ItemStatus; at: number }>; parents: Record<string, string>; seen: string[]; calls: number; tokens: number; fails: number; off: boolean }
 export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null; doneAt?: number | null }

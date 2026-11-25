@@ -3,22 +3,18 @@ import type { EngineInterface, On } from 'claude-code'
 import type { InferState, Item, ItemStatus, Summary, Task } from '../types'
 import { UPDATE_TOOL, cap, idOf, normalize } from './model'
 
-// The state marker (optional): Sarvam Prism, a decision model, reads the newest tool calls and marks which pane items
+// The state marker (optional): Jev, TypeSafe's decision model, reads the newest tool calls and marks which pane items
 // are now done, in progress or failed, and places a new item with no parent under an existing one. Off unless
-// SARVAM_API_KEY is set. The agent's own update always wins: it clears every mark, and an agent parent wins over a
-// placed one. Only item names and short tool-call lines go to Sarvam: never file contents.
+// JEV_API_KEY is set. The agent's own update always wins: it clears every mark, and an agent parent wins over a
+// placed one. Only item names and tool-call lines go to Jev: never file contents.
 
-export const SARVAM_URL = 'https://api.sarvam.ai/v2/systemone'
-export const SARVAM_MODEL = 'sarvam-prism'
+export const JEV_URL = 'https://api.typesafe.ai/v1/systemone'
+export const JEV_MODEL = 'jev-1.13.0'
 // One check at most every 30 s, and only after new tool calls (or a new item to place).
 export const INFER_MS = 30_000
-// The caps on one request: the newest tool calls, each line's length, the items asked about, the transcript tail read.
-export const MAX_LINES = 40
-export const LINE_CHARS = 160
-export const MAX_ITEMS = 12
-export const MAX_PLACE = 4
+// No cap on the lines, items or places a request holds; the tool calls come from the transcript's last 256 KiB.
 export const TAIL_BYTES = 256 * 1024
-// A mark or a place shows only when Prism is this sure (its probabilities are calibrated).
+// A mark or a place shows only when Jev is this sure.
 export const SURE = 0.9
 // After this many refusals in a row (a bad key, no access), the marker stops for the session.
 export const MAX_FAILS = 3
@@ -66,9 +62,8 @@ export function toolCalls(jsonl: string): { lines: string[]; lastId: string } {
       const end = ends.get(c.id)
       // Only a Bash result keeps its last line; any other result (a file read, a page) shows as ok or error.
       const tail = end === undefined ? null : end === 'error' ? 'error' : c.bash && end !== '' ? end.slice(1) : 'ok'
-      return clip(tail === null ? c.line : `${c.line} -> ${tail}`)
+      return flat(tail === null ? c.line : `${c.line} -> ${tail}`)
     })
-    .slice(-MAX_LINES)
   return { lines, lastId: calls.at(-1)?.id ?? '' }
 }
 
@@ -89,10 +84,10 @@ function callLine(tool: string, input: Record<string, unknown>): string | null {
 function lastLine(content: unknown): string {
   const text = typeof content === 'string' ? content : Array.isArray(content) ? content.map(c => (typeof c?.text === 'string' ? c.text : '')).join('\n') : ''
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean)
-  return clip(lines.at(-1) ?? '', 100)
+  return flat(lines.at(-1) ?? '')
 }
 
-const clip = (t: string, n = LINE_CHARS) => (t.length > n ? `${t.slice(0, n - 1)}…` : t).replace(/\s+/g, ' ')
+const flat = (t: string) => t.replace(/\s+/g, ' ')
 
 // The items the pane shows: the agent's items, then the task list's steps the agent does not name (as the view merges them).
 export type Shown = { key: string; name: string; phase: number; status: ItemStatus; parent: string | null }
@@ -115,11 +110,10 @@ const STATES: Record<'done' | 'now' | 'next' | 'failed', string> = {
 // One request: the tool lines and the items once, as the state; one question per open item, one per new item to place.
 export type Plan = { body: string; ask: Shown[]; place: { item: Shown; options: Shown[] }[] }
 export function buildRequest(items: Shown[], lines: string[], place: Shown[]): Plan | null {
-  const ask = items.filter(x => x.status !== 'done').slice(0, MAX_ITEMS)
+  const ask = items.filter(x => x.status !== 'done')
   const placing = place
     .map(item => ({ item, options: items.filter(y => y.key !== item.key && y.phase === item.phase && y.parent === null && !isPlaced(y, place)) }))
     .filter(p => p.options.length > 0)
-    .slice(0, MAX_PLACE)
   if (ask.length === 0 && placing.length === 0) return null
   const questions: Record<string, unknown> = {}
   ask.forEach((x, k) => {
@@ -127,15 +121,15 @@ export function buildRequest(items: Shown[], lines: string[], place: Shown[]): P
   })
   placing.forEach((p, k) => {
     const criteria: Record<string, string> = { none: 'It is a separate piece of work, not a part of any item below.' }
-    p.options.slice(0, 40).forEach((o, j) => (criteria[`o${j}`] = `It is a part of the item "${o.name}".`))
+    p.options.forEach((o, j) => (criteria[`o${j}`] = `It is a part of the item "${o.name}".`))
     questions[`p${k}`] = { type: 'choice', instructions: `Where does the new work item "${p.item.name}" belong?`, criteria }
   })
-  const state = { recentToolCalls: lines, items: items.slice(0, 40).map(x => ({ name: x.name, stage: x.phase, status: x.status })) }
-  return { body: JSON.stringify({ model: SARVAM_MODEL, state, questions }), ask, place: placing }
+  const state = { recentToolCalls: lines, items: items.map(x => ({ name: x.name, stage: x.phase, status: x.status })) }
+  return { body: JSON.stringify({ model: JEV_MODEL, state, questions }), ask, place: placing }
 }
 const isPlaced = (y: Shown, place: Shown[]) => place.some(p => p.key === y.key)
 
-// Reads Prism's answer. A bad answer gives null: nothing changes. A mark or a place needs SURE probability.
+// Reads Jev's answer. A bad answer gives null: nothing changes. A mark or a place needs SURE probability.
 export type Read = { marks: Record<string, ItemStatus>; parents: Record<string, string>; tokens: number }
 export function readAnswer(text: string, plan: Plan): Read | null {
   let json: unknown
@@ -159,7 +153,7 @@ export function readAnswer(text: string, plan: Plan): Read | null {
   })
   const parents: Record<string, string> = {}
   plan.place.forEach((p, k) => {
-    const options = p.options.slice(0, 40)
+    const options = p.options
     const c = top(`p${k}`, ['none', ...options.map((_, j) => `o${j}`)])
     const o = c === null || c === 'none' ? undefined : options[Number(c.slice(1))]
     if (o !== undefined) parents[p.item.key] = o.name
@@ -169,7 +163,7 @@ export function readAnswer(text: string, plan: Plan): Read | null {
 }
 
 // For the view: the items with each mark and place laid on. A mark shows only while the item keeps the status it had
-// when Prism marked it; the agent's parent wins; a place that would make a loop is dropped.
+// when Jev marked it; the agent's parent wins; a place that would make a loop is dropped.
 export function withInferred(items: Item[], st: InferState | null): Item[] {
   if (st === null) return items
   // The view's own key: an agent item's id; a task-list step (no id) by its name, as shownItems keys it.
@@ -204,7 +198,7 @@ let lastAt = 0
 
 export async function inferTick($: EngineInterface, now: number): Promise<void> {
   if (busy || now - lastAt < INFER_MS - 1000) return
-  const key = await $.env.get('SARVAM_API_KEY').catch(() => undefined)
+  const key = await $.env.get('JEV_API_KEY').catch(() => undefined)
   if (key === undefined || key === '' || (await read($, holdback))) return
   const st = (await read($, infer)) ?? EMPTY
   if (st.off) return
@@ -224,9 +218,9 @@ export async function inferTick($: EngineInterface, now: number): Promise<void> 
     if (plan !== null && lines.length > 0) {
       lastAt = now
       lastAsked = lastId
-      const r = await $.http.fetch(SARVAM_URL, {
+      const r = await $.http.fetch(JEV_URL, {
         method: 'POST',
-        headers: { 'api-subscription-key': key, 'content-type': 'application/json' },
+        headers: { authorization: `Bearer ${key}`, 'content-type': 'application/json', accept: 'application/json' },
         body: plan.body,
       })
       if (r.ok) got = readAnswer(r.text, plan)
