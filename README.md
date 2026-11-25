@@ -65,8 +65,8 @@ The pane opens by itself once a session does real work, and `/mission-status` op
 
 No credential. The pane runs inside Claude Code on your machine, and it calls no model of its own.
 
-- ❌ sends your prompts, goals, files, branch names or paths anywhere
-- ❌ names your account or session in any event
-- ❌ installs an update during a turn
+- ❎ sends your prompts, goals, files, branch names or paths anywhere
+- ❎ names your account or session in any event
+- ❎ installs an update during a turn
 
 By default anonymous usage counts are on after the onboarding shows them; `/pane-metrics off` stops them, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops every send. Every event and field is listed in [docs/telemetry.md](docs/telemetry.md). By default the plugin updates itself between turns; the onboarding switch or the pane's Turn on auto-update button sets it.
