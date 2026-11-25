@@ -1,0 +1,44 @@
+name: release
+
+# Each merged plugin change carries a new version (the ci "version" job makes
+# sure). This turns that version into a tag and a GitHub release, which the
+# installed copies check to update themselves.
+#
+# It runs only while the repository is public: a tag made before the history
+# is rewritten for the public release would keep the old commits alive.
+
+on:
+  push:
+    branches: [main]
+    paths: ["plugins/mission-status/**"]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: tag and release the version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.sha }}
+        run: |
+          version=$(node -p 'require("./plugins/mission-status/.claude-plugin/plugin.json").version')
+          tag="v${version}"
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            echo "[$(date -u +%FT%TZ)] ${tag} already exists: nothing to release"
+            exit 0
+          fi
+          gh release create "${tag}" --target "${SHA}" --title "${tag}" --generate-notes
+          echo "[$(date -u +%FT%TZ)] released ${tag} at ${SHA}"
