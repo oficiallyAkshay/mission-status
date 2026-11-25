@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { FIRST_REMINDER, HOLD_TEXT, REMINDER, RULE, STALE_MS } from '../hooks/model'
+import { CHECK_MS, FIRST_REMINDER, HOLD_TEXT, REMINDER, RULE, STALE_MS } from '../hooks/model'
 
 // The freshness triggers: product plan, "How the state stays current".
 
@@ -146,4 +146,20 @@ test('after 2 ignored reminders the state is marked May be out of date; an agent
 test('the standing rule keeps the chat to what unblocks the person', () => {
   expect(RULE).toContain('only what the person must do or decide to unblock the work')
   expect(RULE).toContain('Send no progress lines, status, recaps, plans or narration in the chat')
+})
+
+test('every 2 minutes with no agent update, a check names the items still in progress', { timeoutMs: 20_000 }, async ($, on) => {
+  const { clock } = await start($, on)
+  await send($, { ...BASE, items: [{ phase: 0, name: 'Write the tests', status: 'now' }, { phase: 0, name: 'Plan', status: 'done' }] })
+  expect(ctx(await bash($))).toEqual([])
+  await clock.advance(CHECK_MS)
+  const line = ctx(await bash($))
+  expect(line.length).toBe(1)
+  expect(line[0]).toContain('Write the tests')
+  expect(line[0]).not.toContain('Plan')
+  // Once asked, it waits another 2 minutes; an agent update starts the count again.
+  expect(ctx(await bash($))).toEqual([])
+  await send($, { phase: 0 })
+  await clock.advance(CHECK_MS - 1000)
+  expect(ctx(await bash($))).toEqual([])
 })

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { Activity, Count, Fresh, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { AUTO_OPEN_CALLS, FIRST_REMINDER, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, STALE_MS, STALE_STEPS, autoSummary, normalize } from './model'
+import { AUTO_OPEN_CALLS, CHECK_MS, checkLine, FIRST_REMINDER, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, STALE_MS, STALE_STEPS, autoSummary, normalize } from './model'
 
 // The holdback (metrics.tsx decides it): a measurement session with no pane and no standing rule.
 const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
@@ -107,6 +107,13 @@ export async function afterToolCall($: EngineInterface): Promise<string | null> 
         out.line = REMINDER
         return { ...x, stale: true, windowFrom: at, steps: 0, outstanding: 0 }
       }
+    }
+    // Every 2 minutes with no agent update, a short check names the items still in progress.
+    const last = Math.max(x.lastAgentAt ?? 0, x.checkAt ?? 0)
+    const nowItems = (normalize(stored)?.items ?? []).filter(i => i.status === 'now').map(i => i.name)
+    if (out.line === null && nowItems.length > 0 && last > 0 && at - last >= CHECK_MS) {
+      out.line = checkLine(nowItems.slice(0, 6))
+      return { ...x, checkAt: at }
     }
     return x
   })
