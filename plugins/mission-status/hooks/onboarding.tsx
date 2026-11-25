@@ -91,7 +91,8 @@ function goTo($: EngineInterface, next: Step): void {
 
 // The demo clock runs while the Welcome pane is open: each second it writes the pane clock, which redraws the demo.
 function startDemo($: EngineInterface): void {
-  demoStart = Date.now()
+  // The demo starts at its first frame, on the pane clock it is drawn by, so a slow start shifts no frame.
+  demoStart = 0
   if (demoClock === null) demoClock = $.clock.every(1_000, () => void tick($))
   void tick($)
 }
@@ -215,6 +216,7 @@ export function registerOnboarding(on: On): void {
 
     if (step === 0) {
       const clock = await read($, now)
+      if (demoStart === 0) demoStart = clock
       const f = demoFrame(Math.max(0, clock - demoStart))
       return (
         <Box flexDirection="column" gap={1}>

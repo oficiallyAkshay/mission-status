@@ -290,6 +290,11 @@ export const RULE =
   'Send no progress lines, status, recaps, plans or narration in the chat: put them in the pane.'
 
 // The one-line reminder the pane adds to the agent's next step.
+// The check every 2 minutes: the items the pane still shows in progress, asked about by name.
+export const CHECK_MS = 2 * 60_000
+export function checkLine(names: string[]): string {
+  return `Progress pane check: are these still in progress: ${names.join('; ')}? If any finished or changed, send a patch with mcp__mission-status__update now.`
+}
 export const REMINDER = 'Progress pane: the state is stale. Send the current state with mcp__mission-status__update now.'
 export const FIRST_REMINDER =
   'Progress pane: it opened by itself from the task list and waits for you. Send the first state with mcp__mission-status__update now.'

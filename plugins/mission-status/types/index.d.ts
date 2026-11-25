@@ -56,6 +56,7 @@ export type Fresh = {
   outstanding: number
   ignored: number
   turnEndAt?: number | null
+  checkAt?: number
 }
 export type MetricsSession = { holdback: boolean; calls: number; realWork: boolean }
 export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null; doneAt?: number | null }
