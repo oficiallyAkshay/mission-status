@@ -510,7 +510,7 @@ function theEnd() {
   const copy = $('end-copy'), note = $('end-note'), end = document.querySelector('.tex-end')
   const text = '/plugin marketplace add oficiallyAkshay/mission-status\n/plugin install mission-status@mission-status'
   let tm = 0
-  copy.addEventListener('click', async () => {
+  if (copy) copy.addEventListener('click', async () => {
     let ok = false
     try { await navigator.clipboard.writeText(text); ok = true } catch {}
     if (!ok) { const r = document.createRange(); r.selectNodeContents($('end-cmd')); const s = getSelection(); s.removeAllRanges(); s.addRange(r) }
@@ -557,4 +557,37 @@ for (const d of document.querySelectorAll('.qa')) {
     const io = new IntersectionObserver(es => { if (es.some(e => e.isIntersecting)) { wall.classList.add('in'); io.disconnect() } }, { threshold: 0.25 })
     io.observe(wall)
   } else wall.classList.add('in')
+}
+
+// The install, played: one press copies both commands, then the block types them and shows what Claude Code answers.
+// The site installs nothing; the reader pastes the commands into Claude Code.
+{
+  const btn = $('end-install'), label = $('end-install-l'), code = $('end-cmd'), note = $('end-note')
+  const CMDS = ['/plugin marketplace add oficiallyAkshay/mission-status', '/plugin install mission-status@mission-status']
+  const SAYS = ['Marketplace added', 'mission-status installed']
+  let run = 0
+  btn.addEventListener('click', async () => {
+    const id = ++run, live = () => id === run
+    let ok = false
+    // The copy never holds up the play: a clipboard that does not answer in 800 ms counts as blocked.
+    try { ok = await Promise.race([navigator.clipboard.writeText(CMDS.join('\n')).then(() => true), sleep(800).then(() => false)]) } catch {}
+    btn.classList.add('going'); label.textContent = ok ? 'Copied. Watch it install' : 'Select the commands and copy them'
+    code.innerHTML = ''
+    const line = (cls, text) => { const s = document.createElement('span'); s.className = cls; s.textContent = text; code.append(s); return s }
+    for (let i = 0; i < CMDS.length; i++) {
+      const s = line('ti-cmd', '')
+      if (REDUCED) s.textContent = CMDS[i]
+      else for (let k = 1; k <= CMDS[i].length; k++) { s.textContent = CMDS[i].slice(0, k); await sleep(18); if (!live()) return }
+      await sleep(REDUCED ? 0 : 380); if (!live()) return
+      const r = line('ti-ok', `✓ ${SAYS[i]}`)
+      if (!REDUCED) r.animate([{ opacity: 0, transform: 'translateY(4px)' }, { opacity: 1, transform: 'none' }], { duration: 420, easing: EASE })
+      await sleep(REDUCED ? 0 : 420); if (!live()) return
+    }
+    const last = line('ti-next', '→ Open the pane: /mission-status')
+    if (!REDUCED) last.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 500, easing: EASE })
+    btn.classList.remove('going'); if (ok) btn.classList.add('done')
+    else { const r = document.createRange(); r.selectNodeContents(code); const s = getSelection(); s.removeAllRanges(); s.addRange(r) }
+    label.textContent = ok ? 'Copied. Paste into Claude Code.' : 'Select the commands and copy them'
+    note.textContent = 'This played what Claude Code shows. The site installs nothing.'
+  })
 }
