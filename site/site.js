@@ -45,6 +45,9 @@ const MISSIONS = [
   { key: 'migration', label: 'Migration', project: 'Move to Postgres 17', goal: 'All data moves with no lost rows and no downtime.',
     stages: ['Plan', 'Dry run', 'Migrate', 'Verify', 'Clean up'], exits: ['the plan is reviewed', 'a copy moves cleanly', 'production moves', 'row counts match', 'the old database is gone'],
     items: ['Users table', 'Orders table', 'Search index'], use: 'Move data with proof at each step.' },
+  { key: 'plan-review', label: 'Plan review', project: 'Payments redesign plan', goal: 'A plan that three review waves in a row find no major issue in.',
+    stages: ['Intake', 'Draft', 'Review waves', 'Your rows', 'Hand off'], exits: ['the requirements are set', 'the draft is checked', 'three waves in a row are clean', 'every open decision is ruled', 'the plan is approved'],
+    items: ['Wave 7', 'Facts lens', 'Reviser'], use: 'Review a plan until it holds.' },
   { key: 'custom', label: 'Custom', project: 'Your mission', goal: 'Your stages, in your words.', stages: [], exits: [], items: ['First step', 'Second step'], use: '' },
 ]
 
@@ -59,6 +62,7 @@ const VARIANTS = [
   ['board-batch', 'Q4 papercuts', 'Close twenty small fixes this sprint.', ['Ticket 9 of 20', 'Ticket 10 of 20', 'Ticket 11 of 20']],
   ['writing', 'API guide', 'A guide a new developer can follow in ten minutes.', ['Quickstart', 'Auth', 'Errors']],
   ['migration', 'New billing system', 'Every account on the new billing, with no double charges.', ['Plans', 'Invoices', 'Refunds']],
+  ['plan-review', 'Search rebuild plan', 'A plan the builders can follow with no open question.', ['Wave 3', 'Simplicity lens', 'Directives']],
 ].map(([key, project, goal, items]) => ({ ...MISSIONS.find(m => m.key === key), project, goal, items }))
 const AGENT_MISSION = { key: 'agent', label: 'Let the agent build it', project: 'Rate limits for the public API', goal: 'No customer can overload the API, and fair users never notice. Stages written by the agent.', stages: ['Spike', 'Pick the limits', 'Build', 'Load test', 'Roll out'], exits: ['one approach is proven', 'limits per plan are agreed', 'the limiter is on a branch', 'it holds at ten times the load', 'it is on for everyone'], items: ['Token bucket', 'Redis store', '429 responses'] }
 const CUSTOMS = [
@@ -421,7 +425,7 @@ function texture() {
 addEventListener('resize', () => { const w = $('tex').parentElement.clientWidth; if (w !== texW) { clearTimeout(texTimer); texTimer = setTimeout(texture, 200) } })
 let texTimer = 0
 
-// Ships with nine: one row per template as the tile scrolls into view, its stage cells cascading in after the name.
+// Ships with ten: one row per template as the tile scrolls into view, its stage cells cascading in after the name.
 {
   $('shapes').innerHTML = MISSIONS.filter(x => x.key !== 'custom').map((m, r) => {
     const now = (r * 2 + 1) % m.stages.length

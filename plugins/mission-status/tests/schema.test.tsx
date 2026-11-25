@@ -197,6 +197,12 @@ test('personal templates: saveTemplate keeps the stages for later sessions, and 
   expect(templatesLine(asTemplates(kept.get('templates')))).toContain('my-flow (Spec, Build, Ship)')
 })
 
+test('plan-review template: the built-in template sets the five plan-review stages', async ($, on) => {
+  await start($, on)
+  expect((await send($, { project: 'P', template: 'plan-review', phase: 2 })).deny).toBeUndefined()
+  expect((await state($, 'summary')).phases).toEqual(['Intake', 'Draft', 'Review waves', 'Your rows', 'Hand off'])
+})
+
 test('repo: the Merge card reads git in the repository the agent names', async ($, on) => {
   const dirs: (string | undefined)[] = []
   watch(on)
