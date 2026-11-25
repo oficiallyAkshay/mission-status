@@ -27,7 +27,7 @@ mission-status is a live progress pane for Claude Code in the Claude desktop app
 
 <p align="center">🔒<br><b>Private stays private</b><br>Usage counts are anonymous, never hold your words, files or names, and turn off with one command.</p>
 
-<p align="center">📊<br><b>Live numbers</b><br>Git, pull requests, checks and helpers come from their own sources, read every few seconds.</p>
+<p align="center">📊<br><b>Live numbers</b><br>Git, pull requests, checks and helpers come from their own sources, read while the pane is open.</p>
 
 ## Fit
 

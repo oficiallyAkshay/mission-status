@@ -150,13 +150,13 @@ test('the standing rule keeps the chat to what unblocks the person', () => {
 
 test('every 2 minutes with no agent update, a check names the items still in progress', { timeoutMs: 20_000 }, async ($, on) => {
   const { clock } = await start($, on)
-  await send($, { ...BASE, items: [{ phase: 0, name: 'Write the tests', status: 'now' }, { phase: 0, name: 'Plan', status: 'done' }] })
+  await send($, { ...BASE, items: [{ phase: 0, name: 'Write the tests', status: 'now' }, { phase: 0, name: 'Read the brief', status: 'done' }] })
   expect(ctx(await bash($))).toEqual([])
   await clock.advance(CHECK_MS)
   const line = ctx(await bash($))
   expect(line.length).toBe(1)
   expect(line[0]).toContain('Write the tests')
-  expect(line[0]).not.toContain('Plan')
+  expect(line[0]).not.toContain('Read the brief')
   // Once asked, it waits another 2 minutes; an agent update starts the count again.
   expect(ctx(await bash($))).toEqual([])
   await send($, { phase: 0 })

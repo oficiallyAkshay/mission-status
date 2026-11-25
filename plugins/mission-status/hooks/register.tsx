@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
 import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, linkRefs, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, prRefsIn, prRefsInLines, byteLength, skillSteps, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
-import { poll } from './readers'
-import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, tick } from './store'
+import { paneSeen, poll } from './readers'
+import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, tick, tickIfTimer } from './store'
 import { renderPane } from './view'
 import { registerMetrics } from './metrics'
 import { registerOnboarding } from './onboarding'
@@ -26,7 +26,18 @@ const barStart = atom({ plugin: 'mission-status', key: 'barStart' } as const, nu
 // The transcript scan: the byte where it stopped (always a line start), and the gh pr create calls seen.
 let scanAt = 0
 let scanBusy = false
+// The agent's own version kept in the stored summary (normalize leaves it out, so it is read from the raw value).
+const seenVersion = (stored: Summary): number => (stored as { agentVersion?: number } | null)?.agentVersion ?? 0
 const scanCreates = new Set<string>()
+// The transcript the scan position and the calls seen belong to; another path starts the scan again.
+let scanPath: string | null = null
+const SCAN_PART = 4 * 1024 * 1024
+
+// The newest 30 pull requests: the earlier ones first in the order first seen, the new ones after.
+export const unionRefs = (list: string[], added: string[]) => [...list, ...added.filter(r => !list.includes(r))].slice(-30)
+
+// The 1 s and 5 s clocks the session registered; a new session.start cancels them before it registers again.
+let cancels: { cancel: () => void }[] = []
 
 // Reads the session's transcript from where the last scan stopped, in parts of at most 4 MiB (the read limit), and
 // adds each pull request a gh pr create call made to the PRs tab. Deterministic: no model, and nothing is missed
@@ -36,15 +47,22 @@ async function scanTranscript($: EngineInterface): Promise<void> {
   scanBusy = true
   try {
     const path = (await $.session.info()).transcriptPath
+    if (path !== scanPath) {
+      scanPath = path
+      scanAt = 0
+      scanCreates.clear()
+    }
     const size = (await $.fs.stat(path)).size
     if (size < scanAt) scanAt = 0
     const found: string[] = []
     for (let parts = 0; scanAt < size && parts < 20; parts++) {
-      const text = (await $.fs.read(path, { offset: scanAt, length: 4 * 1024 * 1024 })) as string
+      const text = (await $.fs.read(path, { offset: scanAt, length: SCAN_PART })) as string
       // Only whole lines are read: the next part starts at the start of a line, so no character is cut in two.
       const end = text.lastIndexOf('\n')
-      // One line longer than a whole part (a huge tool result) is skipped, so the scan never stalls on it.
       if (end < 0) {
+        // A tail with no newline and less than a whole part is a line still being written: wait for the next tick.
+        if (size - scanAt < SCAN_PART) break
+        // One line longer than a whole part (a huge tool result) is skipped, so the scan never stalls on it.
         scanAt += byteLength(text)
         continue
       }
@@ -53,7 +71,7 @@ async function scanTranscript($: EngineInterface): Promise<void> {
       for (const ref of prRefsInLines(whole.split('\n'), scanCreates)) if (!found.includes(ref)) found.push(ref)
     }
     if (found.length > 0) {
-      await update($, prRefs, list => [...new Set([...list, ...found])].slice(-30))
+      await update($, prRefs, list => unionRefs(list, found))
       void poll($)
     }
   } catch {
@@ -61,6 +79,40 @@ async function scanTranscript($: EngineInterface): Promise<void> {
   } finally {
     scanBusy = false
   }
+}
+
+// The pane's state lives in $.state, which the app holds in memory: an app quit loses it. So each write also goes to
+// $.store under the session's transcript file name, and a session that starts with no state (an app restart, a
+// resume) takes it back from there. The store keeps the last SAVED_MAX sessions.
+const SAVED_INDEX = 'savedPanes'
+const SAVED_MAX = 20
+async function savedKey($: EngineInterface): Promise<string | null> {
+  const path = (await $.session.info().catch(() => null))?.transcriptPath ?? ''
+  const name = path.split('/').pop()?.replace(/\.jsonl$/, '') ?? ''
+  return /^[\w-]{8,80}$/.test(name) ? `pane-${name}` : null
+}
+export async function savePane($: EngineInterface): Promise<void> {
+  const key = await savedKey($)
+  if (key === null) return
+  const value = { summary: await read($, summary), tasks: await read($, tasks), at: Date.now() }
+  if (value.summary === null) return
+  await $.store.set(key, value)
+  const index = ((await $.store.get(SAVED_INDEX).catch(() => undefined)) as string[] | undefined) ?? []
+  if (index[index.length - 1] === key) return
+  const next = [...index.filter(k => k !== key), key]
+  for (const old of next.slice(0, Math.max(0, next.length - SAVED_MAX))) await $.store.delete(old).catch(() => undefined)
+  await $.store.set(SAVED_INDEX, next.slice(-SAVED_MAX))
+}
+export async function restorePane($: EngineInterface): Promise<boolean> {
+  if ((await read($, summary)) !== null) return false
+  const key = await savedKey($)
+  if (key === null) return false
+  const kept = (await $.store.get(key).catch(() => undefined)) as { summary?: Summary; tasks?: Task[] } | undefined
+  const back = normalize(kept?.summary ?? null)
+  if (back === null) return false
+  await update($, summary, now => (now === null ? back : now))
+  if (Array.isArray(kept?.tasks)) await update($, tasks, now => (now.length === 0 ? (kept?.tasks ?? []) : now))
+  return true
 }
 
 export const register: Register = on => {
@@ -178,7 +230,7 @@ export const register: Register = on => {
           items: {
             type: 'array',
             description:
-              'The work inside each stage, drawn as nested cards. parent names the item that holds this one, by its id or name (cards nest to any depth). after names the sibling this one waits for, by its id or name. Siblings with no after run in parallel. when is the item\'s own exit clause, with n and m, n, or text as for counts.',
+              'The work inside each stage, drawn as nested cards. parent names the item that holds this one, by its id or name (cards nest to any depth). after names the sibling this one waits for, by its id or name. Siblings with no after run in parallel. Items show in the order sent.',
             items: {
               type: 'object',
               properties: {
@@ -195,11 +247,8 @@ export const register: Register = on => {
                   description: "The item's own sub-phases, one to three words each, at most 8: one dot-separated line under the name, in place of child cards. Use it for the phases inside one step, for example a Smriti deep pass inside a wrap-up step. null clears it.",
                 },
                 step: { type: ['number', 'null'], description: 'Index of the sub-phase that runs now, from 0. The pane shows it bold and the others faint.' },
+                taskStep: { type: 'string', description: "The task-list step this item stands for, by its text. The item is done when that step is marked done." },
                 pr: { type: ['string', 'number'], description: "The item's pull request: a number in the work's repository, or owner/name#number. The pane shows its CI state and run time under the item." },
-                when: { type: 'string', description: 'The gate to leave this stage, as an ultra short label of two or three words: Plan approved, Build done, Tests pass, PR merged, Look approved' },
-                n: { type: 'number' },
-                m: { type: 'number' },
-                text: { type: 'string' },
               },
               required: ['phase', 'name', 'status'],
             },
@@ -242,15 +291,23 @@ export const register: Register = on => {
       isDeferred: false,
     })
     await $.command.register({ name: 'mission-status', description: 'Open the progress pane' })
-    $.clock.every(CLOCK_MS, () => void tick($))
-    $.clock.every(TICK_MS, () => {
-      void poll($)
-      void scanTranscript($)
-    })
+    for (const handle of cancels) handle.cancel()
+    cancels = [
+      $.clock.every(CLOCK_MS, () => void tickIfTimer($)),
+      $.clock.every(TICK_MS, () => {
+        void poll($)
+        void scanTranscript($)
+      }),
+    ]
     // The PRs tab: every pull request this session made, from its transcript, read from the start and then as it grows.
     void scanTranscript($)
     void poll($)
-    if ((await read($, summary)) !== null && !(await read($, holdback))) void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+    // An app restart or a resume starts with no state: take back the last saved one.
+    await restorePane($).catch(() => false)
+    if ((await read($, summary)) !== null && !(await read($, holdback))) {
+      await paneSeen($).catch(() => undefined)
+      void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+    }
     return next(e)
   })
 
@@ -270,7 +327,7 @@ export const register: Register = on => {
       const args = e as unknown as { command?: unknown }
       const made = prRefsIn(typeof args.command === 'string' ? args.command : '', JSON.stringify(result ?? ''))
       if (made.length > 0) {
-        await update($, prRefs, list => [...new Set([...list, ...made])].slice(-30))
+        await update($, prRefs, list => unionRefs(list, made))
         void poll($)
       }
     } catch {}
@@ -287,7 +344,7 @@ export const register: Register = on => {
               const old = normalize(stored)
               if (old === null || (old.runbooks ?? []).some(r => r.id === id)) return stored
               const book = { id, title: `Skill: ${name}`, href: `${dir}/SKILL.md`, steps: steps.map(n => ({ name: n, status: 'next' as const, note: null, waitsOn: null })) }
-              return { ...old, runbooks: [...(old.runbooks ?? []), book].slice(-4), version: (old.version ?? 0) + 1 }
+              return { ...old, agentVersion: seenVersion(stored), runbooks: [...(old.runbooks ?? []), book].slice(-4), version: (old.version ?? 0) + 1 } as Summary
             })
           }
         }
@@ -311,6 +368,7 @@ export const register: Register = on => {
       const before = await read($, tasks)
       const after = await update($, tasks, list => applyPlan(list, args, at))
       await noteSteps($, stepsStarted(before, after))
+      await savePane($).catch(() => undefined)
     } catch {
       // The task list is a nicety: a failed read never holds up the call.
     }
@@ -322,7 +380,7 @@ export const register: Register = on => {
     const result = await next(e)
     if (e.source !== 'compact' || (await read($, holdback))) return result
     return { ...result, additionalContext: [...(result.additionalContext ?? []), RULE] }
-  }).catch(($, e, next) => next(e))
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
   // A turn ends while the state is stale: hold the end once and ask the agent for an update.
   on('classic.Stop', async ($, e, next) => {
@@ -330,7 +388,7 @@ export const register: Register = on => {
     if (result.block !== undefined || (await read($, holdback))) return result
     const hold = await atTurnEnd($, e.stop_hook_active)
     return hold === null ? result : { ...result, block: hold }
-  }).catch(($, e, next) => next(e))
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
   on('turn.complete', async ($, e, next) => {
     await say($, 'Waiting for you').catch(() => undefined)
@@ -363,6 +421,7 @@ export const register: Register = on => {
 
   on('command.run', { command: 'mission-status' }, async $ => {
     await $.ui.open({ id: PANE, title: TITLE })
+    await paneSeen($).catch(() => undefined)
     void poll($)
     return { text: 'The progress pane is open.' }
   })
@@ -380,9 +439,11 @@ export const register: Register = on => {
     const written = await update($, summary, stored => {
       const old = normalize(stored)
       // Checked again inside the write: another writer may have changed the state since the check above.
-      out.errors = checkUpdate(args, old, agentVersion, personal)
+      // The agent's version is kept in the stored summary, so the check sees a write that landed since the read above.
+      const seen = seenVersion(stored)
+      out.errors = checkUpdate(args, old, seen, personal)
       if (out.errors.length > 0) return stored
-      const next = build(old)
+      const next = build(old, seen)
       out.errors = parentLoops(next.items)
       if (out.errors.length > 0) return stored
       if (bytesOf(next) > CAP_BYTES) {
@@ -404,10 +465,14 @@ export const register: Register = on => {
       )
     }
     if (written !== null && before?.phase !== written.phase) await update($, barStart, () => null)
+    await savePane($).catch(() => undefined)
     await agentUpdated($, num(args.version))
     await tick($)
     // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
-    if (!(await read($, holdback))) await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+    if (!(await read($, holdback))) {
+      await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+      await paneSeen($).catch(() => undefined)
+    }
     // Each agent update reads GitHub at once: pull requests, CI and merges.
     void poll($, true)
     // A saved template: the stages this update left, under the person's name for them.
@@ -418,7 +483,7 @@ export const register: Register = on => {
     }
     return { result: `The pane shows the new state (version ${written?.version ?? 0}).${saved}` }
 
-    function build(old: Summary): NonNullable<Summary> {
+    function build(old: Summary, seen: number): NonNullable<Summary> {
       const stage = STAGE_KEYS.find(k => k === args.stage) ?? old?.stage ?? 'build'
       const custom = (Array.isArray(args.phases) ? args.phases : []).map(str).filter((x): x is string => x !== null).map(cap)
       const picked = typeof args.template === 'string' ? (TEMPLATES[args.template] ?? personal[args.template]) : undefined
@@ -444,6 +509,7 @@ export const register: Register = on => {
         .map(c => ({ c, was: old?.counts.find(x => x.label === c.label) }))
         .find(({ c, was }) => was !== undefined && figureOf(was) !== figureOf(c))
       // Agent items only: the task list's steps are the pane's own items, kept in tasks, so no agent write deletes them.
+      const patched = new Set((Array.isArray(args.patch) ? (args.patch as unknown[]) : []).map(p => str((p as { id?: unknown } | null)?.id) ?? idOf(str((p as { name?: unknown } | null)?.name) ?? '')))
       const items = linkRefs(
         Array.isArray(args.patch)
           ? applyPatch(old?.items ?? [], args.patch)
@@ -456,7 +522,11 @@ export const register: Register = on => {
           const was = old?.items.find(y => (y.id ?? idOf(y.name)) === (x.id ?? idOf(x.name)))
           // A done item keeps the time it was first seen done; an item sent already done gets the time of this update.
           const doneAt = x.status === 'done' ? (was?.status === 'done' ? (was.doneAt ?? at) : at) : null
-          return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null, doneAt }
+          // When the agent last named the item: a whole list names every item it holds, a patch only the items it adds or
+          // changes. A merged pull request closes an item only when the agent has not named it since the merge.
+          const named = Array.isArray(args.items) || patched.has(x.id ?? idOf(x.name))
+          const touchedAt = named ? at : (was?.touchedAt ?? null)
+          return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null, doneAt, touchedAt }
         })
       // An update that leaves waitingOn out keeps the wait; null clears it.
       const waitingRaw = args.waitingOn === undefined ? (old?.waitingOn ?? null) : str(args.waitingOn)
@@ -512,9 +582,14 @@ export const register: Register = on => {
         version: (old?.version ?? 0) + 1,
         waitingForAgent: false,
         mayBeOutOfDate: false,
-      }
+        agentVersion: Math.max(seen, num(args.version) ?? 0),
+      } as NonNullable<Summary>
     }
   })
 
-  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => renderPane($, e))
+  // A draw of the pane marks it open: git and GitHub are read only while it is.
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    await paneSeen($, true).catch(() => undefined)
+    return renderPane($, e)
+  })
 }

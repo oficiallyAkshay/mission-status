@@ -24,10 +24,10 @@ test('a local Markdown link opens the document pane, which draws the file as Mar
   const ui = await $.ui.mount({ ...PANE, requestId: 'progress', surface: 'desktop' })
   // Stage 0 is done and folded: open it first.
   await ui.press({ key: 'open-0' })
-  // The document link is the same chip as a web link: a Markdown link the pane answers itself.
-  const link = (await ui.findAll({ type: 'Markdown' })).find(x => String(x.props?.text ?? '').startsWith('[↗ Plan]('))
+  // The document link is a plain button, as the tabs and artifact chips are; a press opens the document pane.
+  const link = (await ui.findAll({ type: 'Button' })).find(x => String(x.props?.label ?? '') === '↗ Plan')
   expect(link).toBeTruthy()
-  await ui.press({ key: String(link?.key ?? ''), link: { href: 'file:///tmp/plan.md' } } as never)
+  await ui.press({ key: String(link?.key ?? '') })
   expect(opened).toContain('mission-status-doc')
   await ui.unmount()
   const docUi = await $.ui.mount({ ...PANE, requestId: 'mission-status-doc', surface: 'desktop' })

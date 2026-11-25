@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, ProgressProps, RenderChildren, RenderInput, SvgProps } from 'claude-code'
 import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket, RunbookStep } from '../types'
-import { barWindow, trackFits, stepsRailSvg, prIconSvg, badgeSvg, exitSvg, flowLineSvg, spaceSvg, waitsLineSvg, stripSvg, trackSvg } from './bars'
-import { age, cap, clockOf, figureOf, normalize } from './model'
+import { barWindow, trackFits, stepsRailSvg, prIconSvg, badgeSvg, failedBadgeSvg, exitSvg, flowLineSvg, spaceSvg, waitsLineSvg, stripSvg, trackSvg } from './bars'
+import { age, cap, clockOf, findRef, idOf, normalize, workOrder } from './model'
 import { inferredItems } from './infer'
 import { prFacts } from './readers'
 import type { MergeLive } from './readers'
@@ -58,7 +58,7 @@ export function zoneOf(d: Date): string {
 }
 
 // A Claude artifact's address.
-export const isArtifact = (href: string) => /^https:\/\/claude\.ai\/(code\/)?artifact\/[\w-]+/i.test(href)
+export const isArtifact = (href: string) => /^https:\/\/claude\.ai\/(code\/)?artifact\/[\w-]+[^\s]*$/i.test(href)
 
 // Opens an artifact inside the Claude desktop app through the session's own Artifact tool. If the tool is missing
 // or refuses, the address opens in the browser, as any web link does.
@@ -118,20 +118,29 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
           <Button key="update-empty" label="Update" variant="primary" onPress={askUpdate} />
         </Box>
       )
-    const steps = await read($, tasks)
-    const upd = await read($, updateState)
-    const auto = await read($, autoUpdate)
+    const steps = (await safe(read($, tasks), [] as Task[])) ?? []
+    const upd = await safe(read($, updateState), null)
+    const auto = await safe(read($, autoUpdate), null)
     // The model's items plus the task list's steps, each in its stage. A step the model also names shows once.
     // An item whose pull request merged is done, at the merge time, whatever the agent last sent: no agent call needed.
     const prMergedAt = (x: Item) => (x.pr != null ? (l?.ci?.[x.pr]?.mergedAt ?? null) : null)
     // The state marker's inferred marks and places lie on top (infer.ts); the agent's own state wins.
     const allItems: Item[] = await inferredItems($, [
-      ...s.items.map(x => (x.status !== 'done' && prMergedAt(x) !== null ? { ...x, status: 'done' as const, doneAt: prMergedAt(x), since: null } : x)),
+      ...s.items.map(x => {
+        if (x.status === 'done') return x
+        // A merged pull request closes the item, unless the agent named the item after the merge: the work went on.
+        const mergedAt = prMergedAt(x)
+        if (mergedAt !== null && mergedAt >= (x.touchedAt ?? 0)) return { ...x, status: 'done' as const, doneAt: mergedAt, since: null }
+        // An item bound to a task-list step closes when the step is marked done.
+        const bound = (x.taskStep ?? null) === null ? undefined : steps.find(t => t.name.trim().toLowerCase() === (x.taskStep ?? '').trim().toLowerCase())
+        return bound?.status === 'done' ? { ...x, status: 'done' as const, doneAt: bound.doneAt ?? null, since: null } : x
+      }),
       ...steps
-        // A stage the model fills with its own items shows those; the task list fills only stages it leaves empty.
-        .filter(x => !s.items.some(y => y.phase === x.phase))
-        .filter(x => !s.items.some(y => y.name.toLowerCase() === x.name.toLowerCase()))
-        .map(x => ({ phase: x.phase, name: cap(x.name), status: x.status, after: null, parent: null, when: null, since: x.since ?? null, doneAt: x.doneAt ?? null }) as Item),
+        // A stage the model fills with its own items shows those; the task list fills only stages it leaves empty. A
+        // step in progress shows in any stage, so the pane never says nothing runs while a step runs.
+        .filter(x => x.status === 'now' || !s.items.some(y => y.phase === x.phase))
+        .filter(x => !s.items.some(y => y.name.toLowerCase() === x.name.toLowerCase() || (y.taskStep ?? '').toLowerCase() === x.name.toLowerCase()))
+        .map(x => ({ id: `task:${idOf(x.name)}`, phase: x.phase, name: cap(x.name), status: x.status, after: null, parent: null, when: null, since: x.since ?? null, doneAt: x.doneAt ?? null }) as Item),
     ])
     // A stage's state. Done only when its phase is past AND every item in it is done: a passed stage with an
     // unfinished item stays in progress, beside the current stage. The current and the active stages are in progress.
@@ -182,12 +191,14 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const FIG = 12
     // What is open follows state: a card or an item in progress opens by itself, and a completed one closes. A press
     // overrides that, but only while the card stays in the state it had at the press; a change of state restores the rule.
+    // An item's key: its stage and id, so two items with one name never share a row key or an open state.
+    const itemKey = (x: Item) => `item-${x.phase}-${x.id ?? idOf(x.name)}`
     const stateOfKey = (key: string): string => {
       if (key.startsWith('stage-')) return stageState(Number(key.slice(6)))
-      if (key.startsWith('item-')) return allItems.find(x => `item-${x.name}` === key)?.status ?? 'next'
+      if (key.startsWith('item-')) return allItems.find(x => itemKey(x) === key)?.status ?? 'next'
       return 'fixed'
     }
-    const overrides = ((await read($, open)) ?? []).filter(x => x.includes('@'))
+    const overrides = ((await safe(read($, open), [] as string[])) ?? []).filter(x => x.includes('@'))
     const isOpenKey = (key: string) => {
       const st = stateOfKey(key)
       const mine = overrides.find(x => x.startsWith(`${key}@${st}=`))
@@ -201,41 +212,15 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     }
     const toggle = (k: number) => toggleKey(`stage-${k}`)
 
-    // The figure on a card follows the kind of gate: a status word, x of y, a plain x, or nothing.
+    // A gate is met by a status word (met, yes, done) or by x of y reached.
     const isMet = (c: Count) =>
       c.text !== undefined ? /^(met|yes|done|approved|merged|passed)$/i.test(c.text) : c.m !== undefined && c.n !== undefined && c.n >= c.m
-    const figureCell = (c: Count, isDim: boolean) => {
-      if (c.text === undefined && c.n === undefined) return null
-      const figure = figureOf(c)
-      const change = s.change !== null && s.change.label === c.label ? s.change : null
-      const isRecent = change !== null && t - change.at < 10 * 60_000
-      if (c.href !== undefined && isWebUrl(c.href))
-        return (
-          <Text>
-            {`${figure} `}
-            <Link href={c.href}>{c.hrefLabel ?? 'Open'}</Link>
-          </Text>
-        )
-      if (c.text !== undefined)
-        // A status word reads as a word, in the colour of its state, not as a large number.
-        return (
-          <Text weight="semibold" color={isMet(c) ? 'success' : isDim ? undefined : 'warning'} dimColor={isDim && !isMet(c)}>
-            {c.text}
-          </Text>
-        )
-      return (
-        <Text weight="semibold" dimColor={isDim && !isRecent} color={isRecent ? ACCENT_TEXT : isMet(c) ? 'success' : undefined}>
-          {figure}
-        </Text>
-      )
-    }
-
     const itemMark: Record<ItemStatus, string> = { done: '✓', now: '●', next: '○', failed: '✕' }
     const itemColor: Record<ItemStatus, string> = { done: 'success', now: ACCENT_TEXT, next: 'subtle', failed: 'error' }
     // The items of a stage as a tree: an item that waits for another sits indented under it; items side by side run in parallel.
     // Items are cards, nested to any depth by parent. Siblings in order: an item that waits for another follows it
     // after the other's gate; siblings with no wait between them run in parallel.
-    const itemState = (x: Item): 'done' | 'now' | 'next' => (x.status === 'done' ? 'done' : x.status === 'now' ? 'now' : 'next')
+    const itemState = (x: Item): ItemStatus => x.status
     // The item tree, drawn the way tree views draw it. Siblings share one column. A wait is a vertical line in the
     // badge column that joins the two badges, past any note and any child rows between them. Children indent by one
     // step (the badge column plus its gap). Every row carries the rail columns of its ancestors, so lines never break.
@@ -266,16 +251,9 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                   `${key}-${k}`,
                 )
               : /\.(md|markdown)$/i.test(l.href) && (l.href.startsWith('/') || l.href.startsWith('~'))
-                ? // The same chip as a web link. A native button ignores a child's colour, so the chip holds a Markdown link
-                  // the pane answers itself: a press opens the file in the document pane, not in another app.
-                  chip(
-                    <Markdown
-                      key={`doc-${key}-${k}`}
-                      text={`[↗ ${l.label.replace(/[[\]]/g, '')}](file://${encodeURI(l.href)})`}
-                      onLinkPress={() => void openDoc($, l.label, l.href)}
-                    />,
-                    `${key}-${k}`,
-                  )
+                ? // A local Markdown file opens in the document pane. A plain button, as the tabs and artifact chips are: a
+                  // Markdown link drew in the link colour, underlined.
+                  <Button key={`doc-${key}-${k}`} label={`↗ ${l.label}`} onPress={() => void openDoc($, l.label, l.href).catch(() => undefined)} />
                 : <Text color={SUBTEXT} key={`${key}-${k}`}>{`${l.label}: ${l.href}`}</Text>,
           )}
         </Box>
@@ -292,24 +270,21 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       </Box>
     )
     const prefix = (rails: boolean[], height: number, key: string) => rails.map((on, i) => railBox(on, height, `${key}-r${i}`))
-    const ordered = (list: Item[]) => {
-      const out: Item[] = []
-      const left = [...list]
-      // Each pass takes one item out, so the loop ends; a wait loop falls back to list order.
-      while (left.length > 0) {
-        const k = left.findIndex(x => x.after === null || !left.some(y => y.name === x.after))
-        out.push(...left.splice(k < 0 ? 0 : k, 1))
-      }
-      // Done items first, then failed and in progress, then pending at the bottom; waits keep their order inside each.
-      const rank = (x: Item) => (x.status === 'done' ? 0 : x.status === 'failed' ? 1 : x.status === 'now' ? 2 : 3)
-      return out.map((x, i) => ({ x, i })).sort((a, b) => rank(a.x) - rank(b.x) || a.i - b.i).map(p => p.x)
+    // Siblings in the work's own order: as the agent sent them, an item after the one it waits for. No sort by status,
+    // so a row never jumps when its status changes.
+    const ordered = (list: Item[]) => workOrder(list, allItems)
+    const kidsOf = (x: Item) => allItems.filter(y => y.phase === x.phase && y !== x && findRef(allItems, y.parent, y.phase, y) === x)
+    // The text rows a line of text takes at this width, so the tree lines are drawn as tall as the row (no gaps).
+    const linesOf = (text: string, depth: number, rails: number) => {
+      const cols = Math.max(10, Math.floor(((e.props.bodyColumns || 50) * 8 - 64 - (rails + 1) * STEP * 8 - CHEV * 8 - depth * 0) / 7))
+      return Math.max(1, Math.ceil(text.length / cols))
     }
     const itemCards = (list: Item[], depth: number, rails: boolean[] = []): RenderChildren => {
       const rows: RenderChildren[] = []
       const order = ordered(list)
       order.forEach((x, i) => {
-        const kids = allItems.filter(y => y.parent === x.name && y.phase === x.phase)
-        const key = `item-${x.name}`
+        const kids = kidsOf(x)
+        const key = itemKey(x)
         const isOpen = kids.length > 0 && isOpenKey(key)
         const state = itemState(x)
         // The item's pull request CI rides on the item's own line, after the item's time: a part of that time.
@@ -323,13 +298,17 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         // Siblings share one trunk, as in a tree view: the line joins every badge of the list, top to bottom.
         const down = i < order.length - 1
         const up = i > 0
+        const label = state === 'now' && (x.since ?? null) !== null ? `${x.name}  ·  00:00` : state === 'done' && (x.doneAt ?? null) !== null ? `${x.name}  ·  12:00 PM EST` : x.name
+        const rowH = 20 * linesOf(label + (ciPart ?? ''), depth, rails.length)
+        const word = state === 'done' ? 'done' : state === 'now' ? 'in progress' : state === 'failed' ? 'failed' : 'not started'
         rows.push(
-          <Box flexDirection="row" alignItems="center" gap={0} key={`${key}-row`}>
-            {prefix(rails, 20, `${key}-row`)}
-            <Box width={STEP} flexShrink={0}>
+          <Box flexDirection="row" alignItems="flex-start" gap={0} key={`${key}-row`}>
+            {prefix(rails, rowH, `${key}-row`)}
+            <Box width={STEP} flexShrink={0} flexDirection="column">
               {Svg !== undefined
-                ? svg(badgeSvg(state, 0, 16, up, down), `${x.name}: ${state === 'done' ? 'done' : state === 'now' ? 'in progress' : 'not started'}`, 20)
+                ? svg(state === 'failed' ? failedBadgeSvg(16, up, down) : badgeSvg(state, 0, 16, up, down), `${x.name}: ${word}`, 20)
                 : <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>}
+              {Svg !== undefined && rowH > 20 && down && svg(waitsLineSvg(rowH - 20), 'Wait line', rowH - 20)}
             </Box>
             <Box flexGrow={1} flexShrink={1}>
               {/* Body style for every item; the badge carries the state, the colour only steps back for done and later items. */}
@@ -354,9 +333,9 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         )
         if ((x.note ?? null) !== null)
           rows.push(
-            <Box flexDirection="row" gap={0} key={`${key}-note`}>
-              {prefix(rails, 14, `${key}-note`)}
-              {railBox(down, 14, `${key}-note-own`)}
+            <Box flexDirection="row" gap={0} alignItems="flex-start" key={`${key}-note`}>
+              {prefix(rails, 14 + 16 * (linesOf(x.note ?? '', depth, rails.length) - 1), `${key}-note`)}
+              {railBox(down, 14 + 16 * (linesOf(x.note ?? '', depth, rails.length) - 1), `${key}-note-own`)}
               <Box flexGrow={1} flexShrink={1} paddingRight={CHEV}>
                 <Text size="caption" color={NOTE} wrap="wrap">{x.note}</Text>
               </Box>
@@ -405,7 +384,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               </Box>,
             )
         }
-        const mine = s.links.filter(l => l.item !== null && l.item.toLowerCase() === x.name.toLowerCase())
+        const mine = s.links.filter(l => l.item !== null && findRef(allItems, l.item, x.phase) === x)
         if (mine.length > 0)
           rows.push(
             <Box flexDirection="row" gap={0} key={`${key}-links`}>
@@ -437,7 +416,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const itemTree = (k: number) => (
       // A stage's items are its children: they start where the stage name starts, as nested items start under theirs.
       <Box flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
-        {itemCards(allItems.filter(x => x.phase === k && (x.parent === null || !allItems.some(y => y.name === x.parent && y.phase === k))), 0)}
+        {itemCards(allItems.filter(x => x.phase === k && findRef(allItems, x.parent, k, x) === undefined), 0)}
       </Box>
     )
 
@@ -508,7 +487,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                 </Text>
               </Box>
             )}
-          {state === 'now' && Svg !== undefined && running.length > 0 && (hostName === null || k !== s.phase) && (
+          {k === s.phase && Svg !== undefined && running.length > 0 && hostName === null && (
             <Box flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
               {running.slice(0, 4).map(x =>
                 svg(
@@ -548,7 +527,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     })
     const barInput = { total, done: Math.min(s.phase, total), current, isDone, clock: 0, names: s.phases, tips, checks: s.phases.map((_, k) => stageState(k) === 'done'), widthPx: Math.max(160, (e.props.bodyColumns || 50) * 8 - 32) }
     const barFits = Svg === undefined || trackFits(barInput)
-    const barStart = await read($, barStartAtom)
+    const barStart = await safe(read($, barStartAtom), null)
     // The git bar: one line, closed by default; open, it lists the facts behind the line.
     const g = l?.git ?? null
     const isGitOpen = isOpenKey('git')
@@ -621,7 +600,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               {prs.map(p =>
                 row(
                   <Text>
-                    <Link href={`${p.url}/files`}>{`#${p.number}`}</Link>
+                    {isWebUrl(p.url) ? <Link href={`${p.url}/files`}>{`#${p.number}`}</Link> : `#${p.number}`}
                     {`  ${p.title}`}
                   </Text>,
                   small(p.state === 'MERGED' ? 'Merged' : p.state === 'CLOSED' ? 'Closed' : 'Open'),
@@ -635,7 +614,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
 
     // Tabs: Progress, then one tab for each runbook the session follows. A press switches the view.
     const runbooks = s.runbooks ?? []
-    const tab = await read($, tabAtom)
+    const tab = await safe(read($, tabAtom), null)
     const book = runbooks.find(r => r.id === tab) ?? null
     // Tabs: Progress, PRs (always), then each runbook or skill the session follows.
     const sessionPrs = l?.sessionPrs ?? []
@@ -813,7 +792,10 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
           ) : (
             // Stale: amber is the only stale signal, with the age.
             clock - s.at >= STALE_MS && (
-              <Text color="warning" wrap="wrap">{`No update from the agent for ${age(s.at, clock)}. Press Update to ask for one.`}</Text>
+              <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
+                <Text color="warning" wrap="wrap">{`No update from the agent for ${age(s.at, clock)}.`}</Text>
+                <Button key="update-stale" label="Update" onPress={askUpdate} />
+              </Box>
             )
           )}
           {readFailed && <Text color="error" wrap="wrap">The pane could not read part of its stored state. It shows the last good view.</Text>}

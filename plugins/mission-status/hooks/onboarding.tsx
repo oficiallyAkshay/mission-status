@@ -144,10 +144,13 @@ async function begin($: EngineInterface): Promise<void> {
 async function finish($: EngineInterface, closePane: boolean): Promise<void> {
   stopDemo()
   isActive = false
-  await update($, onboarded, () => true)
-  await keep($, await onboardedKey($), true)
-  await restoreBackdrop($).catch(() => undefined)
-  if (closePane) await $.ui.close({ id: WELCOME_PANE }).catch(() => undefined)
+  try {
+    await update($, onboarded, () => true)
+    await keep($, await onboardedKey($), true)
+  } finally {
+    await restoreBackdrop($).catch(() => undefined)
+    if (closePane) await $.ui.close({ id: WELCOME_PANE }).catch(() => undefined)
+  }
 }
 
 async function isDesktop($: EngineInterface, surface: string | null): Promise<boolean> {

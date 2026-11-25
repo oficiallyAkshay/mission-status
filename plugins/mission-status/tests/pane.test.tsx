@@ -163,7 +163,7 @@ test('cards carry links and items carry a scope note; dependents indent; only ru
     phase: 1,
     links: [{ phase: 0, label: 'Plan', href: '/tmp/plan.md' }, { item: 'wave 1', label: 'Brief', href: 'https://example.com/b' }],
     items: [
-      { phase: 0, name: 'plan', status: 'done' },
+      { phase: 0, name: 'write the plan', status: 'done' },
       { phase: 1, name: 'wave 1', status: 'now', note: 'schema, metrics, onboarding' },
       { phase: 1, name: 'wave 2', status: 'next', after: 'wave 1' },
       { phase: 1, name: 'split', status: 'done' },
@@ -173,7 +173,7 @@ test('cards carry links and items carry a scope note; dependents indent; only ru
   await ui.press({ key: 'open-0' })
   // a local Markdown file is a button that opens the document pane, not a dead file link
   expect((await ui.findAll({ type: 'Link' })).some(x => String(x.props?.href ?? '').startsWith('file:'))).toBe(false)
-  expect((await ui.findAll({ type: 'Markdown' })).some(x => String(x.props?.text ?? '').startsWith('[↗ Plan]('))).toBe(true)
+  expect((await ui.findAll({ type: 'Button' })).some(x => String(x.props?.label ?? '') === '↗ Plan')).toBe(true)
   expect((await ui.findAll({ type: 'Link' })).some(x => x.props?.href === 'https://example.com/b')).toBe(true)
   expect(await text(ui, /^Schema, metrics, onboarding$/)).toBeTruthy()
   expect(await svgAlt(ui, 'Wait line')).toBeTruthy()
@@ -364,7 +364,7 @@ test('runbooks: one runbook is a Runbook tab beside Progress; each step carries 
   await after.unmount()
 })
 
-test('a stage card lists done items first, then items in progress, then pending items at the bottom', async ($, on) => {
+test('a stage card lists its items in the order the agent sent them, whatever their status', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'build', phase: 1, items: [
     { phase: 1, name: 'Later', status: 'next' },
@@ -373,7 +373,7 @@ test('a stage card lists done items first, then items in progress, then pending 
   ] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const names = (await ui.findAll({ type: 'Text' })).map(x => String(x.text ?? '').split(' ')[0]).filter(t => ['Later', 'Running', 'Finished'].includes(t))
-  expect(names).toEqual(['Finished', 'Running', 'Later'])
+  expect(names).toEqual(['Later', 'Running', 'Finished'])
   await ui.unmount()
 })
 
@@ -393,7 +393,8 @@ test('done items show the time they were done, at every level of nesting', async
 
 test('an item whose pull request merged shows done at the merge time, with no agent update', async ($, on) => {
   on('process.run', (_: unknown, e: { argv: string[] }) => {
-    const out = e.argv[0] === 'gh' && e.argv[1] === 'pr' && e.argv[2] === 'view' ? JSON.stringify({ statusCheckRollup: [], mergedAt: '2026-11-25T02:00:00Z' }) : ''
+    // The pull request merges after the agent's last update named the item.
+    const out = e.argv[0] === 'gh' && e.argv[1] === 'pr' && e.argv[2] === 'view' ? JSON.stringify({ statusCheckRollup: [], mergedAt: new Date(Date.now() + 1000).toISOString() }) : ''
     return { value: { exitCode: out === '' ? 1 : 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   await start($, on, [], true)
@@ -402,6 +403,19 @@ test('an item whose pull request merged shows done at the merge time, with no ag
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await svgAlt(ui, /^Ship it: done$/)).toBeTruthy()
   expect(await text(ui, /^Ship it  ·  \d{1,2}:\d{2} (AM|PM) [A-Z]+$/)).toBeTruthy()
+  await ui.unmount()
+})
+
+test('an item the agent names in progress after its pull request merged stays in progress: the work went on', async ($, on) => {
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    const out = e.argv[0] === 'gh' && e.argv[1] === 'pr' && e.argv[2] === 'view' ? JSON.stringify({ statusCheckRollup: [], mergedAt: new Date(Date.now() - 60_000).toISOString() }) : ''
+    return { value: { exitCode: out === '' ? 1 : 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  await start($, on, [], true)
+  await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'Ship it', status: 'now', pr: 7 }] })
+  await new Promise(r => setTimeout(r, 50))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await svgAlt(ui, /^Ship it: in progress$/)).toBeTruthy()
   await ui.unmount()
 })
 

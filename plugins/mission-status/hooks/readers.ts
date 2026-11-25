@@ -6,13 +6,15 @@ import { nowOf } from './store'
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const live = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
 
-// The Merge card's timing. Git is read every 5 s at all times. GitHub is read every 30 s while a pull request is open;
+// The Merge card's timing. Git is read every 15 s while the pane is open. GitHub is read every 30 s while a pull request is open;
 // with no open pull request, again when the branch or its upstream moves, or after 5 minutes. After a failed read the
 // wait doubles from 60 s up to 10 minutes.
-export const GIT_MS = 5_000
+export const GIT_MS = 15_000
 export const GH_MS = 60_000
 export const GH_IDLE_MS = 5 * 60_000
 export const GH_MAX_MS = 10 * 60_000
+// The pane counts as open when it was drawn within this long; git and GitHub are read only then.
+export const PANE_OPEN_MS = 30_000
 // A session that starts a GitHub read holds it this long, so other sessions on the repository wait for its result.
 const LEASE_MS = 25_000
 // Shared reads of a repository nobody polled for 7 days are deleted.
@@ -175,6 +177,9 @@ export async function readGh($: EngineInterface, branch: string): Promise<{ gh: 
   return { gh: 'failed', prs: [] }
 }
 
+// The CI of a pull request no item names any more is dropped.
+export const ciNamed = (ci: Record<string, ItemCi>, refs: string[]): Record<string, ItemCi> => Object.fromEntries(Object.entries(ci).filter(([ref]) => refs.includes(ref)))
+
 let ciAt = 0
 let prsAt = 0
 let prsSeen = 0
@@ -250,9 +255,56 @@ export async function readItemCi($: EngineInterface, ref: string): Promise<ItemC
   }
 }
 
+// The pane's last draw or opening: git and GitHub are read only while the pane is open, that is seen within PANE_OPEN_MS.
+// A flag the Pane render and each ui.open set, the least machinery that needs no event for a closed pane.
+let paneAt = 0
+// The pane was drawn or opened. After a closed spell a draw starts a read, so the card has facts soon.
+export async function paneSeen($: EngineInterface, drawn = false): Promise<void> {
+  const t = await nowOf($)
+  const cold = t - paneAt > PANE_OPEN_MS
+  paneAt = t
+  if (cold && drawn) void poll($, true)
+}
+
+// The poll running now, if one runs, and whether a forced poll arrived during it.
+let current: Promise<void> | null = null
+let pollAgain = false
+
 // One poll, every 5 s from register.tsx; this file keeps the Merge card's own timing.
 // force: an agent update just came; GitHub is read now, not at its next 60 s turn.
-export async function poll($: EngineInterface, force = false): Promise<void> {
+// One poll runs at a time; a forced poll that arrives meanwhile makes one more run after it. The answer settles
+// when the runs are done.
+export function poll($: EngineInterface, force = false): Promise<void> {
+  if (current !== null) {
+    if (force) pollAgain = true
+    return current
+  }
+  current = (async () => {
+    try {
+      let forced = force
+      do {
+        pollAgain = false
+        await pollOnce($, forced)
+        forced = true
+      } while (pollAgain)
+    } catch {
+      // A poll that broke leaves the card as it was; the next tick reads again.
+    } finally {
+      current = null
+    }
+  })()
+  return current
+}
+
+async function pollOnce($: EngineInterface, force: boolean): Promise<void> {
+  const t = await nowOf($)
+  // With the pane closed nothing shows git or GitHub, so none is read; the helpers still are. The app's own list of
+  // panes says whether it is open; where that list cannot be read, the last draw within PANE_OPEN_MS stands in.
+  const listed = await Promise.resolve()
+    .then(() => $.ui.panes())
+    .then(list => list.some(x => x.id === 'progress' && x.isPlaced))
+    .catch(() => null)
+  const shown = listed ?? t - paneAt <= PANE_OPEN_MS
   if (force) {
     ciAt = 0
     prsAt = 0
@@ -273,25 +325,25 @@ export async function poll($: EngineInterface, force = false): Promise<void> {
       startTime: a.startTime,
     }))
   } catch {}
-  const t = await nowOf($)
-  const merge = await pollRepo($, t, force).catch(() => null)
-  const before = await read($, live).catch(() => null)
+  const merge = shown ? await pollRepo($, t, force).catch(() => null) : undefined
   // CI of the pull requests items name: read every 30 s, at most 6, and kept between reads.
-  const refs = [...new Set(((sum as { items?: { pr?: string | null; status?: string }[] } | null)?.items ?? []).map(i => i.pr ?? null).filter((x): x is string => x !== null))].slice(0, 6)
+  const named6 = [...new Set(((sum as { items?: { pr?: string | null; status?: string }[] } | null)?.items ?? []).map(i => i.pr ?? null).filter((x): x is string => x !== null))]
+  const refs = named6.slice(0, 6)
   const ci: Record<string, ItemCi> = {}
   // The pull requests this session made: their state for the PRs tab, read every 30 s, the newest 20.
-  const made = (await read($, prRefsAtom).catch(() => [] as string[])).slice(-20)
-  let sessionPrs: SessionPr[] | null = null
+  const made = shown ? (await read($, prRefsAtom).catch(() => [] as string[])).slice(-20) : []
+  // The read of each pull request; one that failed has no entry, and the stored one stays.
+  let sessionPrs: Map<string, SessionPr> | null = null
   if (made.length > 0 && (t - prsAt >= CI_MS || made.length !== prsSeen)) {
     prsAt = t
     prsSeen = made.length
-    sessionPrs = []
+    sessionPrs = new Map()
     for (const ref of made) {
       const got = await readSessionPr($, ref, t).catch(() => null)
-      if (got !== null) sessionPrs.push(got)
+      if (got !== null) sessionPrs.set(ref, got)
     }
   }
-  if (refs.length > 0 && t - ciAt >= CI_MS) {
+  if (shown && refs.length > 0 && t - ciAt >= CI_MS) {
     ciAt = t
     for (const ref of refs) {
       const got = await readItemCi($, ref).catch(() => null)
@@ -299,7 +351,10 @@ export async function poll($: EngineInterface, force = false): Promise<void> {
     }
   }
   try {
-    await update($, live, () => {
+    // Built from the value in the store when the write runs, so a poll that overlapped this one is not overwritten.
+    await update($, live, before => {
+      // The pane is closed: the facts stay as they were.
+      if (merge === undefined) return { ...(before ?? { prs: [], at: t, reads: 0, git: null }), helpers } as Live
       const next: MergeLive =
         merge === null
           ? // The read itself broke: keep the last good facts and say the read failed.
@@ -321,7 +376,10 @@ export async function poll($: EngineInterface, force = false): Promise<void> {
               git: merge.git,
               merge: { repo: merge.repo, gh: merge.gh, ghAt: merge.ghAt, nextGhAt: merge.nextGhAt, failures: merge.failures },
             }
-      return { ...next, ci: { ...(before?.ci ?? {}), ...ci }, sessionPrs: sessionPrs ?? before?.sessionPrs ?? [] } as Live
+      // A pull request whose read failed keeps its previous entry.
+      const prev = before?.sessionPrs ?? []
+      const sessionOut = sessionPrs === null ? prev : made.map(ref => sessionPrs.get(ref) ?? prev.find(p => p.ref === ref)).filter((x): x is SessionPr => x !== undefined)
+      return { ...next, ci: ciNamed({ ...(before?.ci ?? {}), ...ci }, named6), sessionPrs: sessionOut } as Live
     })
   } catch {
     // The session or the reload ended while the read ran: the next tick writes again.
@@ -356,17 +414,10 @@ export async function pollRepo(
       await writeShared($, { ...r, lease: t + LEASE_MS })
       const got = await readGh($, branch)
       const failures = got.gh === 'failed' ? r.failures + 1 : 0
-      r = {
-        ...r,
-        sig,
-        gh: got.gh,
-        // A failed read keeps the last good pull requests.
-        prs: got.gh === 'failed' ? r.prs : got.prs,
-        ghAt: t,
-        failures,
-        nextGhAt: nextGh(got.gh, got.gh === 'failed' ? r.prs : got.prs, failures, t),
-        lease: 0,
-      }
+      // A failed read keeps the last good pull requests, unless the branch changed: those belong to the old branch.
+      const branchOf = (s: string) => s.slice(0, s.lastIndexOf('@'))
+      const prs = got.gh !== 'failed' ? got.prs : branchOf(r.sig) === branchOf(sig) ? r.prs : []
+      r = { ...r, sig, gh: got.gh, prs, ghAt: t, failures, nextGhAt: nextGh(got.gh, prs, failures, t), lease: 0 }
       changed = true
     }
   }
@@ -390,19 +441,22 @@ export async function readGit($: EngineInterface): Promise<Git> {
     if (sha === null || sha === '') return null
     branch = `detached at ${sha}`
   }
-  // The default branch: the remote's HEAD, else main or master, on the remote first. Found once per module load: the
-  // poll runs every 5 s and the answer does not change in a session.
-  if (defaultBranch === null) {
+  // The default branch: the remote's HEAD, else main or master, on the remote first. Kept once it is verified: the
+  // answer does not change in a session.
+  // Only a verified answer is kept; with none, main is used for this read and the next read looks again.
+  let main = defaultBranch
+  if (main === null) {
     const head = await run(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])
-    defaultBranch = head !== null && head !== '' ? head : 'main'
-    if (head === null || head === '')
+    let found: string | null = head !== null && head !== '' ? head : null
+    if (found === null)
       for (const c of ['origin/main', 'origin/master', 'main', 'master'])
         if (await run(['git', 'rev-parse', '--verify', '--quiet', c])) {
-          defaultBranch = c
+          found = c
           break
         }
+    defaultBranch = found
+    main = found ?? 'main'
   }
-  const main = defaultBranch
   const base = await run(['git', 'merge-base', 'HEAD', main])
   const ahead = base === null ? 0 : Number((await run(['git', 'rev-list', '--count', `${base}..HEAD`])) ?? 0)
   const behind = Number((await run(['git', 'rev-list', '--count', `HEAD..${main}`])) ?? 0)

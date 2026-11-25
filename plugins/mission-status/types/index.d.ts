@@ -2,7 +2,7 @@ export type Count = { label: string; when?: string; n?: number; m?: number; text
 export type ItemStatus = 'done' | 'now' | 'next' | 'failed'
 // id: the agent's stable id for its item (from the name when the agent sends none). The task-list steps are the
 // pane's own items, kept apart in `tasks`: no agent write deletes them.
-export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null; pr?: string | null; doneAt?: number | null; steps?: string[] | null; step?: number | null; inferred?: boolean }
+export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null; pr?: string | null; doneAt?: number | null; steps?: string[] | null; step?: number | null; inferred?: boolean; taskStep?: string | null; touchedAt?: number | null }
 export type StepStatus = 'done' | 'now' | 'next'
 export type StageKey = 'plan' | 'build' | 'fix' | 'cause' | 'review' | 'ship'
 export type HypothesisState = 'open' | 'testing' | 'ruled out' | 'confirmed'
@@ -43,6 +43,8 @@ export type Summary = {
   waitingForAgent?: boolean
   // Set by the pane after 2 ignored reminders; the view shows "May be out of date".
   mayBeOutOfDate?: boolean
+  // The newest version the agent sent, kept inside the state so the check and the write read the same value.
+  agentVersion?: number
 } | null
 // The freshness triggers' own record (store.ts): tool calls, the stale window and the reminders.
 export type Fresh = {
@@ -61,7 +63,7 @@ export type Fresh = {
   turnCalls?: number
   turnUpdated?: boolean
 }
-export type MetricsSession = { holdback: boolean; calls: number; realWork: boolean }
+export type MetricsSession = { holdback: boolean; calls: number; realWork: boolean; paneSent?: boolean }
 // The state marker (infer.ts): Sarvam's marks (by item key, with the status the item had when marked), the parents it
 // placed, the item keys already seen, and its own counts of requests, input tokens and refusals in a row.
 export type InferState = { marks: Record<string, { status: ItemStatus; from: ItemStatus; at: number }>; parents: Record<string, string>; seen: string[]; calls: number; tokens: number; fails: number; off: boolean }
@@ -83,6 +85,9 @@ declare module 'claude-code' {
       // Wave 1: freshness triggers (store.ts)
       fresh: Fresh; doc: { title: string; path: string } | null
       // The state marker (infer.ts)
-      infer: InferState | null }
+      infer: InferState | null
+      // The quiet chat's hidden and shown blocks (quiet.tsx), kept across a reload.
+      quietKept: { hidden: string[]; shown: string[] } }
+
   }
 }

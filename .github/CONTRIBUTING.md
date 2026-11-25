@@ -27,7 +27,7 @@ The pane opens by itself once a session does real work, and `/mission-status` op
 
 ## Templates
 
-The agent picks a template, or writes its own stages when none fits. It can add, remove or rename stages at any time, and save a set of stages as a personal template.
+The pane ships ten templates. The agent picks one, or writes its own stages when none fits. It can add, remove or rename stages at any time, and save a set of stages as a personal template.
 
 | Template | Stages |
 |---|---|
@@ -40,10 +40,11 @@ The agent picks a template, or writes its own stages when none fits. It can add,
 | Board batch | Intake, Plan, Build, Review, Merge |
 | Writing | Outline, Draft, Review, Publish |
 | Migration | Plan, Dry run, Migrate, Verify, Clean up |
+| Plan review | Intake, Draft, Review waves, Your rows, Hand off |
 
 ## Updates and cost
 
-The plugin checks this repository's latest release at start and every six hours, and installs a newer one between turns. A copy installed from a folder never updates itself. Most of the pane is read by code and costs no tokens: the task list, helpers, git and timers. Only a change of stage asks the agent, in one short update call.
+The plugin checks this repository's latest release at start and every six hours, and installs a newer one between turns. A copy installed from a folder never updates itself. Most of the pane is read by code and costs no tokens: the task list, helpers, git and timers. Three things ask the agent for an update: a stage change, a reminder when the state is stale, and the hold of a turn end. The reminder and the hold each ask the agent to call the update tool once.
 
 ## Workflows
 

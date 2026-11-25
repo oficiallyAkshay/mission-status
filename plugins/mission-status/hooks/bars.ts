@@ -189,6 +189,26 @@ export function badgeSvg(state: 'done' | 'now' | 'next' | 'dot', clock: number, 
 
 
 
+// A failed item's badge: a red ring with a cross. In a 20 px tall cell when up or down is given, as badgeSvg draws it.
+export function failedBadgeSvg(size = 16, up?: boolean, down?: boolean): string {
+  const S = size
+  const c = S / 2
+  const k = S * 0.18
+  const mark =
+    `<style>.bf{stroke:#E5484D}@media (prefers-color-scheme:light){.bf{stroke:#C4314B}}</style>` +
+    `<circle class="bf" cx="${c}" cy="${c}" r="${c - 1.5}" fill="none" stroke-width="1.6"/>` +
+    `<path class="bf" d="M${c - k} ${c - k} L${c + k} ${c + k} M${c + k} ${c - k} L${c - k} ${c + k}" stroke-width="1.6" stroke-linecap="round"/>`
+  if (up === undefined && down === undefined) return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}">${mark}</svg>`
+  const pad = (20 - S) / 2
+  const stub = (y1: number, y2: number) => `<path class="wa" d="M8 ${y1} V${y2}" stroke-width="1.5"/>`
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="20">${WAITS_STYLE}` +
+    (up === true ? stub(0, pad) : '') +
+    (down === true ? stub(20 - pad, 20) : '') +
+    `<g transform="translate(${(16 - S) / 2} ${pad})">${mark}</g></svg>`
+  )
+}
+
 // The line that runs on beside an item's note, from its badge down to the items that wait for it.
 // The wait line, in the theme's grey (light theme too); the colour argument is kept for callers and not used.
 const WAITS_STYLE = `<style>.wa{stroke:${LINE}}@media (prefers-color-scheme:light){.wa{stroke:${LIGHT.grey}}}</style>`
