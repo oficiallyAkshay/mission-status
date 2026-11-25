@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
+import type { Activity, Count, Fresh, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
+import { AUTO_OPEN_CALLS, FIRST_REMINDER, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, STALE_MS, STALE_STEPS, autoSummary, normalize } from './model'
 
 export const PANE = 'progress'
 // The pane's one accent, the purple of the stage bar; the app's own accent is orange.
@@ -33,4 +34,140 @@ export async function tick($: EngineInterface): Promise<void> {
   try {
     await update($, now, () => Date.now())
   } catch {}
+}
+
+
+// ---- Freshness triggers (product plan, "How the state stays current") ----
+
+export const FRESH0: Fresh = {
+  calls: 0,
+  lastAgentAt: null,
+  agentVersion: 0,
+  windowFrom: 0,
+  steps: 0,
+  stale: false,
+  held: false,
+  outstanding: -1,
+  ignored: 0,
+}
+// The triggers' record: tool calls, the stale window, the reminders sent and ignored. It outlives a reload.
+export const fresh = atom({ plugin: 'mission-status', key: 'fresh' } as const, FRESH0)
+
+// The engine's clock where it answers, else the wall clock.
+export async function nowOf($: EngineInterface): Promise<number> {
+  try {
+    return await $.clock.now()
+  } catch {
+    return Date.now()
+  }
+}
+
+// One ignored reminder more; at the limit the state is marked "May be out of date".
+function ignore(f: Fresh): Fresh {
+  return { ...f, outstanding: -1, ignored: f.ignored + 1 }
+}
+
+async function markOutOfDate($: EngineInterface, f: Fresh): Promise<void> {
+  if (f.ignored < IGNORED_LIMIT) return
+  await update($, summary, s => {
+    const old = normalize(s)
+    if (old === null || old.mayBeOutOfDate === true) return s
+    return { ...old, mayBeOutOfDate: true, version: (old.version ?? 0) + 1 }
+  })
+}
+
+// After each main-loop tool call other than the pane's own: counts it, opens the pane at the 5th call with no agent
+// state, and sends the stale reminder. Answers the one line to add to the agent's next step, or null.
+export async function afterToolCall($: EngineInterface): Promise<string | null> {
+  const at = await nowOf($)
+  const stored = await read($, summary)
+  // What the committed run of the updater decided (update may run it again on a write race).
+  const out = { line: null as string | null, openAuto: false }
+  const f = await update($, fresh, raw => {
+    let x: Fresh = { ...FRESH0, ...raw, calls: (raw?.calls ?? 0) + 1 }
+    out.line = null
+    out.openAuto = false
+    if (x.windowFrom === 0) x.windowFrom = at
+    if (x.outstanding >= 0) {
+      x.outstanding += 1
+      if (x.outstanding >= IGNORED_AFTER) x = ignore(x)
+    }
+    if (x.calls === AUTO_OPEN_CALLS && x.lastAgentAt === null && stored === null) {
+      out.openAuto = true
+      out.line = FIRST_REMINDER
+      return { ...x, windowFrom: at, steps: 0, outstanding: 0 }
+    }
+    if (stored !== null || x.lastAgentAt !== null) {
+      if (at - x.windowFrom >= STALE_MS || x.steps >= STALE_STEPS) {
+        // A reminder still open when the next one falls due was ignored.
+        if (x.outstanding >= 0) x = ignore(x)
+        out.line = REMINDER
+        return { ...x, stale: true, windowFrom: at, steps: 0, outstanding: 0 }
+      }
+    }
+    return x
+  })
+  if (out.openAuto) {
+    const steps = await read($, tasks)
+    const built = autoSummary(steps, at)
+    const done = { wrote: false }
+    await update($, summary, s => {
+      done.wrote = s === null
+      return s === null ? built.summary : s
+    })
+    if (done.wrote) {
+      await update($, tasks, () => built.steps)
+      await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+    }
+  }
+  await markOutOfDate($, f)
+  return out.line
+}
+
+// A task-list call started this many steps: they count toward the stale window.
+export async function noteSteps($: EngineInterface, started: number): Promise<void> {
+  if (started <= 0) return
+  await update($, fresh, raw => ({ ...FRESH0, ...raw, steps: (raw?.steps ?? 0) + started }))
+}
+
+// A turn ends. While stale it holds the end once and asks the agent for an update; answers that request, or null.
+export async function atTurnEnd($: EngineInterface, isHeldAlready: boolean): Promise<string | null> {
+  const at = await nowOf($)
+  const shown = (await read($, summary)) !== null
+  const out = { hold: null as string | null }
+  const f = await update($, fresh, raw => {
+    let x: Fresh = { ...FRESH0, ...raw }
+    out.hold = null
+    // An end with a reminder still open: the agent ignored it.
+    if (x.outstanding >= 0) x = ignore(x)
+    const due = shown && (at - x.windowFrom >= STALE_MS || x.steps >= STALE_STEPS)
+    if ((x.stale || due) && !x.held && !isHeldAlready) {
+      out.hold = HOLD_TEXT
+      return { ...x, stale: true, held: true, outstanding: 0, windowFrom: at, steps: 0 }
+    }
+    return x
+  })
+  await markOutOfDate($, f)
+  return out.hold
+}
+
+// A valid agent update: the state is fresh again and the flags clear.
+export async function agentUpdated($: EngineInterface, version: number | undefined): Promise<void> {
+  const at = await nowOf($)
+  await update($, fresh, raw => ({
+    ...FRESH0,
+    ...raw,
+    lastAgentAt: at,
+    agentVersion: version ?? (raw?.agentVersion ?? 0),
+    windowFrom: at,
+    steps: 0,
+    stale: false,
+    held: false,
+    outstanding: -1,
+    ignored: 0,
+  }))
+}
+
+export async function agentVersionOf($: EngineInterface): Promise<number> {
+  return (await read($, fresh)).agentVersion ?? 0
 }
