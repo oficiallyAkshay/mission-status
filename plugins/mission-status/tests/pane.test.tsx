@@ -359,3 +359,16 @@ test('runbooks: each one is a tab beside Progress, and its tab shows the steps w
   expect((await after.findAll({ type: 'Button' })).some(x => x.key === 'tab-release')).toBe(false)
   await after.unmount()
 })
+
+test('a stage card lists done items first, then items in progress, then pending items at the bottom', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', stage: 'build', phase: 1, items: [
+    { phase: 1, name: 'Later', status: 'next' },
+    { phase: 1, name: 'Running', status: 'now' },
+    { phase: 1, name: 'Finished', status: 'done' },
+  ] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const names = (await ui.findAll({ type: 'Text' })).map(x => String(x.text ?? '').split(' ')[0]).filter(t => ['Later', 'Running', 'Finished'].includes(t))
+  expect(names).toEqual(['Finished', 'Running', 'Later'])
+  await ui.unmount()
+})
