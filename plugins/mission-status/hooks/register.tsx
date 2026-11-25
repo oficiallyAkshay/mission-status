@@ -355,7 +355,8 @@ export const register: Register = on => {
     await tick($)
     // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
     if (!(await read($, holdback))) await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
-    void poll($)
+    // Each agent update reads GitHub at once: pull requests, CI and merges.
+    void poll($, true)
     // A saved template: the stages this update left, under the person's name for them.
     let saved = ''
     if (typeof args.saveTemplate === 'string' && written !== null) {

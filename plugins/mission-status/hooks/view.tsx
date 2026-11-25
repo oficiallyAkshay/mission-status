@@ -568,16 +568,23 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     // Tabs: Progress, PRs (always), then each runbook or skill the session follows.
     const sessionPrs = l?.sessionPrs ?? []
     const onPrs = tab === 'prs'
+    // The tabs are chips like the pane's other chips, not native buttons: the open tab in the bar's purple, the others
+    // in a quiet grey. A chip is a Markdown link the pane answers itself.
+    const tabChip = (key: string, label: string, isOn: boolean, value: string | null) => (
+      <Box key={key} backgroundColor={isOn ? 'rgba(139, 124, 246, 0.45)' : 'rgba(128, 128, 128, 0.16)'} paddingX={1} flexShrink={0}>
+        <Markdown key={key} text={`${isOn ? '**' : ''}[${label}](https://tab.local/${encodeURIComponent(value ?? 'progress')})${isOn ? '**' : ''}`} onLinkPress={() => void update($, tabAtom, () => value)} />
+      </Box>
+    )
     const tabRow = (
-        <Box flexDirection="row" gap={1} flexWrap="wrap" key="tabs">
-          <Button key="tab-progress" label="Progress" variant={book === null && !onPrs ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => null)} />
-          <Button key="tab-prs" label={sessionPrs.length > 0 ? `PRs  ${sessionPrs.length}` : 'PRs'} variant={onPrs ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => 'prs')} />
-          {/* One runbook: its tab reads Runbook, and its title heads the view. Several: each tab carries its title. */}
-          {runbooks.map(r => (
-            <Button key={`tab-${r.id}`} label={runbooks.length === 1 ? (r.id.startsWith('skill-') ? 'Skill' : 'Runbook') : r.title.replace(/^Skill: /, '')} variant={book?.id === r.id ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => r.id)} />
-          ))}
-        </Box>
-      )
+      <Box flexDirection="row" gap={1} flexWrap="wrap" key="tabs">
+        {tabChip('tab-progress', 'Progress', book === null && !onPrs, null)}
+        {tabChip('tab-prs', sessionPrs.length > 0 ? `PRs ${sessionPrs.length}` : 'PRs', onPrs, 'prs')}
+        {/* One runbook: its tab reads Runbook (or Skill), and its title heads the view. Several: each tab carries its title. */}
+        {runbooks.map(r =>
+          tabChip(`tab-${r.id}`, runbooks.length === 1 ? (r.id.startsWith('skill-') ? 'Skill' : 'Runbook') : r.title.replace(/^Skill: /, ''), book?.id === r.id, r.id),
+        )}
+      </Box>
+    )
     if (onPrs) {
       // The PRs tab: every pull request this session made, newest first, as a card that opens to its facts.
       const word = { merged: 'Merged', open: 'Open', draft: 'Draft', conflict: 'Conflict', closed: 'Closed' } as const

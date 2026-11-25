@@ -10,7 +10,7 @@ const live = atom({ plugin: 'mission-status', key: 'live' } as const, null as Li
 // with no open pull request, again when the branch or its upstream moves, or after 5 minutes. After a failed read the
 // wait doubles from 60 s up to 10 minutes.
 export const GIT_MS = 5_000
-export const GH_MS = 30_000
+export const GH_MS = 60_000
 export const GH_IDLE_MS = 5 * 60_000
 export const GH_MAX_MS = 10 * 60_000
 // A session that starts a GitHub read holds it this long, so other sessions on the repository wait for its result.
@@ -44,7 +44,9 @@ export type MergeLive = Live & { merge?: MergeInfo }
 
 export const storeKey = (repo: string) => `repo:${repo}`
 // 60 s after one failure, 120 s after two, and so on, never more than 10 minutes.
-export const backoffMs = (failures: number) => Math.min(GH_MAX_MS, GH_MS * 2 ** Math.max(1, failures))
+// The backoff keeps its own 30 s base: a failed read waits 60 s, then 120 s, whatever the normal read interval.
+const BACKOFF_BASE_MS = 30_000
+export const backoffMs = (failures: number) => Math.min(GH_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(1, failures))
 
 
 // git runs in any folder the session opens: a repository's own config must not start a program (fsmonitor, an
@@ -213,7 +215,7 @@ export async function readSessionPr($: EngineInterface, ref: string, at: number)
     return null
   }
 }
-const CI_MS = 30_000
+const CI_MS = 60_000
 
 // The CI of one pull request: running while any check runs, else failing or passing, with the first start and the
 // last finish of its checks.
@@ -246,7 +248,12 @@ export async function readItemCi($: EngineInterface, ref: string): Promise<ItemC
 }
 
 // One poll, every 5 s from register.tsx; this file keeps the Merge card's own timing.
-export async function poll($: EngineInterface): Promise<void> {
+// force: an agent update just came; GitHub is read now, not at its next 60 s turn.
+export async function poll($: EngineInterface, force = false): Promise<void> {
+  if (force) {
+    ciAt = 0
+    prsAt = 0
+  }
   const sum = await read($, summaryAtom).catch(() => null)
   const named = (sum as { repo?: string | null } | null)?.repo ?? null
   if (named !== repoDir) {
@@ -264,7 +271,7 @@ export async function poll($: EngineInterface): Promise<void> {
     }))
   } catch {}
   const t = await nowOf($)
-  const merge = await pollRepo($, t).catch(() => null)
+  const merge = await pollRepo($, t, force).catch(() => null)
   const before = await read($, live).catch(() => null)
   // CI of the pull requests items name: read every 30 s, at most 6, and kept between reads.
   const refs = [...new Set(((sum as { items?: { pr?: string | null; status?: string }[] } | null)?.items ?? []).map(i => i.pr ?? null).filter((x): x is string => x !== null))].slice(0, 6)
@@ -323,6 +330,7 @@ export async function poll($: EngineInterface): Promise<void> {
 export async function pollRepo(
   $: EngineInterface,
   t: number,
+  force = false,
 ): Promise<{ repo: string | null; git: Git; prs: Pr[]; gh: GhState; ghAt: number; nextGhAt: number; failures: number }> {
   const repo = await repoTop($)
   if (repo === null) return { repo: null, git: null, prs: [], gh: 'idle', ghAt: 0, nextGhAt: 0, failures: 0 }
@@ -339,7 +347,8 @@ export async function pollRepo(
   if (branch !== '') {
     const up = await runText($, ['git', 'rev-parse', '@{u}'])
     const sig = `${branch}@${typeof up === 'string' ? up : ''}`
-    if (ghDue(r, sig, t)) {
+    // An agent update reads now, unless a read, here or by another session, is under 15 s old.
+    if (ghDue(r, sig, t) || (force && r.gh !== 'failed' && r.lease <= t && t - r.ghAt >= 15_000)) {
       // Take the lease first, so a session that polls meanwhile uses this read and does not start its own.
       await writeShared($, { ...r, lease: t + LEASE_MS })
       const got = await readGh($, branch)
