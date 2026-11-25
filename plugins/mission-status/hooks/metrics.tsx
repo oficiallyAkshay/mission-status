@@ -74,7 +74,7 @@ export const PROGRESS_WORDS: readonly string[] = [
 // properties ride on every event. Anything else is dropped before it is queued.
 const YES_NO = ['yes', 'no'] as const
 export const RENDER_ERROR_CODES = ['type', 'range', 'reference', 'syntax', 'error', 'other'] as const
-export const UPDATE_FAILED_CODES = ['check', 'download', 'install', 'reload', 'other'] as const
+export const UPDATE_FAILED_CODES = ['install', 'reload', 'other'] as const
 export const STALE_TRIGGERS = ['time', 'steps', 'no_state'] as const
 type Field = readonly string[] | 'count'
 export const EVENTS: Readonly<Record<string, Readonly<Record<string, Field>>>> = {
@@ -145,21 +145,22 @@ export function renderErrorCode(err: unknown): (typeof RENDER_ERROR_CODES)[numbe
   return 'other'
 }
 
+// The step an update failed in, from the phase update.tsx left before the failure: updating runs the CLI install,
+// reloading loads the new code.
 export function updateFailedCode(phase: unknown): (typeof UPDATE_FAILED_CODES)[number] {
-  const p = typeof phase === 'string' ? phase.toLowerCase() : ''
-  return UPDATE_FAILED_CODES.find(c => c !== 'other' && p.includes(c)) ?? 'other'
+  return phase === 'updating' ? 'install' : phase === 'reloading' ? 'reload' : 'other'
 }
 
-// The event an auto-update state change means: a higher failure count is a failed update (its phase gives the
-// code), a new version after a known one is an update that worked.
+// The event an auto-update state change means (update.tsx): the phase reaching 'updated' is an update that worked; a
+// higher failure count is one that failed, its code from the phase it failed in.
 export function updateEvent(previous: unknown, value: unknown): { event: 'update_ok' | 'update_failed'; props: Record<string, unknown> } | null {
-  const v = (value ?? null) as { phase?: unknown; version?: unknown; failures?: unknown } | null
-  const p = (previous ?? null) as { version?: unknown; failures?: unknown } | null
+  const v = (value ?? null) as { phase?: unknown; failures?: unknown } | null
+  const p = (previous ?? null) as { phase?: unknown; failures?: unknown } | null
   if (v === null || typeof v !== 'object') return null
   const failures = typeof v.failures === 'number' ? v.failures : 0
   const before = typeof p?.failures === 'number' ? p.failures : 0
-  if (failures > before) return { event: 'update_failed', props: { code: updateFailedCode(v.phase) } }
-  if (p !== null && typeof p.version === 'string' && typeof v.version === 'string' && v.version !== p.version) return { event: 'update_ok', props: {} }
+  if (failures > before) return { event: 'update_failed', props: { code: updateFailedCode(p?.phase) } }
+  if (v.phase === 'updated' && p?.phase !== 'updated') return { event: 'update_ok', props: {} }
   return null
 }
 

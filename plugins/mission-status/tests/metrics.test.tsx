@@ -281,12 +281,19 @@ test('render_error sends only a code from a fixed list', () => {
   expect(clean('render_error', { code: 'cannot read /Users/x/file' })).toEqual({})
 })
 
-test('update_ok and update_failed come from the auto-update state, with a code only', () => {
-  expect(updateEvent({ phase: 'idle', version: '1.0.0', failures: 0, at: 1 }, { phase: 'done', version: '1.1.0', failures: 0, at: 2 })).toEqual({ event: 'update_ok', props: {} })
-  expect(updateEvent({ phase: 'installing', version: '1.0.0', failures: 0, at: 1 }, { phase: 'install failed: EACCES /Users/x', version: '1.0.0', failures: 1, at: 2 })).toEqual({ event: 'update_failed', props: { code: 'install' } })
-  expect(updateEvent(null, { phase: 'idle', version: '1.0.0', failures: 0, at: 1 })).toBeNull()
-  expect(updateEvent({ version: '1.0.0', failures: 0 }, { version: '1.0.0', failures: 0 })).toBeNull()
-  expect(updateFailedCode('weird')).toBe('other')
+test('update_ok and update_failed follow the auto-update phases, with a code only', () => {
+  const at = { at: 1 }
+  // A release found is not an update yet; reaching 'updated' is.
+  expect(updateEvent({ phase: 'idle', version: null, failures: 0, ...at }, { phase: 'pending', version: '1.2.0', failures: 0, ...at })).toBeNull()
+  expect(updateEvent({ phase: 'pending', version: '1.2.0', failures: 0, ...at }, { phase: 'updating', version: '1.2.0', failures: 0, ...at })).toBeNull()
+  expect(updateEvent({ phase: 'reloading', version: '1.2.0', failures: 0, ...at }, { phase: 'updated', version: '1.2.0', failures: 0, ...at })).toEqual({ event: 'update_ok', props: {} })
+  expect(updateEvent({ phase: 'updated', version: '1.2.0', failures: 0, ...at }, { phase: 'idle', version: '1.2.0', failures: 0, ...at })).toBeNull()
+  // A failure: the code is the step it failed in.
+  expect(updateEvent({ phase: 'updating', version: '1.2.0', failures: 0, ...at }, { phase: 'idle', version: '1.2.0', failures: 1, ...at })).toEqual({ event: 'update_failed', props: { code: 'install' } })
+  expect(updateEvent({ phase: 'reloading', version: '1.2.0', failures: 2, ...at }, { phase: 'failed', version: '1.2.0', failures: 3, ...at })).toEqual({ event: 'update_failed', props: { code: 'reload' } })
+  expect(updateEvent(null, { phase: 'idle', version: null, failures: 0, ...at })).toBeNull()
+  expect(updateFailedCode('pending')).toBe('other')
+  expect(clean('update_failed', { code: 'EACCES /Users/x' })).toEqual({})
 })
 
 // The holdback

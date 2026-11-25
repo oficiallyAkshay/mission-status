@@ -39,8 +39,8 @@ Every other property is a word from the fixed list shown, or a whole number. The
 | `update_after_reminder` | When the agent updates after a reminder, or when 3 tool calls pass after it with no update | `followed`: `yes` when the update came within 3 tool calls, `no` otherwise; `steps`: the tool calls between the reminder and this event |
 | `render` | At each send, when the pane was drawn since the last one | `count`: drawings since the last send |
 | `render_error` | When drawing the pane fails | `code`: `type`, `range`, `reference`, `syntax`, `error` or `other` (the kind of error, never its message) |
-| `update_ok` | When the mod updated itself to a new version | none |
-| `update_failed` | When a self-update failed | `code`: `check`, `download`, `install`, `reload` or `other` |
+| `update_ok` | When the mod updated itself and the new version is running | none |
+| `update_failed` | When a self-update failed (a failed check for a new release is not counted) | `code`: `install` (the install command failed), `reload` (the new code did not load) or `other` |
 
 `distinct_id` is the install id (below). `timestamp` is the time of the event.
 
