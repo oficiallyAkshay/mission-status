@@ -62,13 +62,17 @@ test('build: each card ends with its exit clause, and its figure follows the cla
   await ui.unmount()
 })
 
-test('a pane too narrow for the stage bar shows the stages as wrapped chips', async ($, on) => {
+test('a pane too narrow for the stage bar shows a window of the stages, moved with left and right buttons', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', phases: ['Plan', 'Repo setup', 'Build', 'Website', 'Review', 'Fix findings', 'Deploy'], phase: 5 })
   const narrow = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 40 }, surface: 'desktop' })
   expect(await svgAlt(narrow, /^Stage 6 of 7/)).toBeUndefined()
-  expect(await text(narrow, /^Fix findings$/)).toBe('Fix findings')
-  expect(await text(narrow, /^✓ Build$/)).toBe('✓ Build')
+  const first = await svgAlt(narrow, /^Stages \d+ to 7 of 7; current: Fix findings$/)
+  expect(first).toBeTruthy()
+  expect((await narrow.findAll({ type: 'Button' })).some(x => x.key === 'bar-left')).toBe(true)
+  await narrow.press({ key: 'bar-left' })
+  const moved = await svgAlt(narrow, /^Stages \d+ to \d+ of 7/)
+  expect(moved?.props?.alt).not.toBe(first?.props?.alt)
   await narrow.unmount()
   const wide = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 140 }, surface: 'desktop' })
   expect(await svgAlt(wide, /^Stage 6 of 7: Fix findings$/)).toBeTruthy()

@@ -16,6 +16,8 @@ const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, fa
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
+// The narrow bar's window: a new current stage brings it back to follow the current stage.
+const barStart = atom({ plugin: 'mission-status', key: 'barStart' } as const, null as number | null)
 
 export const register: Register = on => {
   // Each wave-1 part keeps its hooks in its own file.
@@ -279,6 +281,7 @@ export const register: Register = on => {
         }),
       )
     }
+    if (written !== null && before?.phase !== written.phase) await update($, barStart, () => null)
     await agentUpdated($, num(args.version))
     await tick($)
     // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
