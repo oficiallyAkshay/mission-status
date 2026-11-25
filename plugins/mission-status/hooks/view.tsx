@@ -280,6 +280,13 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         const key = `item-${x.name}`
         const isOpen = kids.length > 0 && isOpenKey(key)
         const state = itemState(x)
+        // The item's pull request CI rides on the item's own line, after the item's time: a part of that time.
+        const ci = x.pr != null ? (l?.ci?.[x.pr] ?? null) : null
+        const ciTook = ci === null || ci.start === null ? null : (ci.end ?? Date.now()) - ci.start
+        const ciPart =
+          ci === null || ci.state === 'none'
+            ? null
+            : `  ·  ${ci.state === 'running' ? 'CI' : ci.state === 'failing' ? 'CI failed' : 'CI passed'}${ciTook === null ? '' : ` ${clockOf(ciTook)}`}`
         // Siblings share one trunk, as in a tree view: the line joins every badge of the list, top to bottom.
         const down = i < order.length - 1
         const up = i > 0
@@ -299,6 +306,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                   : state === 'done' && (x.doneAt ?? null) !== null
                     ? `${x.name}  ·  ${timeOfDay(x.doneAt ?? 0)}`
                     : x.name}
+                {ciPart !== null && <Text color={ci?.state === 'failing' ? 'error' : ci?.state === 'running' ? ACCENT_TEXT : NOTE}>{ciPart}</Text>}
               </Text>
             </Box>
             <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
@@ -321,22 +329,6 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
             </Box>,
           )
         // The item's pull request CI: its state and how long the checks ran, or run so far.
-        const ci = x.pr != null ? (l?.ci?.[x.pr] ?? null) : null
-        if (ci !== null && ci.state !== 'none') {
-          const took = ci.start === null ? null : (ci.end ?? Date.now()) - ci.start
-          const word = ci.state === 'running' ? 'CI running' : ci.state === 'failing' ? 'CI failed' : 'CI passed'
-          rows.push(
-            <Box flexDirection="row" gap={0} key={`${key}-ci`}>
-              {prefix(rails, 14, `${key}-ci`)}
-              {railBox(down, 14, `${key}-ci-own`)}
-              <Box flexGrow={1} flexShrink={1} paddingRight={CHEV}>
-                <Text size="caption" color={ci.state === 'failing' ? 'error' : ci.state === 'running' ? ACCENT_TEXT : NOTE} wrap="wrap">
-                  {took === null ? word : `${word}  ·  ${clockOf(took)}`}
-                </Text>
-              </Box>
-            </Box>,
-          )
-        }
         const mine = s.links.filter(l => l.item !== null && l.item.toLowerCase() === x.name.toLowerCase())
         if (mine.length > 0)
           rows.push(
@@ -757,9 +749,18 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               <Box width={3} flexShrink={0}>
                 {win.from > 0 ? <Button key="bar-left" label="‹" plain onPress={() => move(win.from - 1)} /> : <Text>{''}</Text>}
               </Box>
-              {/* The window fills the row between the arrows: a width of 0 with flexGrow takes all the room left. */}
-              <Box flexGrow={1} flexShrink={1} width={0} minWidth={0}>
-                {svg(trackSvg(part), `Stages ${win.from + 1} to ${win.to + 1} of ${n}${isDone ? '' : `; current: ${current}`}`, 30, 'stage-bar', true)}
+              {/* The window takes the room between the arrows as a fixed pixel width: a percentage width did not stretch. */}
+              <Box flexGrow={1} flexShrink={1}>
+                {Svg !== undefined && (
+                  <Svg
+                    key="stage-bar"
+                    source={trackSvg(part).replace('width="100%"', `width="${barInput.widthPx - 56}"`)}
+                    alt={`Stages ${win.from + 1} to ${win.to + 1} of ${n}${isDone ? '' : `; current: ${current}`}`}
+                    width={barInput.widthPx - 56}
+                    height={30}
+                    isInteractive
+                  />
+                )}
               </Box>
               <Box width={3} flexShrink={0}>
                 {win.to < n - 1 ? <Button key="bar-right" label="›" plain onPress={() => move(win.from + 1)} /> : <Text>{''}</Text>}
