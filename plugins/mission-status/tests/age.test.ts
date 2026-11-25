@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import { agoOf } from '../hooks/view'
 import { age, cap, clockOf } from '../hooks/model'
 import { trackSvg } from '../hooks/bars'
 
@@ -63,4 +64,11 @@ test('a pull request reads as state, CI, review and the branch facts', () => {
   expect(pr.ci).toBe('running')
   const facts = prFacts(pr, { branch: 'b', ahead: 2, behind: 3, files: 4, added: 10, removed: 2, dirty: 0 }).map(f => f.text)
   expect(facts).toEqual(['Open', 'CI running', 'Review needed', '3 behind main', '+10 −2'])
+})
+
+test('the header age reads seconds, then minutes, then hours', () => {
+  expect(agoOf(0)).toBe('0s ago')
+  expect(agoOf(42_000)).toBe('42s ago')
+  expect(agoOf(5 * 60_000)).toBe('5m ago')
+  expect(agoOf(2 * 3_600_000)).toBe('2h ago')
 })
