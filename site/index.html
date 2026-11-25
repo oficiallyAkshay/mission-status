@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mission-status</title>
+<title>mission-status: a live progress pane for Claude Code</title>
 <meta name="description" content="Know where your agent stands, without reading through its work. A live progress pane for Claude Code in the Claude desktop app.">
 <link rel="canonical" href="https://oficiallyakshay.github.io/mission-status/">
 <link rel="manifest" href="manifest.webmanifest">
@@ -29,6 +29,7 @@
 <meta name="theme-color" content="#F5F1EA">
 <link rel="icon" type="image/png" href="favicon.png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"What does it do?","acceptedAnswer":{"@type":"Answer","text":"It puts a live progress pane beside the chat: the goal, the stages, what done means, and where the work is now. It reads the session and draws. It never touches your code."}},{"@type":"Question","name":"Where does it work?","acceptedAnswer":{"@type":"Answer","text":"In Claude Code, in the Claude desktop app. The terminal and the editor extensions have no side pane. Codex plugins cannot add one yet."}},{"@type":"Question","name":"What does it cost?","acceptedAnswer":{"@type":"Answer","text":"Nothing to install: it is open source, MIT, and runs on the Claude plan you have. No API key, no new account. It uses a few tokens per stage change, far fewer than asking for a recap."}},{"@type":"Question","name":"Does it fit my kind of work?","acceptedAnswer":{"@type":"Answer","text":"Yes. Pick one of ten templates, or let the agent write the stages for your mission. The agent can also save your own stages as a template."}},{"@type":"Question","name":"Does it send anything home?","acceptedAnswer":{"@type":"Answer","text":"Anonymous usage numbers, never your words, files or names. The onboarding shows the switch, on by default; turn it off there or with /pane-metrics off. Each field is listed in docs/telemetry.md."}},{"@type":"Question","name":"How do I update or remove it?","acceptedAnswer":{"@type":"Answer","text":"It updates itself between turns. To remove it, run /plugin uninstall mission-status@mission-status."}}]}</script>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="site.css">
