@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Git, Helper, Live, Pr, Summary } from '../types'
+import type { Git, Helper, ItemCi, Live, Pr, Summary } from '../types'
 import { nowOf } from './store'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
@@ -172,9 +172,42 @@ export async function readGh($: EngineInterface, branch: string): Promise<{ gh: 
   return { gh: 'failed', prs: [] }
 }
 
+let ciAt = 0
+const CI_MS = 30_000
+
+// The CI of one pull request: running while any check runs, else failing or passing, with the first start and the
+// last finish of its checks.
+export function ciOf(rollup: Record<string, unknown>[]): ItemCi {
+  if (rollup.length === 0) return { state: 'none', start: null, end: null }
+  const word = (c: Record<string, unknown>) => String(c.conclusion ?? c.state ?? c.status ?? '').toUpperCase()
+  const time = (v: unknown) => (typeof v === 'string' && !v.startsWith('0001') ? Date.parse(v) : NaN)
+  const starts = rollup.map(c => time(c.startedAt)).filter(Number.isFinite)
+  const ends = rollup.map(c => time(c.completedAt)).filter(Number.isFinite)
+  const running = rollup.some(c => ['', 'PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(word(c)))
+  const failing = rollup.some(c => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(word(c)))
+  return {
+    state: running ? 'running' : failing ? 'failing' : 'passing',
+    start: starts.length > 0 ? Math.min(...starts) : null,
+    end: running || ends.length === 0 ? null : Math.max(...ends),
+  }
+}
+
+export async function readItemCi($: EngineInterface, ref: string): Promise<ItemCi | null> {
+  const [repo, num] = ref.includes('#') ? ref.split('#') : [null, ref]
+  const out = await runText($, ['gh', 'pr', 'view', String(num), ...(repo ? ['-R', repo] : []), '--json', 'statusCheckRollup'], 20_000)
+  if (out === null || out === 'missing') return null
+  try {
+    const o = JSON.parse(out) as { statusCheckRollup?: Record<string, unknown>[] }
+    return ciOf(Array.isArray(o.statusCheckRollup) ? o.statusCheckRollup : [])
+  } catch {
+    return null
+  }
+}
+
 // One poll, every 5 s from register.tsx; this file keeps the Merge card's own timing.
 export async function poll($: EngineInterface): Promise<void> {
-  const named = await read($, summaryAtom).then(x => (x as { repo?: string | null } | null)?.repo ?? null).catch(() => null)
+  const sum = await read($, summaryAtom).catch(() => null)
+  const named = (sum as { repo?: string | null } | null)?.repo ?? null
   if (named !== repoDir) {
     repoDir = named
     defaultBranch = null
@@ -192,6 +225,16 @@ export async function poll($: EngineInterface): Promise<void> {
   const t = await nowOf($)
   const merge = await pollRepo($, t).catch(() => null)
   const before = await read($, live).catch(() => null)
+  // CI of the pull requests items name: read every 30 s, at most 6, and kept between reads.
+  const refs = [...new Set(((sum as { items?: { pr?: string | null; status?: string }[] } | null)?.items ?? []).map(i => i.pr ?? null).filter((x): x is string => x !== null))].slice(0, 6)
+  const ci: Record<string, ItemCi> = {}
+  if (refs.length > 0 && t - ciAt >= CI_MS) {
+    ciAt = t
+    for (const ref of refs) {
+      const got = await readItemCi($, ref).catch(() => null)
+      if (got !== null) ci[ref] = got
+    }
+  }
   try {
     await update($, live, () => {
       const next: MergeLive =
@@ -215,7 +258,7 @@ export async function poll($: EngineInterface): Promise<void> {
               git: merge.git,
               merge: { repo: merge.repo, gh: merge.gh, ghAt: merge.ghAt, nextGhAt: merge.nextGhAt, failures: merge.failures },
             }
-      return next as Live
+      return { ...next, ci: { ...(before?.ci ?? {}), ...ci } } as Live
     })
   } catch {
     // The session or the reload ended while the read ran: the next tick writes again.

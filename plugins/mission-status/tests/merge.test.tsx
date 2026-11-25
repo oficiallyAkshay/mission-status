@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { backoffMs, ghDue, nextGh, storeKey, GH_IDLE_MS, GH_MAX_MS, GH_MS, GIT_MS } from '../hooks/readers'
+import { backoffMs, ciOf, ghDue, nextGh, storeKey, GH_IDLE_MS, GH_MAX_MS, GH_MS, GIT_MS } from '../hooks/readers'
 import type { RepoRead } from '../hooks/readers'
 
 // ui.find ignores alt: a drawing is found by its description through findAll.
@@ -306,4 +306,19 @@ test('light theme: accent text uses the theme key, not a fixed colour', async ($
   const timer = await ui.find({ type: 'Text', text: /^00:0\d$/ })
   expect(timer?.props?.color).toBe('merged')
   await ui.unmount()
+})
+
+test('item CI: the checks of an item pull request give its state and run time', () => {
+  const t0 = '2026-11-25T05:00:00Z'
+  expect(ciOf([])).toEqual({ state: 'none', start: null, end: null })
+  const done = ciOf([
+    { status: 'COMPLETED', conclusion: 'SUCCESS', startedAt: t0, completedAt: '2026-11-25T05:03:10Z' },
+    { status: 'COMPLETED', conclusion: 'SUCCESS', startedAt: '2026-11-25T05:00:30Z', completedAt: '2026-11-25T05:04:05Z' },
+  ])
+  expect(done.state).toBe('passing')
+  expect((done.end ?? 0) - (done.start ?? 0)).toBe(245_000)
+  const running = ciOf([{ status: 'IN_PROGRESS', conclusion: '', startedAt: t0, completedAt: '0001-01-01T00:00:00Z' }])
+  expect(running.state).toBe('running')
+  expect(running.end).toBe(null)
+  expect(ciOf([{ status: 'COMPLETED', conclusion: 'FAILURE', startedAt: t0, completedAt: t0 }]).state).toBe('failing')
 })

@@ -328,6 +328,23 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               </Box>
             </Box>,
           )
+        // The item's pull request CI: its state and how long the checks ran, or run so far.
+        const ci = x.pr != null ? (l?.ci?.[x.pr] ?? null) : null
+        if (ci !== null && ci.state !== 'none') {
+          const took = ci.start === null ? null : (ci.end ?? Date.now()) - ci.start
+          const word = ci.state === 'running' ? 'CI running' : ci.state === 'failing' ? 'CI failed' : 'CI passed'
+          rows.push(
+            <Box flexDirection="row" gap={0} key={`${key}-ci`}>
+              {prefix(rails, 14, `${key}-ci`)}
+              {railBox(down, 14, `${key}-ci-own`)}
+              <Box flexGrow={1} flexShrink={1} paddingRight={CHEV}>
+                <Text size="caption" color={ci.state === 'failing' ? 'error' : ci.state === 'running' ? ACCENT_TEXT : NOTE} wrap="wrap">
+                  {took === null ? word : `${word}  ·  ${clockOf(took)}`}
+                </Text>
+              </Box>
+            </Box>,
+          )
+        }
         const mine = s.links.filter(l => l.item !== null && l.item.toLowerCase() === x.name.toLowerCase())
         if (mine.length > 0)
           rows.push(
