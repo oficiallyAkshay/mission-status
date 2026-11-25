@@ -29,7 +29,7 @@ Desktop app only (no terminal or VS Code view). All nine session types ship. Onb
 Terminal and VS Code views. Tickets and ticket readers. User settings beyond the metrics on and off command. Team or shared views across machines.
 
 ## Backlog
-- Summarize button on each stage card. It starts a side chat for the session that explains that stage: how the bug was reproduced, what root cause was found, what the fix changed. The person gets the answer for any stage as it runs, without following the main chat.
+- Summarize and Status buttons on each stage card and item card. A press starts a side chat for the session with one focused question: Summarize explains what the card's work found or changed (how the bug was reproduced, the root cause, what the fix changed); Status says where that card stands now and what it waits on. The person gets a focused answer for any card as it runs, without following the main chat.
 
 ## How the state stays current
 | Trigger | Who acts | What changes |
