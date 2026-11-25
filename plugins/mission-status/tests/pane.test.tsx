@@ -326,7 +326,7 @@ test('empty: before any update', async $ => {
   await ui.unmount()
 })
 
-test('runbooks: one runbook is a Runbook tab beside Progress; it shows what needs the person, then the steps', async ($, on) => {
+test('runbooks: one runbook is a Runbook tab beside Progress; each step carries its own wait', async ($, on) => {
   await start($, on)
   const runbook = {
     id: 'release',
@@ -345,11 +345,11 @@ test('runbooks: one runbook is a Runbook tab beside Progress; it shows what need
   expect(buttons.some(x => x.key === 'tab-release' && x.props?.label === 'Runbook')).toBe(true)
   expect(await text(ui, /^Project: P$/)).toBe('Project: P')
   await ui.press({ key: 'tab-release' })
-  expect(await text(ui, /^1 of 3 done  ·  now: Rewrite the history$/)).toBeTruthy()
-  expect(await text(ui, /^Needs you  ·  1$/)).toBe('Needs you  ·  1')
+  expect(await text(ui, /^1 of 3 done  ·  1 need you  ·  now: Rewrite the history$/)).toBeTruthy()
+  // No separate Needs you card: each wait sits under its own step.
+  expect(await text(ui, /^Needs you( |$)/)).toBeUndefined()
   expect(await text(ui, /^2  Rewrite the history$/)).toBe('2  Rewrite the history')
-  // The wait shows once, in the Needs you card, not again under the step.
-  expect(await text(ui, /^Needs your yes$/)).toBeUndefined()
+  expect(await text(ui, /^Needs your yes$/)).toBe('Needs your yes')
   expect(await text(ui, /^Project: P$/)).toBeUndefined()
   await ui.press({ key: 'tab-progress' })
   expect(await text(ui, /^Project: P$/)).toBe('Project: P')
