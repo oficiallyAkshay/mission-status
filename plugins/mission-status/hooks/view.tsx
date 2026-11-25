@@ -620,11 +620,16 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const onPrs = tab === 'prs'
     // The tabs are chips like the pane's other chips, not native buttons: the open tab in the bar's purple, the others
     // in a quiet grey. A chip is a Markdown link the pane answers itself.
-    const tabChip = (key: string, label: string, isOn: boolean, value: string | null) => (
-      <Box key={key} backgroundColor={isOn ? 'rgba(139, 124, 246, 0.45)' : 'rgba(128, 128, 128, 0.16)'} paddingX={1} flexShrink={0}>
-        <Markdown key={key} text={`${isOn ? '**' : ''}[${label}](https://tab.local/${encodeURIComponent(value ?? 'progress')})${isOn ? '**' : ''}`} onLinkPress={() => void update($, tabAtom, () => value)} />
-      </Box>
-    )
+    // The open tab is a purple chip with white text, as the stage bar's pill; the others are quiet buttons. A Markdown
+    // link drew every tab in the link colour, underlined.
+    const tabChip = (key: string, label: string, isOn: boolean, value: string | null) =>
+      isOn ? (
+        <Box key={key} backgroundColor="#7462E8" paddingX={1} flexShrink={0}>
+          <Text weight="semibold" color="#FFFFFF">{label}</Text>
+        </Box>
+      ) : (
+        <Button key={key} label={label} plain dimColor onPress={() => void update($, tabAtom, () => value)} />
+      )
     const tabRow = (
       <Box flexDirection="row" gap={1} flexWrap="wrap" key="tabs">
         {tabChip('tab-progress', 'Progress', book === null && !onPrs, null)}
