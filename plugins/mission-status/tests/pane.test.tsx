@@ -325,3 +325,37 @@ test('empty: before any update', async $ => {
   expect(await text(ui, /^No progress yet\. The agent sends the first state/)).toBeTruthy()
   await ui.unmount()
 })
+
+test('runbooks: each one is a tab beside Progress, and its tab shows the steps with their states', async ($, on) => {
+  await start($, on)
+  const runbook = {
+    id: 'release',
+    title: 'Release',
+    href: 'https://example.com/runbook',
+    steps: [
+      { name: 'Fix the findings', status: 'done' },
+      { name: 'Rewrite the history', status: 'now', waitsOn: 'your yes' },
+      { name: 'Make the repository public', status: 'next' },
+    ],
+  }
+  expect((await send($, { project: 'P', stage: 'build', phase: 1, runbooks: [runbook] })).deny).toBeUndefined()
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const buttons = await ui.findAll({ type: 'Button' })
+  expect(buttons.some(x => x.key === 'tab-progress')).toBe(true)
+  expect(buttons.some(x => x.key === 'tab-release')).toBe(true)
+  expect(await text(ui, /^Project: P$/)).toBe('Project: P')
+  await ui.press({ key: 'tab-release' })
+  expect(await text(ui, /^1 of 3 steps done/)).toBeTruthy()
+  expect(await text(ui, /^2\. Rewrite the history$/)).toBe('2. Rewrite the history')
+  expect(await text(ui, /^Waits on your yes$/)).toBe('Waits on your yes')
+  expect(await text(ui, /^Project: P$/)).toBeUndefined()
+  await ui.press({ key: 'tab-progress' })
+  expect(await text(ui, /^Project: P$/)).toBe('Project: P')
+  await ui.unmount()
+  // A runbook with no steps is refused; remove drops one.
+  expect(String((await send($, { runbooks: [{ id: 'x', title: 'X', steps: [] }] })).deny)).toContain('1 to 60 steps')
+  expect((await send($, { runbooks: [{ id: 'release', remove: true }] })).deny).toBeUndefined()
+  const after = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await after.findAll({ type: 'Button' })).some(x => x.key === 'tab-release')).toBe(false)
+  await after.unmount()
+})

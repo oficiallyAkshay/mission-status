@@ -19,6 +19,8 @@ const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 // The first stage a narrow bar shows, after the person moves it; null follows the current stage.
 const barStartAtom = atom({ plugin: 'mission-status', key: 'barStart' } as const, null as number | null)
+// The pane's open tab: null is Progress, else a runbook's id.
+const tabAtom = atom({ plugin: 'mission-status', key: 'tab' } as const, null as string | null)
 const autoUpdate = atom({ plugin: 'mission-status', key: 'autoUpdate' } as const, null as boolean | null)
 const updateState = atom({ plugin: 'mission-status', key: 'updateState' } as const, null as { phase: string; version: string | null; failures: number; at: number } | null)
 
@@ -522,8 +524,61 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         </Box>
       )
 
+    // Tabs: Progress, then one tab for each runbook the session follows. A press switches the view.
+    const runbooks = s.runbooks ?? []
+    const tab = await read($, tabAtom)
+    const book = runbooks.find(r => r.id === tab) ?? null
+    const tabRow =
+      runbooks.length === 0 ? null : (
+        <Box flexDirection="row" gap={1} flexWrap="wrap" key="tabs">
+          <Button key="tab-progress" label="Progress" variant={book === null ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => null)} />
+          {runbooks.map(r => (
+            <Button key={`tab-${r.id}`} label={r.title} variant={book?.id === r.id ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => r.id)} />
+          ))}
+        </Box>
+      )
+    if (book !== null) {
+      const m = book.steps.length
+      const doneN = book.steps.filter(x => x.status === 'done').length
+      const cur = book.steps.findIndex(x => x.status === 'now')
+      const waiting = book.steps.filter(x => x.status !== 'done' && x.waitsOn !== null).length
+      const stepColor = { done: undefined, now: ACCENT_TEXT, next: SUBTEXT, failed: 'error', blocked: 'warning' } as const
+      return (
+        <Box flexDirection="column" gap={1} paddingBottom={1}>
+          {tabRow}
+          <Text size="heading" weight="semibold" wrap="wrap">{book.title}</Text>
+          {book.href !== null && linkRow([{ label: 'Runbook', href: book.href }], 'runbook-link')}
+          <Text color={SUBTEXT}>{`${doneN} of ${m} steps done${waiting > 0 ? `  ·  ${waiting} wait on someone` : ''}`}</Text>
+          {Svg !== undefined &&
+            svg(
+              trackSvg({ total: m, done: cur >= 0 ? cur : doneN, current: cur >= 0 ? `${cur + 1}. ${book.steps[cur]?.name ?? ''}` : null, isDone: doneN === m, doneLabel: 'All steps done', clock: 0, checks: book.steps.map(x => x.status === 'done') }),
+              `${doneN} of ${m} steps done`,
+              30,
+              'runbook-bar',
+            )}
+          <Box flexDirection="column" gap={0}>
+            {book.steps.map((x, k) => (
+              <Box flexDirection="row" gap={1} key={`rb-${k}`}>
+                <Box width={BADGE} flexShrink={0}>
+                  {Svg !== undefined
+                    ? svg(badgeSvg(x.status === 'done' ? 'done' : x.status === 'now' ? 'now' : 'next', 0, 16), `Step ${k + 1}: ${x.status}`, 16)
+                    : <Text>{x.status === 'done' ? '✓' : x.status === 'now' ? '●' : '○'}</Text>}
+                </Box>
+                <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+                  <Text color={stepColor[x.status]} dimColor={x.status === 'done'} wrap="wrap">{`${k + 1}. ${x.name}`}</Text>
+                  {x.note !== null && <Text size="caption" color={NOTE} wrap="wrap">{x.note}</Text>}
+                  {x.waitsOn !== null && x.status !== 'done' && <Text size="caption" color={SUBTEXT} wrap="wrap">{`Waits on ${x.waitsOn}`}</Text>}
+                </Box>
+              </Box>
+            ))}
+          </Box>
+        </Box>
+      )
+    }
+
     return (
       <Box flexDirection="column" gap={2} paddingBottom={1}>
+        {tabRow}
         {/* The header: the title; the goal below. */}
         <Box flexDirection="column" gap={1}>
           <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>

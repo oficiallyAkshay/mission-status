@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
+import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
 import { poll } from './readers'
 import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, tick } from './store'
 import { renderPane } from './view'
@@ -64,6 +64,34 @@ export const register: Register = on => {
           repo: {
             type: ['string', 'null'],
             description: "The repository folder the work is in, as an absolute path, when it is not the session's own folder. The Merge card reads git and pull requests there. null goes back to the session folder.",
+          },
+          runbooks: {
+            type: 'array',
+            description:
+              "Runbooks the session follows (a numbered procedure, a checklist, a release or setup guide). Each one shows on its own tab beside Progress. Send a whole runbook to add or replace it by id; send {id, remove: true} to drop it. At most 4.",
+            items: {
+              type: 'object',
+              properties: {
+                id: { type: 'string', description: 'A stable id, for example open-source-release' },
+                title: { type: 'string', description: 'The tab name, one to three words' },
+                href: { type: 'string', description: 'The runbook itself: a link or a file path' },
+                remove: { type: 'boolean' },
+                steps: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string', description: 'The step, three to eight words' },
+                      status: { type: 'string', enum: ['done', 'now', 'next', 'failed', 'blocked'] },
+                      note: { type: 'string', description: 'What was done or what is left, a few words' },
+                      waitsOn: { type: 'string', description: 'Who or what the step waits on, for example: your yes' },
+                    },
+                    required: ['name'],
+                  },
+                },
+              },
+              required: ['id'],
+            },
           },
           saveTemplate: {
             type: 'string',
@@ -376,6 +404,7 @@ export const register: Register = on => {
         ends,
         project: str(args.project) ?? old?.project ?? 'Project',
         repo: args.repo === undefined ? (old?.repo ?? null) : str(args.repo),
+        runbooks: Array.isArray(args.runbooks) ? mergeRunbooks(old?.runbooks ?? [], args.runbooks) : (old?.runbooks ?? []),
         goalLine: args.goalLine === undefined ? (old?.goalLine ?? null) : str(args.goalLine),
         stage,
         phases,

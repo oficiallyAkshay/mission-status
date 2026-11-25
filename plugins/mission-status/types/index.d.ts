@@ -10,10 +10,15 @@ export type Hypothesis = { text: string; state: HypothesisState }
 export type CardLink = { phase: number | null; item: string | null; label: string; href: string }
 export type Ticket = { ref: string; title: string | null; url: string | null }
 export type Git = { branch: string; ahead: number; behind?: number; files: number; added: number; removed: number; dirty: number } | null
+export type RunbookStatus = 'done' | 'now' | 'next' | 'failed' | 'blocked'
+export type RunbookStep = { name: string; status: RunbookStatus; note: string | null; waitsOn: string | null }
+// A runbook the session follows: a numbered procedure, drawn on its own tab beside Progress.
+export type Runbook = { id: string; title: string; href: string | null; steps: RunbookStep[] }
 export type Summary = {
   project: string
   // The repository the work is in, when it is not the session's folder; the Merge card reads git there.
   repo?: string | null
+  runbooks?: Runbook[]
   ticket: Ticket | null
   links: CardLink[]
   goalLine: string | null
@@ -63,7 +68,7 @@ declare module 'claude-code' {
   interface PluginState {
     'mission-status': { summary: Shaped<Summary>; live: Shaped<Live | null>; now: number; open: string[] | null; activity: Activity; tasks: Task[]
       // Wave 1: consent and metrics (metrics.tsx, onboarding.tsx), auto-update (update.tsx)
-      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; holdback: boolean; metricsNoticeShown: boolean; metricsSession: MetricsSession | null; autoUpdate: boolean | null; barStart: number | null
+      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; holdback: boolean; metricsNoticeShown: boolean; metricsSession: MetricsSession | null; autoUpdate: boolean | null; barStart: number | null; tab: string | null
       // Wave 1: freshness triggers (store.ts)
       fresh: Fresh; doc: { title: string; path: string } | null }
   }
