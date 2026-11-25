@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
+import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, prRefsIn, skillSteps, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
 import { poll } from './readers'
 import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, tick } from './store'
 import { renderPane } from './view'
@@ -17,6 +17,8 @@ const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, fa
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
+// The pull requests this session made, read from its gh pr create calls; the PRs tab lists them.
+const prRefs = atom({ plugin: 'mission-status', key: 'prRefs' } as const, [] as string[])
 // The narrow bar's window: a new current stage brings it back to follow the current stage.
 const barStart = atom({ plugin: 'mission-status', key: 'barStart' } as const, null as number | null)
 
@@ -210,6 +212,34 @@ export const register: Register = on => {
     // The action line is a nicety: a failed write never holds up the call.
     if (words !== null) await say($, words).catch(() => undefined)
     const result = await next(e)
+    // A pull request the session made joins the PRs tab.
+    try {
+      const args = e as unknown as { command?: unknown }
+      const made = prRefsIn(typeof args.command === 'string' ? args.command : '', JSON.stringify(result ?? ''))
+      if (made.length > 0) {
+        await update($, prRefs, list => [...new Set([...list, ...made])].slice(-30))
+        void poll($)
+      }
+    } catch {}
+    // A skill the session runs, with numbered steps, joins the tabs as a runbook; the agent marks its steps as it goes.
+    try {
+      if (String(e.tool) === 'Skill') {
+        const name = String((e as unknown as { skill?: unknown }).skill ?? '').trim()
+        const dir = /Base directory for this skill:\s*(\S[^\n"]*)/.exec(JSON.stringify(result ?? '').replace(/\\n/g, '\n'))?.[1]?.trim()
+        if (name !== '' && dir !== undefined) {
+          const steps = skillSteps(await $.fs.read(`${dir}/SKILL.md`).catch(() => ''))
+          if (steps.length >= 2) {
+            const id = `skill-${idOf(name)}`
+            await update($, summary, stored => {
+              const old = normalize(stored)
+              if (old === null || (old.runbooks ?? []).some(r => r.id === id)) return stored
+              const book = { id, title: `Skill: ${name}`, href: `${dir}/SKILL.md`, steps: steps.map(n => ({ name: n, status: 'next' as const, note: null, waitsOn: null })) }
+              return { ...old, runbooks: [...(old.runbooks ?? []), book].slice(-4), version: (old.version ?? 0) + 1 }
+            })
+          }
+        }
+      }
+    } catch {}
     // Between tool calls the model thinks, as the chat shows.
     if (words !== null) await say($, 'Thinking').catch(() => undefined)
     // Freshness triggers count the main loop's tool calls, not the pane's own update or a helper's calls.

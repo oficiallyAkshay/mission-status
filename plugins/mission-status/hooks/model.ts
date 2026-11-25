@@ -88,6 +88,36 @@ export function actionOf(e: Record<string, unknown>): string | null {
 
 export const ITEM_STATES: readonly ItemStatus[] = ['done', 'now', 'next', 'failed']
 
+// A skill's steps, read from its SKILL.md: the numbered lines of its Steps (or Order of work) section, else every
+// numbered line. A bold lead names the step; else its first words do. At most 20.
+export function skillSteps(md: string): string[] {
+  const lines = md.split('\n')
+  const start = lines.findIndex(l => /^#{2,3}\s+(steps|order of work|procedure|workflow)\b/i.test(l))
+  let body = lines
+  if (start >= 0) {
+    const end = lines.findIndex((l, i) => i > start && /^#{1,3}\s/.test(l))
+    body = lines.slice(start + 1, end < 0 ? undefined : end)
+  }
+  const out: string[] = []
+  for (const l of body) {
+    const m = /^\s{0,3}(\d+)\.\s+(.*)$/.exec(l)
+    if (m === null) continue
+    const bold = /^\*\*([^*]+?)\*\*/.exec(m[2] ?? '')
+    const words = (bold?.[1] ?? (m[2] ?? '').replace(/[*`_]/g, '')).replace(/[.:]+$/, '').split(/\s+/).slice(0, 8).join(' ')
+    if (words !== '') out.push(cap(words))
+    if (out.length >= 20) break
+  }
+  return out
+}
+
+// The pull requests a tool call made: every pull request address in the output of a gh pr create call, as owner/name#number.
+export function prRefsIn(command: string, output: string): string[] {
+  if (!/\bgh\s+pr\s+create\b/.test(command)) return []
+  const out = new Set<string>()
+  for (const m of output.matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g)) out.add(`${m[1]}#${m[2]}`)
+  return [...out]
+}
+
 // An item's pull request: a number in the work's repository, or owner/name#number in another.
 export const PR_REF = /^(?:[\w.-]+\/[\w.-]+#)?\d{1,7}$/
 export function asPrRef(v: unknown): string | null {
@@ -254,7 +284,7 @@ export const RULE =
   'Give each item a stable id, and send small item changes as patch operations. ' +
   'When the work is in another repository than the session folder, send repo once. ' +
   'When an item has a pull request, send its number as the item\'s pr, so the pane shows its CI. ' +
-  'When the session follows a runbook (a numbered procedure or checklist), send it as runbooks with each step\'s status, and keep it current. ' +
+  'When the session follows a runbook (a numbered procedure or checklist), send it as runbooks with each step\'s status, and keep it current. A skill you run with numbered steps gets its tab by itself (id skill-<name>): mark its steps as you go. ' +
   'The pane is the only progress report. In the chat, write only what the person must do or decide to unblock the work ' +
   '(a decision, an approval, a step only they can do), and a direct answer when they ask a question. ' +
   'Send no progress lines, status, recaps, plans or narration in the chat: put them in the pane.'

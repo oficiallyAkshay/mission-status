@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Git, Helper, ItemCi, Live, Pr, Summary } from '../types'
+import type { Git, Helper, ItemCi, Live, Pr, SessionPr, Summary } from '../types'
 import { nowOf } from './store'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
@@ -62,6 +62,7 @@ const SAFE_GIT: Record<string, string> = {
 
 // The folder the Merge card reads: the repository the agent named for the work, else the session's own folder.
 let repoDir: string | null = null
+const prRefsAtom = atom({ plugin: 'mission-status', key: 'prRefs' } as const, [] as string[])
 const summaryAtom = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 
 // One command; null when it exits with an error, 'missing' when it cannot start.
@@ -173,6 +174,45 @@ export async function readGh($: EngineInterface, branch: string): Promise<{ gh: 
 }
 
 let ciAt = 0
+let prsAt = 0
+let prsSeen = 0
+
+export function sessionPrOf(ref: string, o: Record<string, unknown>, at: number): SessionPr {
+  const state = String(o.state ?? '').toUpperCase()
+  const merged = typeof o.mergedAt === 'string' ? Date.parse(o.mergedAt) : NaN
+  return {
+    ref,
+    number: Number(o.number ?? ref.split('#')[1] ?? 0),
+    title: String(o.title ?? ''),
+    url: String(o.url ?? ''),
+    state:
+      state === 'MERGED'
+        ? 'merged'
+        : state === 'CLOSED'
+          ? 'closed'
+          : o.isDraft === true
+            ? 'draft'
+            : String(o.mergeable ?? '').toUpperCase() === 'CONFLICTING'
+              ? 'conflict'
+              : 'open',
+    ci: ciOf(Array.isArray(o.statusCheckRollup) ? (o.statusCheckRollup as Record<string, unknown>[]) : []).state,
+    branch: typeof o.headRefName === 'string' ? o.headRefName : null,
+    mergedAt: Number.isFinite(merged) ? merged : null,
+    at,
+  }
+}
+
+export async function readSessionPr($: EngineInterface, ref: string, at: number): Promise<SessionPr | null> {
+  const [repo, num] = ref.split('#')
+  if (!repo || !num) return null
+  const out = await runText($, ['gh', 'pr', 'view', num, '-R', repo, '--json', 'number,title,url,state,isDraft,mergeable,statusCheckRollup,mergedAt,headRefName'], 20_000)
+  if (out === null || out === 'missing') return null
+  try {
+    return sessionPrOf(ref, JSON.parse(out) as Record<string, unknown>, at)
+  } catch {
+    return null
+  }
+}
 const CI_MS = 30_000
 
 // The CI of one pull request: running while any check runs, else failing or passing, with the first start and the
@@ -229,6 +269,18 @@ export async function poll($: EngineInterface): Promise<void> {
   // CI of the pull requests items name: read every 30 s, at most 6, and kept between reads.
   const refs = [...new Set(((sum as { items?: { pr?: string | null; status?: string }[] } | null)?.items ?? []).map(i => i.pr ?? null).filter((x): x is string => x !== null))].slice(0, 6)
   const ci: Record<string, ItemCi> = {}
+  // The pull requests this session made: their state for the PRs tab, read every 30 s, the newest 20.
+  const made = (await read($, prRefsAtom).catch(() => [] as string[])).slice(-20)
+  let sessionPrs: SessionPr[] | null = null
+  if (made.length > 0 && (t - prsAt >= CI_MS || made.length !== prsSeen)) {
+    prsAt = t
+    prsSeen = made.length
+    sessionPrs = []
+    for (const ref of made) {
+      const got = await readSessionPr($, ref, t).catch(() => null)
+      if (got !== null) sessionPrs.push(got)
+    }
+  }
   if (refs.length > 0 && t - ciAt >= CI_MS) {
     ciAt = t
     for (const ref of refs) {
@@ -259,7 +311,7 @@ export async function poll($: EngineInterface): Promise<void> {
               git: merge.git,
               merge: { repo: merge.repo, gh: merge.gh, ghAt: merge.ghAt, nextGhAt: merge.nextGhAt, failures: merge.failures },
             }
-      return { ...next, ci: { ...(before?.ci ?? {}), ...ci } } as Live
+      return { ...next, ci: { ...(before?.ci ?? {}), ...ci }, sessionPrs: sessionPrs ?? before?.sessionPrs ?? [] } as Live
     })
   } catch {
     // The session or the reload ended while the read ran: the next tick writes again.

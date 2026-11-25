@@ -403,3 +403,24 @@ test('an item whose pull request merged shows done at the merge time, with no ag
   expect(await text(ui, /^Ship it  ·  \d{1,2}:\d{2} (AM|PM)$/)).toBeTruthy()
   await ui.unmount()
 })
+
+test('PRs tab: a pull request the session makes is listed with its state, and its card opens to its facts', async ($, on) => {
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    const isView = e.argv[0] === 'gh' && e.argv[1] === 'pr' && e.argv[2] === 'view'
+    const out = isView ? JSON.stringify({ number: 9, title: 'Add the tab', url: 'https://github.com/acme/app/pull/9', state: 'MERGED', isDraft: false, mergeable: 'UNKNOWN', statusCheckRollup: [], mergedAt: '2026-11-25T02:00:00Z', headRefName: 'tabs' }) : ''
+    return { value: { exitCode: out === '' ? 1 : 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'https://github.com/acme/app/pull/9\n' }))
+  await start($, on, [], true)
+  await send($, { project: 'P', stage: 'build', phase: 1 })
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill' } as never)
+  await new Promise(r => setTimeout(r, 50))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.findAll({ type: 'Button' })).some(x => x.key === 'tab-prs')).toBe(true)
+  await ui.press({ key: 'tab-prs' })
+  expect(await text(ui, /^#9  Add the tab$/)).toBe('#9  Add the tab')
+  expect(await svgAlt(ui, /^Merged$/)).toBeTruthy()
+  await ui.press({ key: 'open-pr-acme/app#9' })
+  expect(await text(ui, /^acme\/app  ·  tabs$/)).toBe('acme/app  ·  tabs')
+  await ui.unmount()
+})
