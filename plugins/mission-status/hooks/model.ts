@@ -86,6 +86,13 @@ export function actionOf(e: Record<string, unknown>): string | null {
 
 export const ITEM_STATES: readonly ItemStatus[] = ['done', 'now', 'next', 'failed']
 
+// An item's pull request: a number in the work's repository, or owner/name#number in another.
+export const PR_REF = /^(?:[\w.-]+\/[\w.-]+#)?\d{1,7}$/
+export function asPrRef(v: unknown): string | null {
+  const t = typeof v === 'number' ? String(Math.round(v)) : typeof v === 'string' ? v.trim() : ''
+  return PR_REF.test(t) ? t : null
+}
+
 export function asItem(raw: unknown): Item | undefined {
   if (typeof raw !== 'object' || raw === null) return undefined
   const o = raw as Record<string, unknown>
@@ -108,6 +115,7 @@ export function asItem(raw: unknown): Item | undefined {
     n: num(o.n),
     m: num(o.m),
     text: text === null ? undefined : cap(text),
+    pr: asPrRef(o.pr),
   }
 }
 
@@ -243,6 +251,7 @@ export const RULE =
   'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those. ' +
   'Give each item a stable id, and send small item changes as patch operations. ' +
   'When the work is in another repository than the session folder, send repo once. ' +
+  'When an item has a pull request, send its number as the item\'s pr, so the pane shows its CI. ' +
   'When the session follows a runbook (a numbered procedure or checklist), send it as runbooks with each step\'s status, and keep it current. ' +
   'The pane is the only progress report. In the chat, write only what the person must do or decide to unblock the work ' +
   '(a decision, an approval, a step only they can do), and a direct answer when they ask a question. ' +
@@ -299,6 +308,7 @@ function checkItemFields(o: Record<string, unknown>, where: string, whole: boole
   for (const k of ['after', 'parent', 'note', 'when', 'text'] as const)
     if (o[k] !== undefined && o[k] !== null && typeof o[k] !== 'string') errors.push(`${where}: ${k} must be a string`)
   for (const k of ['n', 'm'] as const) if (o[k] !== undefined && !isNum(o[k])) errors.push(`${where}: ${k} must be a number`)
+  if (o.pr !== undefined && o.pr !== null && asPrRef(o.pr) === null) errors.push(`${where}: pr must be a pull request number, or owner/name#number`)
 }
 
 // Every error in an agent update, in plain words; none means the update is valid. A failed update writes nothing.
