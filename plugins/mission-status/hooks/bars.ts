@@ -122,7 +122,7 @@ export function stripSvg({ title, detail, state, time }: StripInput): string {
   const mark =
     state === 'running'
       ? // Turns once every 1.2 s, started at the wall clock's place in that turn, so a redraw does not jump.
-        `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" begin="-${((Date.now() % 1200) / 1000).toFixed(2)}s" repeatCount="indefinite"/></circle>`
+        `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" begin="0s" repeatCount="indefinite"/></circle>`
       : `<circle cx="12" cy="${H / 2}" r="3.5" fill="${tint}"/>`
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">` +
@@ -167,11 +167,12 @@ export function badgeSvg(state: 'done' | 'now' | 'next' | 'dot', clock: number, 
       `<circle cx="${c}" cy="${c}" r="${c - 1}" fill="url(#${id}g)"/><path d="M${c - 4} ${c + 0.4}l${S * 0.13} ${S * 0.13} ${S * 0.27}-${S * 0.28}" fill="none" stroke="#fff" stroke-width="${S / 10}" stroke-linecap="round" stroke-linejoin="round"/></svg>`
     )
   if (state === 'now') {
-    // A circle spinner: a faint ring with a bright arc that turns once a second. Each redraw starts the turn at the
-    // wall clock's place in the second, to the millisecond, so a redraw continues the turn instead of jumping back.
+    // A circle spinner: a faint ring with a bright arc that turns once a second. Its source never changes, so the app
+    // keeps the same drawing across redraws and the turn runs on unbroken. (A start point taken from the clock changed
+    // the source every second, and every change restarted the drawing: the stutter.)
     const r = c - 2
     const arc = 2 * Math.PI * r
-    const begin = `-${(((clock || Date.now()) % 1000) / 1000).toFixed(3)}s`
+    const begin = '0s'
     return (
       `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}}</style>` +
       `<circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".22" stroke-width="2"/>` +

@@ -71,7 +71,7 @@ function stripSvg({ title, detail, state, time }) {
   const tint = state === "running" ? ACCENT : state === "done" ? GREEN : "#D67278";
   const mark = state === "running" ? (
     // Turns once every 1.2 s, started at the wall clock's place in that turn, so a redraw does not jump.
-    `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" begin="-${(Date.now() % 1200 / 1e3).toFixed(2)}s" repeatCount="indefinite"/></circle>`
+    `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" begin="0s" repeatCount="indefinite"/></circle>`
   ) : `<circle cx="12" cy="${H / 2}" r="3.5" fill="${tint}"/>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}"><style>.i{fill:#F0EEFC}.d{fill:#A7A5AE}@media (prefers-color-scheme:light){.i{fill:#222226}.d{fill:#5B5B5E}}</style><defs><clipPath id="${id}r"><rect width="100%" height="${H}" rx="6"/></clipPath></defs><g clip-path="url(#${id}r)"><rect width="100%" height="${H}" fill="${tint}" fill-opacity=".14"/>${state === "running" ? dither(`${id}d`, "70%", H, tint, 0.55, 0) : ""}</g>` + mark + `<text x="24" y="${H / 2 + 4}" style="font:500 12px ${FONT}"><tspan class="i">${esc(title)}</tspan>${detail ? `<tspan class="d"> (${esc(detail)})</tspan>` : ""}</text><text x="100%" dx="-10" y="${H / 2 + 4}" text-anchor="end" class="d" style="font:400 11px ${FONT}">${esc(time)}</text></svg>`;
 }
@@ -92,7 +92,7 @@ function badgeSvg(state, clock, size = 20, up, down) {
   if (state === "now") {
     const r = c - 2;
     const arc = 2 * Math.PI * r;
-    const begin = `-${((clock || Date.now()) % 1e3 / 1e3).toFixed(3)}s`;
+    const begin = "0s";
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}}</style><circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".22" stroke-width="2"/><circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-linecap="round" stroke-dasharray="${(arc * 0.28).toFixed(2)} ${arc.toFixed(2)}"><animateTransform attributeName="transform" type="rotate" from="0 ${c} ${c}" to="360 ${c} ${c}" dur="1s" begin="${begin}" repeatCount="indefinite"/></circle></svg>`;
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>.bn{stroke:#A8A69E;stroke-opacity:.55}@media (prefers-color-scheme:light){.bn{stroke:${LIGHT.grey};stroke-opacity:.8}}</style><circle class="bn" cx="${c}" cy="${c}" r="${c - 2.5}" fill="none" stroke-width="1.5"/></svg>`;
