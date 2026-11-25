@@ -25,7 +25,7 @@ import { actionOf, arrivalOf, secondsOf } from '../hooks/model'
 test('the live line uses the chat status words', () => {
   expect(actionOf({ tool: 'Bash', command: 'x', description: 'Run the pane tests' })).toBe('Running a command')
   expect(actionOf({ tool: 'Edit', file_path: '/a/b/register.tsx' })).toBe('Editing a file')
-  expect(actionOf({ tool: 'mcp__progress-pane__update' })).toBeNull()
+  expect(actionOf({ tool: 'mcp__mission-status__update' })).toBeNull()
   expect(arrivalOf('anything')).toBe('Thinking')
   expect(secondsOf(12_400)).toBe('12s')
   expect(secondsOf(65_000)).toBe('1m 5s')

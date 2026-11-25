@@ -1,1 +1,0 @@
-{ "name": "progress-pane", "version": "0.2.0", "description": "A live progress pane for Claude Code sessions in the desktop app", "license": "MIT", "types": "./types/index.d.ts" }

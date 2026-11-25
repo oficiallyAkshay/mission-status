@@ -8,12 +8,12 @@ import { prFacts } from './readers'
 import { ACCENT } from './store'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
-const activity = atom({ plugin: 'progress-pane', key: 'activity' } as const, null as Activity)
-const live = atom({ plugin: 'progress-pane', key: 'live' } as const, null as Live | null, { shape: 'live' })
-const now = atom({ plugin: 'progress-pane', key: 'now' } as const, 0)
-const open = atom({ plugin: 'progress-pane', key: 'open' } as const, null as string[] | null)
-const summary = atom({ plugin: 'progress-pane', key: 'summary' } as const, null as Summary, { shape: 'summary' })
-const tasks = atom({ plugin: 'progress-pane', key: 'tasks' } as const, [] as Task[])
+const activity = atom({ plugin: 'mission-status', key: 'activity' } as const, null as Activity)
+const live = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
+const now = atom({ plugin: 'mission-status', key: 'now' } as const, 0)
+const open = atom({ plugin: 'mission-status', key: 'open' } as const, null as string[] | null)
+const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
+const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 
 export async function renderPane($: EngineInterface, e: Extract<RenderInput, { component: 'Pane' }>) {
     const ui = $.ui.resolve(e)

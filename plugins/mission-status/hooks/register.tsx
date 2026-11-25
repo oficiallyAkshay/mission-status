@@ -10,8 +10,8 @@ import { registerOnboarding } from './onboarding'
 import { registerUpdate } from './update'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
-const summary = atom({ plugin: 'progress-pane', key: 'summary' } as const, null as Summary, { shape: 'summary' })
-const tasks = atom({ plugin: 'progress-pane', key: 'tasks' } as const, [] as Task[])
+const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
+const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 
 let ticks = 0
 
@@ -132,7 +132,7 @@ export const register: Register = on => {
       },
       isDeferred: false,
     })
-    await $.command.register({ name: 'progress-pane', description: 'Open the progress pane' })
+    await $.command.register({ name: 'mission-status', description: 'Open the progress pane' })
     $.clock.every(CLOCK_MS, () => void tick($))
     $.clock.every(TICK_MS, () => {
       ticks += 1
@@ -190,10 +190,10 @@ export const register: Register = on => {
       sections: [
         ...result.sections,
         {
-          id: 'progress-pane:progress',
+          id: 'mission-status:progress',
           scope: 'session' as const,
           text:
-            '# Progress pane\nKeep the progress pane current with mcp__progress-pane__update at every meaningful change. ' +
+            '# Progress pane\nKeep the progress pane current with mcp__mission-status__update at every meaningful change. ' +
             'At each update, look again at the stages: keep a template only while it fits the work, and send new stages when the work changes. ' +
             'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those.',
         },
@@ -201,13 +201,13 @@ export const register: Register = on => {
     }
   })
 
-  on('command.run', { command: 'progress-pane' }, async $ => {
+  on('command.run', { command: 'mission-status' }, async $ => {
     await $.ui.open({ id: PANE, title: TITLE })
     void poll($)
     return { text: 'The progress pane is open.' }
   })
 
-  on('tool.call', { tool: 'mcp__progress-pane__update' }, async ($, e) => {
+  on('tool.call', { tool: 'mcp__mission-status__update' }, async ($, e) => {
     const args = e as unknown as Record<string, unknown>
     const at = Date.now()
     await update($, summary, stored => {

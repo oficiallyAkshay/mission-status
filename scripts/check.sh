@@ -2,8 +2,8 @@
 # Runs the three checks on the plugin: validate, type-check, tests. Output streams and is kept in /tmp.
 # CC_TYPES: the engine's claude-code.d.ts (the plugin-authoring skill prints its path when it loads).
 set -o pipefail
-cd "$(dirname "$0")/../plugins/progress-pane" || exit 2
-LOG=/tmp/progress-pane-check-$(date +%s).log
+cd "$(dirname "$0")/../plugins/mission-status" || exit 2
+LOG=/tmp/mission-status-check-$(date +%s).log
 {
   echo "[$(date -u +%FT%TZ)] validate"; claude plugin validate . 2>&1 | grep -E "✘|✔|❯" 
   if [ -n "$CC_TYPES" ] && [ -f "$CC_TYPES" ]; then

@@ -1,4 +1,4 @@
-# Progress pane v1: product plan (revision 6)
+# mission-status v1: product plan (revision 6)
 
 ## Problem
 People who run long Claude Code sessions ask "where are we?" again and again, and get long text answers that are hard to skim and go stale at once.

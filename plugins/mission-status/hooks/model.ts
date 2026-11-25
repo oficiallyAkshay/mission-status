@@ -65,7 +65,7 @@ export const clip = (text: string, max = 70) => (text.length > max ? `${text.sli
 // The chat's own status words for a tool call; null for the pane's own calls.
 export function actionOf(e: Record<string, unknown>): string | null {
   const tool = String(e.tool ?? '')
-  if (tool.startsWith('mcp__progress-pane__') || tool.startsWith('mcp__ccd_') || tool === 'ToolSearch') return null
+  if (tool.startsWith('mcp__mission-status__') || tool.startsWith('mcp__ccd_') || tool === 'ToolSearch') return null
   if (tool === 'Bash') return 'Running a command'
   if (tool === 'Read') return 'Reading a file'
   if (tool === 'Edit' || tool === 'MultiEdit') return 'Editing a file'

@@ -37,7 +37,7 @@ export type Live = { helpers: Helper[]; prs: Pr[]; prsUnread: boolean; at: numbe
 
 declare module 'claude-code' {
   interface PluginState {
-    'progress-pane': { summary: Shaped<Summary>; live: Shaped<Live | null>; now: number; open: string[] | null; activity: Activity; tasks: Task[]
+    'mission-status': { summary: Shaped<Summary>; live: Shaped<Live | null>; now: number; open: string[] | null; activity: Activity; tasks: Task[]
       // Wave 1: consent and metrics (metrics.tsx, onboarding.tsx), auto-update (update.tsx)
       consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null }
   }

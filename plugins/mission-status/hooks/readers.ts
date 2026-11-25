@@ -3,7 +3,7 @@ import type { EngineInterface } from 'claude-code'
 import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
-const live = atom({ plugin: 'progress-pane', key: 'live' } as const, null as Live | null, { shape: 'live' })
+const live = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
 
 export async function poll($: EngineInterface, withPrs = true): Promise<void> {
   let helpers: Helper[] = []

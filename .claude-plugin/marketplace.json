@@ -1,6 +1,6 @@
 {
-  "name": "progress-pane",
+  "name": "mission-status",
   "owner": { "name": "oficiallyAkshay" },
   "metadata": { "description": "A live progress pane for Claude Code sessions" },
-  "plugins": [{ "name": "progress-pane", "source": "./plugins/progress-pane", "description": "A live progress pane for Claude Code sessions in the desktop app" }]
+  "plugins": [{ "name": "mission-status", "source": "./plugins/mission-status", "description": "A live progress pane for Claude Code sessions in the desktop app" }]
 }

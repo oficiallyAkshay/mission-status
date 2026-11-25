@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 const PANE = {
-  plugin: 'progress-pane',
+  plugin: 'mission-status',
   component: 'Pane',
   requestId: 'progress',
   props: { title: 'Progress', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
@@ -9,7 +9,7 @@ const PANE = {
 
 const start = async ($: any, on: any, agents: unknown[] = [], skipProcess = false) => {
   on('tool.register', () => ({ value: {} }))
-  on('command.register', () => ({ value: { command: 'progress-pane' } }))
+  on('command.register', () => ({ value: { command: 'mission-status' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('agent.list', () => ({ value: agents }))
   on('clock.every', () => ({ value: () => {} }))
@@ -17,7 +17,7 @@ const start = async ($: any, on: any, agents: unknown[] = [], skipProcess = fals
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 }
-const send = ($: any, args: Record<string, unknown>) => $.tool.call({ tool: 'mcp__progress-pane__update', ...args } as never)
+const send = ($: any, args: Record<string, unknown>) => $.tool.call({ tool: 'mcp__mission-status__update', ...args } as never)
 const text = async (ui: any, re: RegExp) => (await ui.find({ type: 'Text', text: re }))?.text
 
 test('build: each card ends with its exit clause, and its figure follows the clause kind', async ($, on) => {
