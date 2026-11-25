@@ -69,14 +69,11 @@ function stripSvg({ title, detail, state, time }) {
   const H = 22;
   const id = uid(title, detail, state, time);
   const tint = state === "running" ? ACCENT : state === "done" ? GREEN : "#D67278";
-  const mark = state === "running" ? `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" repeatCount="indefinite"/></circle>` : `<circle cx="12" cy="${H / 2}" r="3.5" fill="${tint}"/>`;
+  const mark = state === "running" ? (
+    // Turns once every 1.2 s, started at the wall clock's place in that turn, so a redraw does not jump.
+    `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" begin="-${(Date.now() % 1200 / 1e3).toFixed(2)}s" repeatCount="indefinite"/></circle>`
+  ) : `<circle cx="12" cy="${H / 2}" r="3.5" fill="${tint}"/>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}"><style>.i{fill:#F0EEFC}.d{fill:#A7A5AE}@media (prefers-color-scheme:light){.i{fill:#222226}.d{fill:#5B5B5E}}</style><defs><clipPath id="${id}r"><rect width="100%" height="${H}" rx="6"/></clipPath></defs><g clip-path="url(#${id}r)"><rect width="100%" height="${H}" fill="${tint}" fill-opacity=".14"/>${state === "running" ? dither(`${id}d`, "70%", H, tint, 0.55, 0) : ""}</g>` + mark + `<text x="24" y="${H / 2 + 4}" style="font:500 12px ${FONT}"><tspan class="i">${esc(title)}</tspan>${detail ? `<tspan class="d"> (${esc(detail)})</tspan>` : ""}</text><text x="100%" dx="-10" y="${H / 2 + 4}" text-anchor="end" class="d" style="font:400 11px ${FONT}">${esc(time)}</text></svg>`;
-}
-function slideSvg(from, to, sinceMs, isAccent) {
-  const H = 22;
-  const begin = `-${(Math.max(0, sinceMs) / 1e3).toFixed(2)}s`;
-  const v = `s${uid(isAccent)}`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}"><style>.${v}{font:600 16px ${FONT};fill:${isAccent ? ACCENT : "#F0EEFC"}}@media (prefers-color-scheme:light){.${v}{fill:${isAccent ? LIGHT.accent : "#222226"}}}</style><text class="${v}" x="100%" y="17" text-anchor="end" opacity="0">${esc(from)}<animate attributeName="y" values="17;-4" dur=".5s" begin="${begin}" fill="freeze"/><animate attributeName="opacity" values="1;0" dur=".5s" begin="${begin}" fill="freeze"/></text><text class="${v}" x="100%" y="17" text-anchor="end">${esc(to)}<animate attributeName="y" values="30;17" dur=".5s" begin="${begin}" fill="freeze"/><animate attributeName="opacity" values="0;1" dur=".5s" begin="${begin}" fill="freeze"/></text></svg>`;
 }
 function badgeSvg(state, clock, size = 20, up, down) {
   if (up !== void 0 || down !== void 0) {
@@ -95,7 +92,7 @@ function badgeSvg(state, clock, size = 20, up, down) {
   if (state === "now") {
     const r = c - 2;
     const arc = 2 * Math.PI * r;
-    const begin = `-${(clock / 1e3 % 1).toFixed(2)}s`;
+    const begin = `-${((clock || Date.now()) % 1e3 / 1e3).toFixed(2)}s`;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}}</style><circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".22" stroke-width="2"/><circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-linecap="round" stroke-dasharray="${(arc * 0.28).toFixed(2)} ${arc.toFixed(2)}"><animateTransform attributeName="transform" type="rotate" from="0 ${c} ${c}" to="360 ${c} ${c}" dur="1s" begin="${begin}" repeatCount="indefinite"/></circle></svg>`;
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>.bn{stroke:#A8A69E;stroke-opacity:.55}@media (prefers-color-scheme:light){.bn{stroke:${LIGHT.grey};stroke-opacity:.8}}</style><circle class="bn" cx="${c}" cy="${c}" r="${c - 2.5}" fill="none" stroke-width="1.5"/></svg>`;
@@ -160,6 +157,18 @@ function stepsRailSvg(states) {
   const bars = states.map((st, k) => `<rect x="${(k * (w + gap)).toFixed(3)}%" y="0" width="${w.toFixed(3)}%" height="6" rx="3" fill="${fill[st]}" fill-opacity="${op[st]}"/>`).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="6">${bars}</svg>`;
 }
+function prIconSvg(state) {
+  const fill = { merged: ACCENT, open: GREEN, draft: "#808080", conflict: "#D4A13A", closed: "#D9534F" }[state];
+  const glyph = {
+    merged: '<path d="M5 8.2l2 2 4-4.2" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    open: '<circle cx="8" cy="8" r="2.2" fill="#fff"/>',
+    draft: "",
+    conflict: '<path d="M8 4.6v4.2" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="11.2" r="1" fill="#fff"/>',
+    closed: '<path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>'
+  }[state];
+  const disc = state === "draft" ? `<circle cx="8" cy="8" r="6.2" fill="none" stroke="${fill}" stroke-width="1.6" stroke-dasharray="2.4 2"/>` : `<circle cx="8" cy="8" r="7" fill="${fill}"/>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${disc}${glyph}</svg>`;
+}
 export {
   DARK_PAGE,
   LIGHT,
@@ -167,7 +176,7 @@ export {
   barWindow,
   exitSvg,
   flowLineSvg,
-  slideSvg,
+  prIconSvg,
   spaceSvg,
   stepsRailSvg,
   stripSvg,
