@@ -1,0 +1,5 @@
+# The whole site is public. AI crawlers are welcome too: the page describes an open-source tool.
+User-agent: *
+Allow: /
+
+Sitemap: https://oficiallyakshay.github.io/mission-status/sitemap.xml

@@ -2,7 +2,7 @@ export type Count = { label: string; when?: string; n?: number; m?: number; text
 export type ItemStatus = 'done' | 'now' | 'next' | 'failed'
 // id: the agent's stable id for its item (from the name when the agent sends none). The task-list steps are the
 // pane's own items, kept apart in `tasks`: no agent write deletes them.
-export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null; pr?: string | null; doneAt?: number | null; steps?: string[] | null; step?: number | null; inferred?: boolean; taskStep?: string | null; touchedAt?: number | null }
+export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null; pr?: string | null; doneAt?: number | null; steps?: string[] | null; step?: number | null; taskStep?: string | null; touchedAt?: number | null }
 export type StepStatus = 'done' | 'now' | 'next'
 export type StageKey = 'plan' | 'build' | 'fix' | 'cause' | 'review' | 'ship'
 export type HypothesisState = 'open' | 'testing' | 'ruled out' | 'confirmed'
@@ -64,9 +64,6 @@ export type Fresh = {
   turnUpdated?: boolean
 }
 export type MetricsSession = { holdback: boolean; calls: number; realWork: boolean; paneSent?: boolean }
-// The state marker (infer.ts): Jev's marks (by item key, with the status the item had when marked), the parents it
-// placed, the item keys already seen, and its own counts of requests, input tokens and refusals in a row.
-export type InferState = { marks: Record<string, { status: ItemStatus; from: ItemStatus; at: number }>; parents: Record<string, string>; seen: string[]; calls: number; tokens: number; fails: number; off: boolean }
 export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null; doneAt?: number | null }
 export type Activity = { text: string; prev: string | null; at: number } | null
 export type Pr = { number: number; state: string; url: string; title: string; isDraft?: boolean; review?: string; merge?: string; ci?: 'passing' | 'failing' | 'running' | 'none' }
@@ -84,8 +81,6 @@ declare module 'claude-code' {
       consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; holdback: boolean; metricsNoticeShown: boolean; metricsSession: MetricsSession | null; autoUpdate: boolean | null; barStart: number | null; tab: string | null; prRefs: string[]
       // Wave 1: freshness triggers (store.ts)
       fresh: Fresh; doc: { title: string; path: string } | null
-      // The state marker (infer.ts)
-      infer: InferState | null
       // The quiet chat's hidden and shown blocks (quiet.tsx), kept across a reload.
       quietKept: { hidden: string[]; shown: string[] } }
 

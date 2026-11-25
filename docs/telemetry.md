@@ -69,16 +69,6 @@ For 30 days after the release date (`RELEASE_AT` in `metrics.tsx`), on installs 
 
 PostHog Cloud (US), a PostHog project the maintainer runs, with `product: "mission-status"` on each event. The project key in `metrics.tsx` is PostHog's public, write-only key: anyone can read it, and it can only add events. The mod sends with the engine's own `$.http.fetch`: no PostHog SDK, no autocapture, no session recording.
 
-## The optional state marker (Jev)
-
-This is not a metric, and it is off by default. When `JEV_API_KEY` is set in the environment of Claude Code, the pane sends recent work to Jev, TypeSafe's decision model, to mark item states (`plugins/mission-status/hooks/infer.ts`). What goes, about every 30 s and only after new tool calls, as one JSON `POST` to `https://api.typesafe.ai/v1/systemone` with your key in an `Authorization: Bearer` header:
-
-- The model id `jev-1.13.0`.
-- Every pane item's name, stage and state, and the names of new items to place.
-- Every tool-call line in the last 256 KiB of the session's transcript: the tool, its target (a Bash description or command, a file name without its folder, a search pattern, a query, a URL, a helper's description) and its end: ok, error, or a Bash command's last output line. No line is cut short.
-
-Never sent to Jev: file contents, other tool output, prompts, the chat, paths beyond a file's own name, the session id. Unset the variable to stop it. TypeSafe's own terms apply to what it receives.
-
 ## Deletion requests
 
 To ask for your events to be deleted, open an issue in this repository with your install id. Type `/pane-metrics` to see it. The owner deletes the events with that id in PostHog and replies within 30 days.

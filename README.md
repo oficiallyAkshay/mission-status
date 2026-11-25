@@ -1,10 +1,18 @@
-<h1 align="center">🚀 mission-status</h1>
+<p align="center"><img src="site/mark.png" alt="" width="96" height="96"></p>
+
+<h1 align="center">mission-status</h1>
 
 <p align="center"><b>Know where your agent stands, without reading through its work.</b></p>
 
 <p align="center"><img src="docs/assets/progress-tab.png" alt="A Claude desktop window with the mission-status pane open beside the chat, on its Progress tab: the goal, the stages, what each stage needs to be done, and the work running now" width="800"></p>
 
+<p align="center"><a href="https://oficiallyakshay.github.io/mission-status/"><b>Website</b></a> · <a href="#install">Install</a> · <a href="docs/telemetry.md">Usage counts</a></p>
+
 <p align="center">
+  <a href="https://github.com/oficiallyAkshay/mission-status/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/oficiallyAkshay/mission-status/actions/workflows/ci.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/oficiallyAkshay/mission-status/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/oficiallyAkshay/mission-status/actions/workflows/codeql.yml/badge.svg?branch=main"></a>
+  <a href="https://scorecard.dev/viewer/?uri=github.com/oficiallyAkshay/mission-status"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/oficiallyAkshay/mission-status/badge"></a>
+  <a href="https://github.com/oficiallyAkshay/mission-status/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/oficiallyAkshay/mission-status?color=8B7CF6"></a>
   <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/license-MIT-2f6f4e?logo=opensourceinitiative&logoColor=white"></a>
   <a href="https://github.com/oficiallyAkshay/clonometer"><img alt="clones of this repository, last seven days and all time" src="https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/oficiallyAkshay/mission-status/badges/clones.json&query=$.badge&label=clones&logo=github&logoColor=white"></a>
 </p>
@@ -40,6 +48,8 @@ mission-status is a live progress pane for Claude Code in the Claude desktop app
 - you work in the terminal or an editor: the pane shows only in the Claude desktop app;
 - you want progress bars above the prompt: [zycck/claude-mods](https://github.com/zycck/claude-mods) draws those.
 
+## Install
+
 Install it from a Claude Code session in the Claude desktop app:
 
 ```
@@ -63,12 +73,11 @@ The pane opens by itself once a session does real work, and `/mission-status` op
 
 ## Security and limits
 
-No credential by default. The pane runs inside Claude Code on your machine, and it calls no model of its own unless you turn on the state marker below.
+No credential needed. The pane runs inside Claude Code on your machine, and it calls no model of its own.
 
 - ❎ sends your prompts, goals, files, branch names or paths anywhere
 - ❎ names your account or session in any event
 - ❎ installs an update during a turn
 
-**Optional state marker (Jev).** Off unless `JEV_API_KEY` is in the environment of Claude Code (for example under `env` in `~/.claude/settings.json`). When it is set, about every 30 s after new tool calls the pane asks Jev, TypeSafe's decision model (`jev-1.13.0`, `POST https://api.typesafe.ai/v1/systemone`), which items are now done, in progress or failed, and where a new item with no parent belongs. It sends every item's name, stage and state, and every tool-call line in the last 256 KiB of the session's transcript: the tool, its target (a command's description or the command, a file's name, a search pattern, a URL) and how it ended (ok, error, or a Bash command's last output line). It never sends file contents or other tool output. A mark shows as "inferred" until the agent's next update, which always wins; a placed parent stays, and the agent's own parent wins. A bad or unsure answer changes nothing; three refusals in a row stop it for the session. TypeSafe's terms and privacy policy apply to what it receives.
 
 By default anonymous usage counts are on after the onboarding shows them; `/pane-metrics off` stops them, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops every send. Every event and field is listed in [docs/telemetry.md](docs/telemetry.md). By default the plugin updates itself between turns; the onboarding switch or the pane's Turn on auto-update button sets it.
