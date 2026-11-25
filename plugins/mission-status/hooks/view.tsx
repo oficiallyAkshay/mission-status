@@ -4,6 +4,7 @@ import type { ElementConstructor, ProgressProps, RenderChildren, RenderInput, Sv
 import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket, RunbookStep } from '../types'
 import { barWindow, trackFits, stepsRailSvg, prIconSvg, badgeSvg, exitSvg, flowLineSvg, spaceSvg, waitsLineSvg, stripSvg, trackSvg } from './bars'
 import { age, cap, clockOf, figureOf, normalize } from './model'
+import { inferredItems } from './infer'
 import { prFacts } from './readers'
 import type { MergeLive } from './readers'
 import { ACCENT } from './store'
@@ -123,14 +124,15 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     // The model's items plus the task list's steps, each in its stage. A step the model also names shows once.
     // An item whose pull request merged is done, at the merge time, whatever the agent last sent: no agent call needed.
     const prMergedAt = (x: Item) => (x.pr != null ? (l?.ci?.[x.pr]?.mergedAt ?? null) : null)
-    const allItems: Item[] = [
+    // The state marker's inferred marks and places lie on top (infer.ts); the agent's own state wins.
+    const allItems: Item[] = await inferredItems($, [
       ...s.items.map(x => (x.status !== 'done' && prMergedAt(x) !== null ? { ...x, status: 'done' as const, doneAt: prMergedAt(x), since: null } : x)),
       ...steps
         // A stage the model fills with its own items shows those; the task list fills only stages it leaves empty.
         .filter(x => !s.items.some(y => y.phase === x.phase))
         .filter(x => !s.items.some(y => y.name.toLowerCase() === x.name.toLowerCase()))
         .map(x => ({ phase: x.phase, name: cap(x.name), status: x.status, after: null, parent: null, when: null, since: x.since ?? null, doneAt: x.doneAt ?? null }) as Item),
-    ]
+    ])
     // A stage's state. Done only when its phase is past AND every item in it is done: a passed stage with an
     // unfinished item stays in progress, beside the current stage. The current and the active stages are in progress.
     const stageState = (k: number): 'done' | 'now' | 'next' => {
@@ -338,6 +340,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                     ? `${x.name}  ·  ${timeOfDay(x.doneAt ?? 0)}`
                     : x.name}
                 {ciPart !== null && <Text color={ci?.state === 'failing' ? 'error' : ci?.state === 'running' ? ACCENT_TEXT : NOTE}>{ciPart}</Text>}
+                {x.inferred === true && <Text color={NOTE}>{'  ·  inferred'}</Text>}
               </Text>
             </Box>
             <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">

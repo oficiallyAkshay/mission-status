@@ -63,10 +63,12 @@ The pane opens by itself once a session does real work, and `/mission-status` op
 
 ## Security and limits
 
-No credential. The pane runs inside Claude Code on your machine, and it calls no model of its own.
+No credential by default. The pane runs inside Claude Code on your machine, and it calls no model of its own unless you turn on the state marker below.
 
 - ❎ sends your prompts, goals, files, branch names or paths anywhere
 - ❎ names your account or session in any event
 - ❎ installs an update during a turn
+
+**Optional state marker (Sarvam).** Off unless `SARVAM_API_KEY` is in the environment of Claude Code (for example under `env` in `~/.claude/settings.json`). When it is set, about every 30 s after new tool calls the pane asks [Sarvam Prism](https://docs.sarvam.ai/api/token-factory/models/sarvam-prism) (`sarvam-prism`, `POST https://api.sarvam.ai/v2/systemone`) which items are now done, in progress or failed, and where a new item with no parent belongs. It sends the item names and stages, and the newest 40 tool-call lines: the tool, its target (a command's description or the command, a file's name, a search pattern, a URL) and how it ended (ok, error, or a Bash command's last output line). It never sends file contents or other tool output. A mark shows as "inferred" until the agent's next update, which always wins; a placed parent stays, and the agent's own parent wins. A bad or unsure answer changes nothing; three refusals in a row stop it for the session. Sarvam's terms and privacy policy apply to what it receives.
 
 By default anonymous usage counts are on after the onboarding shows them; `/pane-metrics off` stops them, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops every send. Every event and field is listed in [docs/telemetry.md](docs/telemetry.md). By default the plugin updates itself between turns; the onboarding switch or the pane's Turn on auto-update button sets it.
