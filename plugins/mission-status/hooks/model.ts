@@ -39,14 +39,15 @@ export function applyPlan(list: Task[], args: Record<string, unknown>, phase: nu
         const status: Task['status'] = o.status === 'completed' ? 'done' : o.status === 'in_progress' ? 'now' : 'next'
         const was = list.find(x => x.name === name)
         const since = status === 'now' ? (was?.status === 'now' ? (was.since ?? Date.now()) : Date.now()) : null
-        return { name, status, phase: was?.phase ?? phase, since }
+        const doneAt = status === 'done' ? (was?.status === 'done' ? (was.doneAt ?? Date.now()) : Date.now()) : null
+        return { name, status, phase: was?.phase ?? phase, since, doneAt }
       })
       .filter(x => x.name !== '')
   }
   const set = (i: number, status: Task['status']) => {
     const x = next[i]
     if (x !== undefined)
-      next[i] = { ...x, status, phase: status === 'now' && x.status === 'next' ? phase : x.phase, since: status === 'now' ? (x.status === 'now' ? (x.since ?? Date.now()) : Date.now()) : null }
+      next[i] = { ...x, status, phase: status === 'now' && x.status === 'next' ? phase : x.phase, since: status === 'now' ? (x.status === 'now' ? (x.since ?? Date.now()) : Date.now()) : null, doneAt: status === 'done' ? (x.status === 'done' ? (x.doneAt ?? Date.now()) : Date.now()) : null }
   }
   if (args.advance === true) {
     const k = next.findIndex(x => x.status === 'now')

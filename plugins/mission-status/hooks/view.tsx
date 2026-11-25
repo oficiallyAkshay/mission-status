@@ -37,6 +37,13 @@ const isWebUrl = (href: string) => /^https?:\/\/[^\s]+$/i.test(href)
 
 
 // The header's age of the last update: seconds, then minutes, then hours.
+// The clock time a step was done, in the machine's own time zone: 9:05 PM.
+export function timeOfDay(at: number): string {
+  const d = new Date(at)
+  const h = d.getHours()
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
+}
+
 export function agoOf(ms: number): string {
   const sec = Math.max(0, Math.floor(ms / 1000))
   if (sec < 60) return `${sec}s ago`
@@ -94,7 +101,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         // A stage the model fills with its own items shows those; the task list fills only stages it leaves empty.
         .filter(x => !s.items.some(y => y.phase === x.phase))
         .filter(x => !s.items.some(y => y.name.toLowerCase() === x.name.toLowerCase()))
-        .map(x => ({ phase: x.phase, name: cap(x.name), status: x.status, after: null, parent: null, when: null, since: x.since ?? null }) as Item),
+        .map(x => ({ phase: x.phase, name: cap(x.name), status: x.status, after: null, parent: null, when: null, since: x.since ?? null, doneAt: x.doneAt ?? null }) as Item),
     ]
     // A stage's state. Done only when its phase is past AND every item in it is done: a passed stage with an
     // unfinished item stays in progress, beside the current stage. The current and the active stages are in progress.
@@ -288,7 +295,11 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
             <Box flexGrow={1} flexShrink={1}>
               {/* Body style for every item; the badge carries the state, the colour only steps back for done and later items. */}
               <Text color={state === 'now' ? undefined : SUBTEXT} wrap="wrap">
-                {state === 'now' && (x.since ?? null) !== null ? `${x.name}  ·  ${clockOf(Date.now() - (x.since ?? Date.now()))}` : x.name}
+                {state === 'now' && (x.since ?? null) !== null
+                  ? `${x.name}  ·  ${clockOf(Date.now() - (x.since ?? Date.now()))}`
+                  : state === 'done' && (x.doneAt ?? null) !== null
+                    ? `${x.name}  ·  ${timeOfDay(x.doneAt ?? 0)}`
+                    : x.name}
               </Text>
             </Box>
             <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
