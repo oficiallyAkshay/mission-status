@@ -254,7 +254,9 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         const k = left.findIndex(x => x.after === null || !left.some(y => y.name === x.after))
         out.push(...left.splice(k < 0 ? 0 : k, 1))
       }
-      return out
+      // Done items first, then failed and in progress, then pending at the bottom; waits keep their order inside each.
+      const rank = (x: Item) => (x.status === 'done' ? 0 : x.status === 'failed' ? 1 : x.status === 'now' ? 2 : 3)
+      return out.map((x, i) => ({ x, i })).sort((a, b) => rank(a.x) - rank(b.x) || a.i - b.i).map(p => p.x)
     }
     const itemCards = (list: Item[], depth: number, rails: boolean[] = []): RenderChildren => {
       const rows: RenderChildren[] = []
