@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { CAP_BYTES } from '../hooks/model'
+import { CAP_BYTES, asTemplates, templatesLine } from '../hooks/model'
 
 // About 4 characters per token.
 const tokensOf = (value: unknown): number => Math.ceil((JSON.stringify(value) ?? '').length / 4)
@@ -178,4 +178,44 @@ test('an item a patch sets in progress gets its start time, and keeps it while i
   expect(typeof since).toBe('number')
   await send($, { patch: [{ op: 'change', id: 'a', note: 'still going' }] })
   expect((await state($, 'summary')).items[0].since).toBe(since)
+})
+
+test('personal templates: saveTemplate keeps the stages for later sessions, and template uses them', async ($, on) => {
+  const kept = new Map<string, unknown>()
+  on('store.get', (_: unknown, e: { key: string }) => ({ value: kept.get(e.key) }))
+  on('store.set', (_: unknown, e: { key: string; value: unknown }) => (kept.set(e.key, e.value), { value: undefined }))
+  await start($, on)
+  const saved = await send($, { project: 'P', phases: ['Spec', 'Build', 'Ship'], phase: 0, saveTemplate: 'my-flow' })
+  expect(String(saved.result)).toContain('Saved the stages as template my-flow')
+  expect(kept.get('templates')).toEqual({ 'my-flow': ['Spec', 'Build', 'Ship'] })
+  expect((await send($, { phases: ['A', 'B'] })).deny).toBeUndefined()
+  expect((await send($, { template: 'my-flow' })).deny).toBeUndefined()
+  expect((await state($, 'summary')).phases).toEqual(['Spec', 'Build', 'Ship'])
+  expect(String((await send($, { saveTemplate: 'feature' })).deny)).toContain('built-in template')
+  expect(String((await send($, { template: 'nope' })).deny)).toContain('my-flow')
+  // The standing rule names the person's templates.
+  expect(templatesLine(asTemplates(kept.get('templates')))).toContain('my-flow (Spec, Build, Ship)')
+})
+
+test('repo: the Merge card reads git in the repository the agent names', async ($, on) => {
+  const dirs: (string | undefined)[] = []
+  watch(on)
+  on('tool.register', () => ({ value: {} }))
+  on('command.register', () => ({ value: { command: 'mission-status' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('agent.list', () => ({ value: [] }))
+  on('clock.every', () => ({ value: () => {} }))
+  on('process.run', (_: unknown, e: { argv: string[]; init?: { cwd?: string } }) => {
+    if (e.argv[0] === 'git') dirs.push(e.init?.cwd)
+    return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('tool.call', () => ({ result: 'ok' }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  expect(String((await send($, { project: 'P', phase: 0, repo: 'relative/path' })).deny)).toContain('absolute')
+  expect((await send($, { project: 'P', phase: 0, repo: '/work/other-repo' })).deny).toBeUndefined()
+  expect((await state($, 'summary')).repo).toBe('/work/other-repo')
+  // The update polls at once: its git reads run in the named folder.
+  await new Promise(r => setTimeout(r, 50))
+  expect(dirs.at(-1)).toBe('/work/other-repo')
 })

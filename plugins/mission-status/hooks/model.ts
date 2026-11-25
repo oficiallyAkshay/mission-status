@@ -141,6 +141,7 @@ export function normalize(raw: Summary): Summary {
     change: (r.change as { label: string; from: string; at: number } | null) ?? null,
     at: typeof r.at === 'number' ? r.at : 0,
     version: typeof r.version === 'number' ? r.version : 0,
+    repo: typeof r.repo === 'string' && r.repo.startsWith('/') ? r.repo : null,
     waitingForAgent: r.waitingForAgent === true,
     mayBeOutOfDate: r.mayBeOutOfDate === true,
   }
@@ -240,6 +241,7 @@ export const RULE =
   'At each update, look again at the stages: keep a template only while it fits the work, and send new stages when the work changes. ' +
   'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those. ' +
   'Give each item a stable id, and send small item changes as patch operations. ' +
+  'When the work is in another repository than the session folder, send repo once. ' +
   'The pane is the only progress report. In the chat, write only what the person must do or decide to unblock the work ' +
   '(a decision, an approval, a step only they can do), and a direct answer when they ask a question. ' +
   'Send no progress lines, status, recaps, plans or narration in the chat: put them in the pane.'
@@ -298,7 +300,26 @@ function checkItemFields(o: Record<string, unknown>, where: string, whole: boole
 }
 
 // Every error in an agent update, in plain words; none means the update is valid. A failed update writes nothing.
-export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVersion = 0): string[] {
+// A personal template's name: what the person calls it, kept short.
+export const TEMPLATE_NAME = /^[a-z0-9][a-z0-9-]{0,29}$/
+// $.store key: the person's own templates, name to stage list, shared by every session on this machine.
+export const TEMPLATES_KEY = 'templates'
+
+export function asTemplates(v: unknown): Record<string, string[]> {
+  if (v === null || typeof v !== 'object') return {}
+  const out: Record<string, string[]> = {}
+  for (const [k, list] of Object.entries(v as Record<string, unknown>))
+    if (TEMPLATE_NAME.test(k) && Array.isArray(list) && list.length >= 2 && list.length <= 8 && list.every(x => typeof x === 'string')) out[k] = list as string[]
+  return out
+}
+
+// The standing rule's line on the person's own templates, or nothing when there are none.
+export function templatesLine(personal: Record<string, string[]>): string {
+  const rows = Object.entries(personal).map(([k, v]) => `${k} (${v.join(', ')})`)
+  return rows.length === 0 ? '' : ` The person's own templates, usable as template: ${rows.join('; ')}.`
+}
+
+export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVersion = 0, personal: Record<string, string[]> = {}): string[] {
   const errors: string[] = []
   const size = bytesOf(args)
   if (size > CAP_BYTES) return [`the update is ${Math.ceil(size / 1024)} KB; the cap is 32 KB`]
@@ -309,8 +330,13 @@ export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVe
   if (args.project !== undefined && !isText(args.project)) errors.push('project must be a non-empty string')
   if (args.phase !== undefined && (!isNum(args.phase) || (args.phase as number) < 0)) errors.push('phase must be a number from 0')
   if (args.stage !== undefined && !STAGE_KEYS.includes(args.stage as StageKey)) errors.push(`stage must be one of ${STAGE_KEYS.join(', ')}`)
-  if (args.template !== undefined && !(typeof args.template === 'string' && args.template in TEMPLATES))
-    errors.push(`template must be one of ${Object.keys(TEMPLATES).join(', ')}`)
+  if (args.repo !== undefined && args.repo !== null && !(typeof args.repo === 'string' && args.repo.startsWith('/') && !args.repo.split('/').includes('..')))
+    errors.push('repo must be an absolute folder path, or null for the session folder')
+  if (args.saveTemplate !== undefined && !(typeof args.saveTemplate === 'string' && TEMPLATE_NAME.test(args.saveTemplate)))
+    errors.push('saveTemplate must be a name of 1 to 30 lower-case letters, digits and dashes')
+  if (typeof args.saveTemplate === 'string' && args.saveTemplate in TEMPLATES) errors.push(`saveTemplate ${args.saveTemplate} is a built-in template; pick another name`)
+  if (args.template !== undefined && !(typeof args.template === 'string' && (args.template in TEMPLATES || args.template in personal)))
+    errors.push(`template must be one of ${[...Object.keys(TEMPLATES), ...Object.keys(personal)].join(', ')}`)
   if (args.phases !== undefined) {
     const ok = Array.isArray(args.phases) && args.phases.length >= 2 && args.phases.length <= 8 && args.phases.every(isText)
     if (!ok) errors.push('phases must be 2 to 8 non-empty strings')

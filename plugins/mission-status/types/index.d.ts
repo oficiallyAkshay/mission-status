@@ -12,6 +12,8 @@ export type Ticket = { ref: string; title: string | null; url: string | null }
 export type Git = { branch: string; ahead: number; behind?: number; files: number; added: number; removed: number; dirty: number } | null
 export type Summary = {
   project: string
+  // The repository the work is in, when it is not the session's folder; the Merge card reads git there.
+  repo?: string | null
   ticket: Ticket | null
   links: CardLink[]
   goalLine: string | null
