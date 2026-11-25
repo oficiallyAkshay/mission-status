@@ -104,7 +104,8 @@ export function asItem(raw: unknown): Item | undefined {
     after: after === null ? null : cap(after),
     parent: parent === null ? null : cap(parent),
     when: str(o.when),
-    note: str(o.note),
+    // Sentence case, as for names.
+    note: str(o.note) === null ? null : cap(str(o.note) ?? ''),
     n: num(o.n),
     m: num(o.m),
     text: text === null ? undefined : cap(text),
