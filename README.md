@@ -2,7 +2,7 @@
 
 <p align="center"><b>Know where your agent stands, without reading through its work.</b></p>
 
-<p align="center"><img src="docs/assets/hero.svg" alt="mission-status: the goal, the stages with their gates, the merge state and a runbook in one pane beside a quiet chat" width="900"></p>
+<p align="center"><img src="docs/assets/runbook-tab.png" alt="The mission-status pane on its Runbook tab, during the release of this repository: every step, its state and what it waits on" width="403"></p>
 
 <p align="center">
   <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/license-MIT-2f6f4e?logo=opensourceinitiative&logoColor=white"></a>
@@ -28,12 +28,6 @@ mission-status is a live progress pane for Claude Code in the Claude desktop app
 <p align="center">🔒<br><b>Private stays private</b><br>Usage counts are anonymous, never hold your words, files or names, and turn off with one command.</p>
 
 <p align="center">📊<br><b>Live numbers</b><br>Git, pull requests, checks and helpers come from their own sources, read every few seconds.</p>
-
-## In action
-
-The release of this repository, on its Runbook tab: every step, its state, and what it waits on.
-
-<p align="center"><img src="docs/assets/runbook-tab.png" alt="The Runbook tab of mission-status during its own open-source release" width="403"></p>
 
 ## Fit
 
