@@ -203,6 +203,28 @@ test('plan-review template: the built-in template sets the five plan-review stag
   expect((await state($, 'summary')).phases).toEqual(['Intake', 'Draft', 'Review waves', 'Your rows', 'Hand off'])
 })
 
+test('smriti templates: smriti-light and smriti-deep set the stages of each pass', async ($, on) => {
+  await start($, on)
+  expect((await send($, { project: 'P', template: 'smriti-light', phase: 0 })).deny).toBeUndefined()
+  expect((await state($, 'summary')).phases).toEqual(['Discover', 'Judge', 'Curate', 'Guardrail', 'Route'])
+  expect((await send($, { template: 'smriti-deep', phase: 2 })).deny).toBeUndefined()
+  expect((await state($, 'summary')).phases).toEqual(['Size', 'Origin', 'Lenses', 'Curate', 'Screen', 'File', 'Yield'])
+})
+
+test('sub-phases: an item keeps its steps and the step that runs now; change moves the step; a long list is refused', async ($, on) => {
+  await start($, on)
+  const deep = ['Size', 'Origin', 'Lenses', 'Curate', 'Screen', 'File', 'Yield']
+  expect((await send($, { project: 'P', phases: ['Build', 'Wrap up'], phase: 1, patch: [{ op: 'add', id: 'smriti', phase: 1, name: 'Smriti deep', status: 'now', steps: deep, step: 2 }] })).deny).toBeUndefined()
+  let item = (await state($, 'summary')).items.find((x: { id?: string }) => x.id === 'smriti')
+  expect(item.steps).toEqual(deep)
+  expect(item.step).toBe(2)
+  expect((await send($, { patch: [{ op: 'change', id: 'smriti', step: 3 }] })).deny).toBeUndefined()
+  item = (await state($, 'summary')).items.find((x: { id?: string }) => x.id === 'smriti')
+  expect(item.steps).toEqual(deep)
+  expect(item.step).toBe(3)
+  expect(String((await send($, { patch: [{ op: 'change', id: 'smriti', steps: [...deep, 'A', 'B'] }] })).deny)).toContain('at most 8')
+})
+
 test('repo: the Merge card reads git in the repository the agent names', async ($, on) => {
   const dirs: (string | undefined)[] = []
   watch(on)

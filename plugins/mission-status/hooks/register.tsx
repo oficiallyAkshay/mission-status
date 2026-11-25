@@ -187,6 +187,12 @@ export const register: Register = on => {
                 after: { type: 'string' },
                 parent: { type: 'string' },
                 note: { type: 'string', description: 'The rough scope, cut or area, in a few words, shown under the name' },
+                steps: {
+                  type: ['array', 'null'],
+                  items: { type: 'string' },
+                  description: "The item's own sub-phases, one to three words each, at most 8: one dot-separated line under the name, in place of child cards. Use it for the phases inside one step, for example a Smriti deep pass inside a wrap-up step. null clears it.",
+                },
+                step: { type: ['number', 'null'], description: 'Index of the sub-phase that runs now, from 0. The pane shows it bold and the others faint.' },
                 pr: { type: ['string', 'number'], description: "The item's pull request: a number in the work's repository, or owner/name#number. The pane shows its CI state and run time under the item." },
                 when: { type: 'string', description: 'The gate to leave this stage, as an ultra short label of two or three words: Plan approved, Build done, Tests pass, PR merged, Look approved' },
                 n: { type: 'number' },

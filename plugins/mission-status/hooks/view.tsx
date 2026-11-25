@@ -359,6 +359,25 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               </Box>
             </Box>,
           )
+        // The item's sub-phases on one dot-separated line, in place of child cards: the one that runs now in full-opacity
+        // body text, the rest faint.
+        if ((x.steps ?? []).length > 0)
+          rows.push(
+            <Box flexDirection="row" gap={0} key={`${key}-steps`}>
+              {prefix(rails, 14, `${key}-steps`)}
+              {railBox(down, 14, `${key}-steps-own`)}
+              <Box flexGrow={1} flexShrink={1} paddingRight={CHEV}>
+                <Text size="caption" color={NOTE} wrap="wrap">
+                  {(x.steps ?? []).map((name, j) => [
+                    j > 0 ? ' · ' : '',
+                    j === x.step
+                      ? <Text key={`${key}-step-${j}`} weight="bold" color="text">{name}</Text>
+                      : name,
+                  ])}
+                </Text>
+              </Box>
+            </Box>,
+          )
         // The item's pull request CI: its state and how long the checks ran, or run so far.
         // The helpers the session runs now sit under the item in progress, as its children: Smriti's lens jobs under
         // its pass, a review's readers under the review.
