@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { agoOf, timeOfDay } from '../hooks/view'
+import { agoOf, inApp, timeOfDay } from '../hooks/view'
 import { age, cap, clockOf } from '../hooks/model'
 import { trackSvg } from '../hooks/bars'
 
@@ -77,4 +77,9 @@ test('a done time reads as a clock time with AM or PM', () => {
   const at = new Date(2026, 10, 25, 21, 5).getTime()
   expect(timeOfDay(at)).toBe('9:05 PM')
   expect(timeOfDay(new Date(2026, 10, 25, 0, 30).getTime())).toBe('12:30 AM')
+})
+
+test('a claude.ai link opens in the desktop app; other links stay web links', () => {
+  expect(inApp('https://claude.ai/artifact/X4jQ')).toBe('claude://claude.ai/artifact/X4jQ')
+  expect(inApp('https://github.com/a/b/pull/1')).toBe('https://github.com/a/b/pull/1')
 })
