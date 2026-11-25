@@ -46,6 +46,6 @@ test('light theme: the dark look keeps its colours', () => {
 
 test('spinners start at the wall clock\'s place in their turn, so a redraw continues the turn', () => {
   const at = (svg: string) => /begin="-([\d.]+)s"/.exec(svg)?.[1]
-  expect(at(badgeSvg('now', 1_700_000_000_250, 16))).toBe('0.25')
-  expect(at(badgeSvg('now', 1_700_000_000_900, 16))).toBe('0.90')
+  expect(at(badgeSvg('now', 1_700_000_000_250, 16))).toBe('0.250')
+  expect(at(badgeSvg('now', 1_700_000_000_907, 16))).toBe('0.907')
 })

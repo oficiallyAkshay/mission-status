@@ -197,7 +197,10 @@ export function sessionPrOf(ref: string, o: Record<string, unknown>, at: number)
             : String(o.mergeable ?? '').toUpperCase() === 'CONFLICTING'
               ? 'conflict'
               : 'open',
-    ci: ciOf(Array.isArray(o.statusCheckRollup) ? (o.statusCheckRollup as Record<string, unknown>[]) : []).state,
+    ...(() => {
+      const c = ciOf(Array.isArray(o.statusCheckRollup) ? (o.statusCheckRollup as Record<string, unknown>[]) : [])
+      return { ci: c.state, ciStart: c.start, ciEnd: c.end }
+    })(),
     branch: typeof o.headRefName === 'string' ? o.headRefName : null,
     mergedAt: Number.isFinite(merged) ? merged : null,
     at,

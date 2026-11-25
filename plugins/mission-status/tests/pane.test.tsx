@@ -386,7 +386,7 @@ test('done items show the time they were done, at every level of nesting', async
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   // The parent is in progress, so it opens by itself.
   const child = (await ui.findAll({ type: 'Text' })).map(x => String(x.text ?? '')).find(t => t.startsWith('Child'))
-  expect(child).toMatch(/^Child  ·  \d{1,2}:\d{2} (AM|PM)$/)
+  expect(child).toMatch(/^Child  ·  \d{1,2}:\d{2} (AM|PM) [A-Z]+$/)
   await ui.unmount()
 })
 
@@ -400,7 +400,7 @@ test('an item whose pull request merged shows done at the merge time, with no ag
   await new Promise(r => setTimeout(r, 50))
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await svgAlt(ui, /^Ship it: done$/)).toBeTruthy()
-  expect(await text(ui, /^Ship it  ·  \d{1,2}:\d{2} (AM|PM)$/)).toBeTruthy()
+  expect(await text(ui, /^Ship it  ·  \d{1,2}:\d{2} (AM|PM) [A-Z]+$/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -483,5 +483,45 @@ test('the PRs tab finds every pull request in the transcript, past the 4 MiB rea
   await ui.press({ key: 'tab-prs', link: { href: 'https://tab.local/prs' } } as never)
   expect(await text(ui, /^#1  PR 1$/)).toBeTruthy()
   expect(await text(ui, /^#2  PR 2$/)).toBeTruthy()
+  await ui.unmount()
+})
+
+test('a refused Artifact open asks the agent to open the artifact', async ($, on) => {
+  const asked: string[] = []
+  on('tool.call', { tool: 'Artifact' }, () => ({ deny: 'not for plugins' }))
+  on('prompt.submit', (_: unknown, e: { text: string }) => (asked.push(e.text), { text: e.text }))
+  await start($, on)
+  const url = 'https://claude.ai/artifact/XQ8eu3nXjMst5azMTe9Y9Q'
+  await send($, { project: 'P', stage: 'build', phase: 1, links: [{ phase: 1, label: 'Review', href: url }] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const chip = (await ui.findAll({ type: 'Button' })).find(x => x.props?.label === '↗ Review')
+  await ui.press({ key: String(chip?.key ?? '') })
+  expect(asked.some(t => t.includes(url))).toBe(true)
+  await ui.unmount()
+})
+
+test('PRs tab: a pull request whose checks run shows CI with its time so far on its row', async ($, on) => {
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    const isView = e.argv[0] === 'gh' && e.argv[1] === 'pr' && e.argv[2] === 'view'
+    const out = isView ? JSON.stringify({ number: 9, title: 'Add the tab', url: 'https://github.com/acme/app/pull/9', state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [{ status: 'IN_PROGRESS', conclusion: '', startedAt: new Date(Date.now() - 125_000).toISOString(), completedAt: '0001-01-01T00:00:00Z' }], mergedAt: null, headRefName: 'tabs' }) : ''
+    return { value: { exitCode: out === '' ? 1 : 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'https://github.com/acme/app/pull/9\n' }))
+  await start($, on, [], true)
+  await send($, { project: 'P', stage: 'build', phase: 1 })
+  await $.tool.call({ tool: 'Bash', command: 'gh pr create --fill' } as never)
+  await new Promise(r => setTimeout(r, 50))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'tab-prs', link: { href: 'https://tab.local/prs' } } as never)
+  expect(await text(ui, /^CI 02:0\d$/)).toBeTruthy()
+  await ui.unmount()
+})
+
+test('running helpers show under the item in progress, as its children', async ($, on) => {
+  await start($, on, [{ id: 'h1', description: 'lens taste', status: 'running', taskStatus: 'running', model: 'haiku', startTime: Date.now() }])
+  await send($, { project: 'P', phases: ['Plan', 'Wrap up'], phase: 1, items: [{ phase: 1, name: 'Smriti deep', status: 'now' }, { phase: 1, name: 'Merge wait', status: 'next' }] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const order = (await ui.findAll({ type: 'Svg' })).map(x => String((x as any).props?.alt ?? '')).filter(a => /^(Smriti deep|Merge wait): |^Helper /.test(a))
+  expect(order).toEqual(['Smriti deep: in progress', 'Helper lens taste: running', 'Merge wait: not started'])
   await ui.unmount()
 })

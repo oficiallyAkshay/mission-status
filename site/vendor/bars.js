@@ -92,7 +92,7 @@ function badgeSvg(state, clock, size = 20, up, down) {
   if (state === "now") {
     const r = c - 2;
     const arc = 2 * Math.PI * r;
-    const begin = `-${((clock || Date.now()) % 1e3 / 1e3).toFixed(2)}s`;
+    const begin = `-${((clock || Date.now()) % 1e3 / 1e3).toFixed(3)}s`;
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}}</style><circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".22" stroke-width="2"/><circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-linecap="round" stroke-dasharray="${(arc * 0.28).toFixed(2)} ${arc.toFixed(2)}"><animateTransform attributeName="transform" type="rotate" from="0 ${c} ${c}" to="360 ${c} ${c}" dur="1s" begin="${begin}" repeatCount="indefinite"/></circle></svg>`;
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>.bn{stroke:#A8A69E;stroke-opacity:.55}@media (prefers-color-scheme:light){.bn{stroke:${LIGHT.grey};stroke-opacity:.8}}</style><circle class="bn" cx="${c}" cy="${c}" r="${c - 2.5}" fill="none" stroke-width="1.5"/></svg>`;
@@ -158,16 +158,23 @@ function stepsRailSvg(states) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="6">${bars}</svg>`;
 }
 function prIconSvg(state) {
-  const fill = { merged: ACCENT, open: GREEN, draft: "#808080", conflict: "#D4A13A", closed: "#D9534F" }[state];
-  const glyph = {
-    merged: '<path d="M5 8.2l2 2 4-4.2" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
-    open: '<circle cx="8" cy="8" r="2.2" fill="#fff"/>',
-    draft: "",
-    conflict: '<path d="M8 4.6v4.2" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="11.2" r="1" fill="#fff"/>',
-    closed: '<path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>'
-  }[state];
-  const disc = state === "draft" ? `<circle cx="8" cy="8" r="6.2" fill="none" stroke="${fill}" stroke-width="1.6" stroke-dasharray="2.4 2"/>` : `<circle cx="8" cy="8" r="7" fill="${fill}"/>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${disc}${glyph}</svg>`;
+  const color = { merged: "#8957E5", open: "#3FB950", draft: "#8B949E", conflict: "#D29922", closed: "#F85149" }[state];
+  const stroke = `fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"`;
+  const ring = (cx, cy) => `<circle cx="${cx}" cy="${cy}" r="1.75" ${stroke}/>`;
+  const body = state === "merged" ? (
+    // git-merge: a ring at the top left, its line down, a curve into the ring at the right.
+    `${ring(4.5, 3.5)}${ring(4.5, 12.5)}${ring(11.5, 8)}<path d="M4.5 5.25v5.5M4.5 5.25c0 2.2 2.4 2.75 5.25 2.75" ${stroke}/>`
+  ) : state === "closed" ? (
+    // git-pull-request-closed: the base ring and line, and a cross where the head would be.
+    `${ring(4.5, 3.5)}${ring(4.5, 12.5)}<path d="M4.5 5.25v5.5M10 2.5l3 3M13 2.5l-3 3" ${stroke}/>${ring(11.5, 12.5)}<path d="M11.5 8.5v2.25" ${stroke}/>`
+  ) : state === "draft" ? (
+    // git-pull-request-draft: the base ring and line, and dots up to the head ring.
+    `${ring(4.5, 3.5)}${ring(4.5, 12.5)}<path d="M4.5 5.25v5.5" ${stroke}/>${ring(11.5, 12.5)}<circle cx="11.5" cy="3.5" r=".9" fill="${color}"/><circle cx="11.5" cy="7.25" r=".9" fill="${color}"/>`
+  ) : (
+    // git-pull-request (open, or a conflict in amber): the base ring and line, and an arrow back to the head ring.
+    `${ring(4.5, 3.5)}${ring(4.5, 12.5)}<path d="M4.5 5.25v5.5M11.5 10.75V6a2 2 0 0 0-2-2H7.5M8.75 2.6L7.3 4l1.45 1.4" ${stroke}/>${ring(11.5, 12.5)}`
+  );
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${body}</svg>`;
 }
 export {
   DARK_PAGE,
