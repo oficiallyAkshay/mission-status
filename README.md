@@ -1,84 +1,71 @@
-# mission-status
+<h1 align="center">🚀 mission-status</h1>
 
-<p>
-  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/license-MIT-5442D0"></a>
-  <a href="#updates"><img alt="clones of this repository, last seven days and all time" src="https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/oficiallyAkshay/mission-status/badges/clones.json&query=$.badge&label=clones&logo=github&logoColor=white"></a>
-  <a href="#updates"><img alt="views of this repository, last seven days and all time" src="https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/oficiallyAkshay/mission-status/badges/views.json&query=$.badge&label=views&logo=github&logoColor=white"></a>
+<p align="center"><b>Know where your agent stands, without reading through its work.</b></p>
+
+<p align="center"><img src="docs/assets/hero.svg" alt="mission-status: the goal, the stages with their gates, the merge state and a runbook in one pane beside a quiet chat" width="900"></p>
+
+<p align="center">
+  <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/license-MIT-2f6f4e?logo=opensourceinitiative&logoColor=white"></a>
+  <a href="https://github.com/oficiallyAkshay/clonometer"><img alt="clones of this repository, last seven days and all time" src="https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/oficiallyAkshay/mission-status/badges/clones.json&query=$.badge&label=clones&logo=github&logoColor=white"></a>
 </p>
 
-Know where your agent stands, without reading through its work.
+<p align="center">Works with<br>
+  <a href="https://github.com/anthropics/claude-code"><img alt="Claude Code" src="https://img.shields.io/badge/Claude%20Code-1e1b4b?logo=claude&logoColor=white"></a>
+</p>
 
-mission-status is a live progress pane for Claude Code in the Claude desktop app. It sits beside the chat and shows the goal, the stages, what done means for each stage, and where the work is right now. The agent keeps it current, so you never ask "where are we?" again.
+## Features
 
-The chat goes quiet. You hear from the agent only when something changed or needs you: a decision, an approval, or a step only you can do.
+mission-status is a live progress pane for Claude Code in the Claude desktop app. It sits beside the chat and shows the goal, the stages, what done means for each stage, and where the work is right now.
 
-## Install
+<p align="center">👀<br><b>Read in a glance</b><br>The goal, the current stage and its gate show on one screen, so you never ask "where are we?" again.</p>
 
-In a Claude Code session in the desktop app, run:
+<p align="center">🧭<br><b>Fits any work</b><br>Features, bug fixes, incidents, research or your own saved stages: the pane changes shape with the work.</p>
 
-```
-/plugin marketplace add oficiallyAkshay/mission-status
-/plugin install mission-status@mission-status
-```
+<p align="center">🔁<br><b>Stays current</b><br>The agent keeps it up to date, and the pane reminds it when the view goes stale.</p>
 
-The pane opens by itself once a session does real work. `/mission-status` opens it at any time.
+<p align="center">🤫<br><b>A quiet chat</b><br>The chat holds only what needs you: a decision, an approval, or a step only you can do.</p>
 
-It needs the Claude desktop app. The terminal and the editor extensions show no pane.
+<p align="center">🔒<br><b>Private stays private</b><br>Usage counts are anonymous, never hold your words, files or names, and turn off with one command.</p>
 
-## What the pane shows
+<p align="center">📊<br><b>Live numbers</b><br>Git, pull requests, checks and helpers come from their own sources, read every few seconds.</p>
 
-| Part | What it tells you |
-|---|---|
-| The goal | One sentence: what the session is for |
-| The stage track | Every stage on one line, with the current one lit |
-| Stage cards | Each stage's state, its time, and what the agent is doing now |
-| Done when | For each stage, what finished means |
-| Items | The work inside a stage: done, now, next |
-| Links | Plans, documents, Claude artifacts and pages, on the stage that made them |
-| Helpers | The helpers that run now, and for how long |
+## In action
 
-## Any kind of work
+The release of this repository, on its Runbook tab: every step, its state, and what it waits on.
 
-The agent picks a template, or writes its own stages when none fits. It can add, remove or rename stages at any time, and the pane changes shape with it.
+<p align="center"><img src="docs/assets/runbook-tab.png" alt="The Runbook tab of mission-status during its own open-source release" width="403"></p>
 
-| Template | Stages |
-|---|---|
-| Feature | Plan, Build, Test, Deploy, Learn |
-| Product loop | Plan, Build, Review, Deploy, Monitor, Iterate |
-| Bug fix | Reproduce, Find cause, Fix, Test, Deploy |
-| Incident | Detect, Triage, Mitigate, Root cause, Fix, Review |
-| Research | Question, Gather, Analyze, Synthesize, Report |
-| Design | Brief, Explore, Pick, Refine, Hand off |
-| Board batch | Intake, Plan, Build, Review, Merge |
-| Writing | Outline, Draft, Review, Publish |
-| Migration | Plan, Dry run, Migrate, Verify, Clean up |
+## Fit
 
-## What it costs
+**Use it when**
+- your sessions run long, with several stages, helpers and pull requests;
+- you want to follow a session without reading the chat;
+- you follow a runbook or a checklist and want each step tracked.
 
-Most of the pane is read by code and costs no tokens: the task list, helpers and timers. Only a stage change asks the agent, in one short update call.
+**Look elsewhere when**
+- you work in the terminal or an editor: the pane shows only in the Claude desktop app;
+- you want progress bars above the prompt: [zycck/claude-mods](https://github.com/zycck/claude-mods) draws those.
 
-## Privacy
+Add this repository as a plugin marketplace in Claude Code, then install mission-status from it; the steps are in [CONTRIBUTING](.github/CONTRIBUTING.md).
 
-Anonymous usage metrics are off until you say yes, once, in onboarding. `/pane-metrics off` turns them off at once. Every event and field is listed in [docs/telemetry.md](docs/telemetry.md). Nothing is sent when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set.
+## How it compares
 
-## Updates
+| | [oficiallyAkshay/mission-status](https://github.com/oficiallyAkshay/mission-status) | [zycck/claude-mods](https://github.com/zycck/claude-mods) |
+|---|---|---|
+| Place | Side pane | Above prompt |
+| Stage gates | ✅ | ❌ |
+| Merge state | ✅ | ❌ |
+| Runbook tabs | ✅ | ❌ |
+| Quiet chat | ✅ | ❌ |
+| Terminal | ❌ | ✅ |
+| Sounds | ❌ | ✅ |
 
-The plugin keeps itself current: it checks this repository's latest release at start and every six hours, and installs a newer one between turns. A copy installed from a folder never updates itself.
+## Security and limits
 
-## Uninstall
+No credential. The pane runs inside Claude Code on your machine, and it calls no model of its own.
 
-```
-/plugin uninstall mission-status@mission-status
-```
+- ❌ sends your prompts, goals, files, branch names or paths anywhere
+- ❌ names your account or session in any event
+- ❌ installs an update during a turn
 
-## Develop
-
-- The plugin: `plugins/mission-status/` (hooks in `hooks/`, the contract in `types/index.d.ts`, tests in `tests/`).
-- Checks: `scripts/check.sh` runs `claude plugin validate` and `claude plugin test` with the desktop app's own engine.
-- A change to the plugin raises `version` in `plugins/mission-status/.claude-plugin/plugin.json`; CI fails the pull request otherwise. Each merged version becomes a release.
-- The site: `site/`.
-- How to contribute: [CONTRIBUTING.md](CONTRIBUTING.md). Notes for coding agents: [AGENTS.md](AGENTS.md).
-
-## Licence
-
-MIT. See [LICENSE](LICENSE).
+By default anonymous usage counts are on after the onboarding shows them; `/pane-metrics off` stops them, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops every send. Every event and field is listed in [docs/telemetry.md](docs/telemetry.md). By default the plugin updates itself between turns; the onboarding switch or the pane's Turn on auto-update button sets it.
