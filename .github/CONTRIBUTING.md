@@ -57,10 +57,6 @@ The plugin checks this repository's latest release at start and every six hours,
 | scorecard | Scores the repository's security practices for the OpenSSF Scorecard badge, weekly and on each push to main |
 | pages | Publishes the website in `site/` on each push to main that changes it |
 
-## Report a security problem
-
-Report it privately: open the repository's Security tab and choose "Report a vulnerability". Do not open a public issue. You get a reply within 14 days.
-
 ## Before you start
 
 - Open an issue first for a new feature, so the shape is agreed before the work.
