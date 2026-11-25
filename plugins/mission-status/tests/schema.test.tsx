@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { CAP_BYTES, asTemplates, templatesLine } from '../hooks/model'
+import { CAP_BYTES, asTemplates, skillSteps, templatesLine } from '../hooks/model'
 
 // About 4 characters per token.
 const tokensOf = (value: unknown): number => Math.ceil((JSON.stringify(value) ?? '').length / 4)
@@ -224,4 +224,10 @@ test('repo: the Merge card reads git in the repository the agent names', async (
   // The update polls at once: its git reads run in the named folder.
   await new Promise(r => setTimeout(r, 50))
   expect(dirs.at(-1)).toBe('/work/other-repo')
+})
+
+test('a skill gives its numbered steps: the bold lead names a step, else its first words', () => {
+  const md = '# x\n\nIntro 1. not a step\n\n## Steps\n\n1. **Gather.** Read the context.\n2. Read the rules and the shape\n3. **Draw the hero.** Pick a layout.\n\n## Other\n\n1. Not this one\n'
+  expect(skillSteps(md)).toEqual(['Gather', 'Read the rules and the shape', 'Draw the hero'])
+  expect(skillSteps('1. One\n2. Two\n')).toEqual(['One', 'Two'])
 })

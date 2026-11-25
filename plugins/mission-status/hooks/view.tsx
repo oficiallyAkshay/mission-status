@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, ProgressProps, RenderChildren, RenderInput, SvgProps } from 'claude-code'
 import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket, RunbookStep } from '../types'
-import { barWindow, trackFits, stepsRailSvg, badgeSvg, exitSvg, flowLineSvg, spaceSvg, waitsLineSvg, slideSvg, stripSvg, trackSvg } from './bars'
+import { barWindow, trackFits, stepsRailSvg, prIconSvg, badgeSvg, exitSvg, flowLineSvg, spaceSvg, waitsLineSvg, stripSvg, trackSvg } from './bars'
 import { age, cap, clockOf, figureOf, normalize } from './model'
 import { prFacts } from './readers'
 import type { MergeLive } from './readers'
@@ -188,9 +188,6 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
             <Link href={c.href}>{c.hrefLabel ?? 'Open'}</Link>
           </Text>
         )
-      // In the first seconds after a change, the new figure slides in over the old one.
-      if (change !== null && Date.now() - change.at < 8_000 && Svg !== undefined)
-        return svg(slideSvg(change.from, figure, Date.now() - change.at, true), `${c.label}: ${figure}`, 22)
       if (c.text !== undefined)
         // A status word reads as a word, in the colour of its state, not as a large number.
         return (
@@ -568,16 +565,66 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const runbooks = s.runbooks ?? []
     const tab = await read($, tabAtom)
     const book = runbooks.find(r => r.id === tab) ?? null
-    const tabRow =
-      runbooks.length === 0 ? null : (
+    // Tabs: Progress, PRs (always), then each runbook or skill the session follows.
+    const sessionPrs = l?.sessionPrs ?? []
+    const onPrs = tab === 'prs'
+    const tabRow = (
         <Box flexDirection="row" gap={1} flexWrap="wrap" key="tabs">
-          <Button key="tab-progress" label="Progress" variant={book === null ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => null)} />
+          <Button key="tab-progress" label="Progress" variant={book === null && !onPrs ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => null)} />
+          <Button key="tab-prs" label={sessionPrs.length > 0 ? `PRs  ${sessionPrs.length}` : 'PRs'} variant={onPrs ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => 'prs')} />
           {/* One runbook: its tab reads Runbook, and its title heads the view. Several: each tab carries its title. */}
           {runbooks.map(r => (
-            <Button key={`tab-${r.id}`} label={runbooks.length === 1 ? 'Runbook' : r.title} variant={book?.id === r.id ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => r.id)} />
+            <Button key={`tab-${r.id}`} label={runbooks.length === 1 ? (r.id.startsWith('skill-') ? 'Skill' : 'Runbook') : r.title.replace(/^Skill: /, '')} variant={book?.id === r.id ? 'primary' : undefined} onPress={() => void update($, tabAtom, () => r.id)} />
           ))}
         </Box>
       )
+    if (onPrs) {
+      // The PRs tab: every pull request this session made, newest first, as a card that opens to its facts.
+      const word = { merged: 'Merged', open: 'Open', draft: 'Draft', conflict: 'Conflict', closed: 'Closed' } as const
+      const ciWord = { running: 'CI running', passing: 'CI passed', failing: 'CI failed', none: 'No CI' } as const
+      const counts = (['merged', 'open', 'draft', 'conflict', 'closed'] as const)
+        .map(st => [st, sessionPrs.filter(p => p.state === st).length] as const)
+        .filter(([, n]) => n > 0)
+        .map(([st, n]) => `${n} ${word[st].toLowerCase()}`)
+        .join('  ·  ')
+      return (
+        <Box flexDirection="column" gap={1} paddingBottom={1}>
+          {tabRow}
+          <Text size="heading" weight="semibold">Pull requests</Text>
+          <Text color={SUBTEXT}>{sessionPrs.length === 0 ? 'This session has made no pull request yet.' : counts}</Text>
+          <Box flexDirection="column" gap={1}>
+            {[...sessionPrs].reverse().map(p => {
+              const key = `pr-${p.ref}`
+              const isOpen = isOpenKey(key)
+              return (
+                <Box key={key} flexDirection="column" gap={0} borderStyle="single" borderColor="subtle" borderDimColor paddingX={1}>
+                  <Box flexDirection="row" alignItems="center" gap={1}>
+                    <Box width={BADGE} flexShrink={0}>
+                      {Svg !== undefined ? svg(prIconSvg(p.state), `${word[p.state]}`, 16) : <Text>{word[p.state][0]}</Text>}
+                    </Box>
+                    <Box flexGrow={1} flexShrink={1}>
+                      <Text wrap="truncate-end" dimColor={p.state === 'merged' || p.state === 'closed'}>{`#${p.number}  ${p.title}`}</Text>
+                    </Box>
+                    <Text size="caption" color={p.state === 'conflict' ? 'warning' : SUBTEXT}>{word[p.state]}</Text>
+                    <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
+                      <Button key={`open-${key}`} label={isOpen ? '−' : '+'} plain dimColor onPress={() => toggleKey(key)} />
+                    </Box>
+                  </Box>
+                  {isOpen && (
+                    <Box flexDirection="column" gap={0} paddingLeft={INDENT}>
+                      <Text size="caption" color={p.ci === 'failing' ? 'error' : NOTE}>{ciWord[p.ci]}</Text>
+                      <Text size="caption" color={NOTE}>{`${p.ref.split('#')[0]}${p.branch !== null ? `  ·  ${p.branch}` : ''}`}</Text>
+                      {p.mergedAt !== null && <Text size="caption" color={NOTE}>{`Merged at ${timeOfDay(p.mergedAt)}`}</Text>}
+                      {isWebUrl(p.url) && <Text size="caption"><Link href={p.url}>Open on GitHub</Link></Text>}
+                    </Box>
+                  )}
+                </Box>
+              )
+            })}
+          </Box>
+        </Box>
+      )
+    }
     if (book !== null) {
       // The runbook view: the summary, the rail, then the steps in order: done ones dim, the current one in the
       // accent, the rest plain. A wait on the person reads "Needs your ...".

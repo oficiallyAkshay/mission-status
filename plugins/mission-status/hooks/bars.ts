@@ -121,7 +121,8 @@ export function stripSvg({ title, detail, state, time }: StripInput): string {
   const tint = state === 'running' ? ACCENT : state === 'done' ? GREEN : '#D67278'
   const mark =
     state === 'running'
-      ? `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" repeatCount="indefinite"/></circle>`
+      ? // Still, like the item badge: a ring with a dot, no turning arc that would jump at each redraw.
+        `<circle cx="12" cy="${H / 2}" r="4" fill="none" stroke="${tint}" stroke-opacity=".5" stroke-width="1.5"/><circle cx="12" cy="${H / 2}" r="2" fill="${tint}"/>`
       : `<circle cx="12" cy="${H / 2}" r="3.5" fill="${tint}"/>`
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">` +
@@ -138,22 +139,6 @@ export function stripSvg({ title, detail, state, time }: StripInput): string {
 
 
 
-// A value that changed slides in from below while the old one slides out above; after the slide it stands still.
-export function slideSvg(from: string, to: string, sinceMs: number, isAccent: boolean): string {
-  const H = 22
-  const begin = `-${(Math.max(0, sinceMs) / 1000).toFixed(2)}s`
-  const v = `s${uid(isAccent)}`
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">` +
-    `<style>.${v}{font:600 16px ${FONT};fill:${isAccent ? ACCENT : '#F0EEFC'}}@media (prefers-color-scheme:light){.${v}{fill:${isAccent ? LIGHT.accent : '#222226'}}}</style>` +
-    `<text class="${v}" x="100%" y="17" text-anchor="end" opacity="0">${esc(from)}` +
-    `<animate attributeName="y" values="17;-4" dur=".5s" begin="${begin}" fill="freeze"/>` +
-    `<animate attributeName="opacity" values="1;0" dur=".5s" begin="${begin}" fill="freeze"/></text>` +
-    `<text class="${v}" x="100%" y="17" text-anchor="end">${esc(to)}` +
-    `<animate attributeName="y" values="30;17" dur=".5s" begin="${begin}" fill="freeze"/>` +
-    `<animate attributeName="opacity" values="0;1" dur=".5s" begin="${begin}" fill="freeze"/></text></svg>`
-  )
-}
 
 // A status badge for a stage card: a filled check when done, a pulsing ring when current, a hollow ring when ahead.
 // A badge in a 20 px tall cell when up or down is given: the rail runs into the badge from above and leaves it below.
@@ -182,16 +167,13 @@ export function badgeSvg(state: 'done' | 'now' | 'next' | 'dot', clock: number, 
       `<circle cx="${c}" cy="${c}" r="${c - 1}" fill="url(#${id}g)"/><path d="M${c - 4} ${c + 0.4}l${S * 0.13} ${S * 0.13} ${S * 0.27}-${S * 0.28}" fill="none" stroke="#fff" stroke-width="${S / 10}" stroke-linecap="round" stroke-linejoin="round"/></svg>`
     )
   if (state === 'now') {
-    // A circle spinner: a faint ring with a bright arc that turns once a second. The begin offset from the clock keeps
-    // the turn smooth when the desktop redraws the picture.
+    // In progress, drawn still: a faint ring with a solid accent dot. A turning spinner restarted at every redraw and
+    // jumped, so the badge carries no motion.
     const r = c - 2
-    const arc = 2 * Math.PI * r
-    const begin = `-${((clock / 1000) % 1).toFixed(2)}s`
     return (
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}}</style>` +
-      `<circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".22" stroke-width="2"/>` +
-      `<circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-linecap="round" stroke-dasharray="${(arc * 0.28).toFixed(2)} ${arc.toFixed(2)}">` +
-      `<animateTransform attributeName="transform" type="rotate" from="0 ${c} ${c}" to="360 ${c} ${c}" dur="1s" begin="${begin}" repeatCount="indefinite"/></circle></svg>`
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}.bd{fill:${LIGHT.accent}}}</style>` +
+      `<circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".45" stroke-width="2"/>` +
+      `<circle class="bd" cx="${c}" cy="${c}" r="${(r * 0.45).toFixed(2)}" fill="${ACCENT}"/></svg>`
     )
   }
   return (
@@ -295,4 +277,19 @@ export function stepsRailSvg(states: readonly ('done' | 'now' | 'next' | 'failed
     .map((st, k) => `<rect x="${(k * (w + gap)).toFixed(3)}%" y="0" width="${w.toFixed(3)}%" height="6" rx="3" fill="${fill[st]}" fill-opacity="${op[st]}"/>`)
     .join('')
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="6">${bars}</svg>`
+}
+
+// A pull request's state as one small mark: merged purple with a check, open green, draft grey and hollow, conflict
+// amber with a bar, closed red with a cross.
+export function prIconSvg(state: 'merged' | 'open' | 'draft' | 'conflict' | 'closed'): string {
+  const fill = { merged: ACCENT, open: GREEN, draft: '#808080', conflict: '#D4A13A', closed: '#D9534F' }[state]
+  const glyph = {
+    merged: '<path d="M5 8.2l2 2 4-4.2" fill="none" stroke="#fff" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    open: '<circle cx="8" cy="8" r="2.2" fill="#fff"/>',
+    draft: '',
+    conflict: '<path d="M8 4.6v4.2" stroke="#fff" stroke-width="1.7" stroke-linecap="round"/><circle cx="8" cy="11.2" r="1" fill="#fff"/>',
+    closed: '<path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/>',
+  }[state]
+  const disc = state === 'draft' ? `<circle cx="8" cy="8" r="6.2" fill="none" stroke="${fill}" stroke-width="1.6" stroke-dasharray="2.4 2"/>` : `<circle cx="8" cy="8" r="7" fill="${fill}"/>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${disc}${glyph}</svg>`
 }

@@ -63,14 +63,16 @@ export type Activity = { text: string; prev: string | null; at: number } | null
 export type Pr = { number: number; state: string; url: string; title: string; isDraft?: boolean; review?: string; merge?: string; ci?: 'passing' | 'failing' | 'running' | 'none' }
 export type Helper = { id: string; description: string; status: string; model: string | null; startTime: number }
 // CI of a pull request an item names: its state and when its checks started and finished.
+// A pull request this session made, as the PRs tab shows it.
+export type SessionPr = { ref: string; number: number; title: string; url: string; state: 'open' | 'draft' | 'merged' | 'closed' | 'conflict'; ci: 'running' | 'passing' | 'failing' | 'none'; branch: string | null; mergedAt: number | null; at: number }
 export type ItemCi = { state: 'running' | 'passing' | 'failing' | 'none'; start: number | null; end: number | null; mergedAt?: number | null }
-export type Live = { helpers: Helper[]; prs: Pr[]; prsUnread: boolean; at: number; reads: number; git: Git; ci?: Record<string, ItemCi> }
+export type Live = { helpers: Helper[]; prs: Pr[]; prsUnread: boolean; at: number; reads: number; git: Git; ci?: Record<string, ItemCi>; sessionPrs?: SessionPr[] }
 
 declare module 'claude-code' {
   interface PluginState {
     'mission-status': { summary: Shaped<Summary>; live: Shaped<Live | null>; now: number; open: string[] | null; activity: Activity; tasks: Task[]
       // Wave 1: consent and metrics (metrics.tsx, onboarding.tsx), auto-update (update.tsx)
-      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; holdback: boolean; metricsNoticeShown: boolean; metricsSession: MetricsSession | null; autoUpdate: boolean | null; barStart: number | null; tab: string | null
+      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; holdback: boolean; metricsNoticeShown: boolean; metricsSession: MetricsSession | null; autoUpdate: boolean | null; barStart: number | null; tab: string | null; prRefs: string[]
       // Wave 1: freshness triggers (store.ts)
       fresh: Fresh; doc: { title: string; path: string } | null }
   }

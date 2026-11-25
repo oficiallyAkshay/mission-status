@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { LIGHT, badgeSvg, exitSvg, slideSvg, stripSvg, trackSvg, waitsLineSvg } from '../hooks/bars'
+import { LIGHT, badgeSvg, exitSvg, stripSvg, trackSvg, waitsLineSvg } from '../hooks/bars'
 
 // WCAG relative luminance and contrast ratio of two six-digit hex colours.
 const lum = (hex: string) => {
@@ -17,7 +17,6 @@ const drawings: [string, string][] = [
   ['stage bar', trackSvg({ total: 5, done: 2, current: 'Test', isDone: false, names: ['Plan', 'Build', 'Test', 'Deploy', 'Learn'] })],
   ['stage bar, all done', trackSvg({ total: 3, done: 3, current: null, isDone: true, names: ['Plan', 'Build', 'Test'] })],
   ['helper strip', stripSvg({ title: 'Scan tests', detail: 'haiku', state: 'running', time: '2 min' })],
-  ['figure slide', slideSvg('10', '11', 100, true)],
   ['badge ahead', badgeSvg('next', 0)],
   ['badge current', badgeSvg('now', 0)],
   ['wait line', waitsLineSvg()],
@@ -45,7 +44,7 @@ test('light theme: the dark look keeps its colours', () => {
   expect(waitsLineSvg()).toContain('.wa{stroke:#8B8A85}')
 })
 
-test('light theme: classes whose colour differs per drawing carry the drawing id', () => {
-  const cls = (svg: string) => svg.match(/class="([^"]+)"/)?.[1]
-  expect(cls(slideSvg('1', '2', 0, true))).not.toBe(cls(slideSvg('1', '2', 0, false)))
+test('in-progress marks are still: no badge or helper strip carries an animation', () => {
+  for (const svg of [badgeSvg('now', 0, 16), badgeSvg('now', 1234, 20), stripSvg({ title: 'Scan', detail: null, state: 'running', time: '1 min' })])
+    expect(/<animate|@keyframes|animation:/.test(svg)).toBe(false)
 })
