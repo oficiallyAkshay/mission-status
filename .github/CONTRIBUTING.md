@@ -54,7 +54,7 @@ The plugin checks this repository's latest release at start and every six hours,
 | release | Tags and releases each new plugin version on main |
 | clonometer | Counts clones and views every hour onto the badges branch; it needs the TRAFFIC_TOKEN secret |
 | codeql | Scans the code for security faults on each pull request, each push to main and weekly |
-| scorecard | Scores the repository's security practices for the OpenSSF Scorecard badge, weekly and on each push to main |
+| scorecard | Scores the repository's security practices weekly and on each push to main; findings show in the Security tab |
 | pages | Publishes the website in `site/` on each push to main that changes it |
 
 ## Before you start
