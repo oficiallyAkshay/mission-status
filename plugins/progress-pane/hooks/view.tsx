@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, ProgressProps, RenderChildren, RenderInput, SvgProps } from 'claude-code'
 import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { badgeSvg, exitSvg, slideSvg, stripSvg, trackSvg } from './bars'
+import { badgeSvg, exitSvg, waitsArrowSvg, slideSvg, stripSvg, trackSvg } from './bars'
 import { age, cap, clockOf, figureOf, normalize, secondsOf } from './model'
 import { prFacts } from './readers'
 import { ACCENT } from './store'
@@ -43,6 +43,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const allItems: Item[] = [
       ...s.items,
       ...steps
+        // A stage the model fills with its own items shows those; the task list fills only stages it leaves empty.
+        .filter(x => !s.items.some(y => y.phase === x.phase))
         .filter(x => !s.items.some(y => y.name.toLowerCase() === x.name.toLowerCase()))
         .map(x => ({ phase: x.phase, name: cap(x.name), status: x.status, after: null, parent: null, when: null }) as Item),
     ]
@@ -148,47 +150,77 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       }
       return out
     }
+    // One item: its row, its children when open, and its gate. Items that wait for it follow, indented under it.
+    // Link chips on a card. A plain file path opens as a file link.
+    const linkRow = (links: { label: string; href: string }[], key: string) =>
+      links.length === 0 ? null : (
+        <Box flexDirection="row" gap={2} key={key}>
+          {links.map((l, k) => (
+            <Text size="caption" key={`${key}-${k}`}>
+              <Link href={l.href.startsWith('/') ? `file://${l.href}` : l.href}>{`↗ ${l.label}`}</Link>
+            </Text>
+          ))}
+        </Box>
+      )
     const itemCards = (list: Item[], depth: number): RenderChildren => {
-      const ordered = orderSiblings(list)
-      const parallel = ordered.filter(x => x.after === null && x.status !== 'done').length
-      return (
-        <Box flexDirection="column" gap={0} marginTop={depth === 0 ? 1 : 0}>
-          {parallel > 1 && small(`${parallel} items run in parallel.`)}
-          {ordered.map((x, j) => {
-            const kids = allItems.filter(y => y.parent === x.name && y.phase === x.phase)
-            const key = `item-${x.name}`
-            const isOpen = kids.length > 0 && isOpenKey(key)
-            const state = itemState(x)
-            const exit: Count | null = x.when === null ? null : { label: x.name, when: x.when, n: x.n, m: x.m, text: x.text }
-            const nextWaits = ordered[j + 1]?.after === x.name
-            // One row: badge, name, figure, open control. Only an item with children gets a card around it.
-            const head = (
-              <Box flexDirection="row" alignItems="center" gap={1}>
+      const names = new Set(list.map(x => x.name))
+      const roots = list.filter(x => x.after === null || !names.has(x.after))
+      // Running in parallel: items in progress at the same time among these siblings.
+      const running = list.filter(x => x.status === 'now').length
+      const row1 = (x: Item, waits: number): RenderChildren => {
+        const kids = allItems.filter(y => y.parent === x.name && y.phase === x.phase)
+        const key = `item-${x.name}`
+        const isOpen = kids.length > 0 && isOpenKey(key)
+        const state = itemState(x)
+        const exit: Count | null = x.when === null ? null : { label: x.name, when: x.when, n: x.n, m: x.m, text: x.text }
+        const followers = list.filter(y => y.after === x.name)
+        return (
+          <Box flexDirection="column" gap={0} key={key}>
+            <Box flexDirection="row" alignItems="center" gap={1}>
+              {waits > 0 && (
                 <Box width={BADGE} flexShrink={0}>
-                  {Svg !== undefined
-                    ? svg(badgeSvg(state, 0, 16), `${x.name}: ${state === 'done' ? 'done' : state === 'now' ? 'in progress' : 'not started'}`, 16)
-                    : <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>}
+                  {Svg !== undefined ? svg(waitsArrowSvg('#8B8A85'), `${x.name} waits for ${x.after ?? 'the item above'}.`, 18) : <Text dimColor>└</Text>}
                 </Box>
-                <Box flexGrow={1} flexShrink={1}>
-                  <Text weight={state === 'now' ? 'semibold' : 'regular'} dimColor={state === 'next'} wrap="truncate">
-                    {x.name}
+              )}
+              <Box width={BADGE} flexShrink={0}>
+                {Svg !== undefined
+                  ? svg(badgeSvg(state, 0, 16), `${x.name}: ${state === 'done' ? 'done' : state === 'now' ? 'in progress' : 'not started'}`, 16)
+                  : <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>}
+              </Box>
+              <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+                <Text weight={state === 'now' ? 'semibold' : 'regular'} dimColor={state === 'next'} wrap="truncate">
+                  {x.name}
+                </Text>
+                {(x.note ?? null) !== null && (
+                  <Text size="caption" dimColor wrap="truncate-end">
+                    {x.note}
                   </Text>
-                </Box>
-                {kids.length > 0 && (
-                  <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
-                    <Button key={`open-${key}`} label={isOpen ? '−' : '+'} plain dimColor onPress={() => toggleKey(key)} />
-                  </Box>
                 )}
               </Box>
-            )
-            return (
-              <Box flexDirection="column" gap={0} key={key}>
-                {head}
-                {isOpen && depth < 5 && <Box paddingLeft={INDENT}>{itemCards(kids, depth + 1)}</Box>}
-                {exit !== null && Svg !== undefined && svg(exitSvg(exit.when ?? '', !nextWaits), `Done when ${exit.when}.`, 28)}
+              {kids.length > 0 && (
+                <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
+                  <Button key={`open-${key}`} label={isOpen ? '−' : '+'} plain dimColor onPress={() => toggleKey(key)} />
+                </Box>
+              )}
+            </Box>
+            {(() => {
+              const mine = s.links.filter(l => l.item !== null && l.item.toLowerCase() === x.name.toLowerCase())
+              return mine.length === 0 ? null : <Box paddingLeft={INDENT}>{linkRow(mine, `links-${key}`)}</Box>
+            })()}
+            {isOpen && depth < 5 && <Box paddingLeft={INDENT}>{itemCards(kids, depth + 1)}</Box>}
+            {exit !== null && Svg !== undefined && svg(exitSvg(exit.when ?? '', followers.length === 0), `Done when ${exit.when}.`, 28)}
+            {followers.length > 0 && waits < 6 && (
+              <Box flexDirection="column" gap={0} paddingLeft={waits > 0 ? INDENT : 0}>
+                {followers.map(y => row1(y, waits + 1))}
               </Box>
-            )
-          })}
+            )}
+          </Box>
+        )
+      }
+      return (
+        <Box flexDirection="column" gap={0} marginTop={depth === 0 ? 1 : 0}>
+          {running > 1 && small(`${running} items run in parallel.`)}
+          {roots.map(x => row1(x, 0))}
         </Box>
       )
     }
@@ -248,6 +280,10 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               )}
             </Box>
           </Box>
+          {(() => {
+            const mine = s.links.filter(l => l.phase === k && l.item === null)
+            return mine.length === 0 ? null : <Box paddingLeft={INDENT}>{linkRow(mine, `links-stage-${k}`)}</Box>
+          })()}
           {state === 'now' && act !== null && Date.now() - act.at < 30 * 60_000 && (
             // The live line has the card's full width and ends in an ellipsis when it is too long.
             <Box paddingLeft={INDENT} paddingRight={1}>

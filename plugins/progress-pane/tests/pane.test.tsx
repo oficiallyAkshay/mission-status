@@ -108,6 +108,30 @@ test('a ticket shows at the top, custom stages replace the preset, the git bar o
   await ui.unmount()
 })
 
+test('cards carry links and items carry a scope note; dependents indent; only running items count as parallel', async ($, on) => {
+  await start($, on)
+  await send($, {
+    project: 'P',
+    stage: 'build',
+    phase: 1,
+    links: [{ phase: 0, label: 'Plan', href: '/tmp/plan.md' }, { item: 'wave 1', label: 'Brief', href: 'https://example.com/b' }],
+    items: [
+      { phase: 0, name: 'plan', status: 'done' },
+      { phase: 1, name: 'wave 1', status: 'now', note: 'schema, metrics, onboarding' },
+      { phase: 1, name: 'wave 2', status: 'next', after: 'wave 1' },
+      { phase: 1, name: 'split', status: 'done' },
+    ],
+  })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'open-0' })
+  expect(await ui.find({ type: 'Link', href: 'file:///tmp/plan.md' })).toBeTruthy()
+  expect(await ui.find({ type: 'Link', href: 'https://example.com/b' })).toBeTruthy()
+  expect(await text(ui, /^schema, metrics, onboarding$/)).toBeTruthy()
+  expect(await ui.find({ type: 'Svg', alt: /^Wave 2 waits for Wave 1\.$/ })).toBeTruthy()
+  expect(await text(ui, /items run in parallel/)).toBeUndefined()
+  await ui.unmount()
+})
+
 test('stages can run in parallel', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'build', template: 'product-loop', phase: 1, active: [2] })

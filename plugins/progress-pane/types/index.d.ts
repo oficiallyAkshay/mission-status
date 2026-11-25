@@ -1,15 +1,17 @@
 export type Count = { label: string; when?: string; n?: number; m?: number; text?: string; phase?: number; href?: string; hrefLabel?: string }
 export type ItemStatus = 'done' | 'now' | 'next' | 'failed'
-export type Item = { phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; n?: number; m?: number; text?: string }
+export type Item = { phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string }
 export type StepStatus = 'done' | 'now' | 'next'
 export type StageKey = 'plan' | 'build' | 'fix' | 'cause' | 'review' | 'ship'
 export type HypothesisState = 'open' | 'testing' | 'ruled out' | 'confirmed'
 export type Hypothesis = { text: string; state: HypothesisState }
+export type CardLink = { phase: number | null; item: string | null; label: string; href: string }
 export type Ticket = { ref: string; title: string | null; url: string | null }
 export type Git = { branch: string; ahead: number; behind?: number; files: number; added: number; removed: number; dirty: number } | null
 export type Summary = {
   project: string
   ticket: Ticket | null
+  links: CardLink[]
   goalLine: string | null
   stage: StageKey
   phases: string[]

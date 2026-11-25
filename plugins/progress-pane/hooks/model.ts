@@ -1,4 +1,4 @@
-import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
+import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
 
 
 // The stage bar of each kind of work: the stages it passes through, in order.
@@ -104,6 +104,7 @@ export function asItem(raw: unknown): Item | undefined {
     after: after === null ? null : cap(after),
     parent: parent === null ? null : cap(parent),
     when: str(o.when),
+    note: str(o.note),
     n: num(o.n),
     m: num(o.m),
     text: text === null ? undefined : cap(text),
@@ -120,6 +121,7 @@ export function normalize(raw: Summary): Summary {
   return {
     project: typeof r.project === 'string' ? r.project : 'Project',
     ticket: (r.ticket as Summary extends infer T ? T extends { ticket: infer K } ? K : never : never) ?? null,
+    links: Array.isArray(r.links) ? (r.links as CardLink[]) : [],
     goalLine: typeof r.goalLine === 'string' ? r.goalLine : null,
     stage: (typeof r.stage === 'string' ? r.stage : 'build') as StageKey,
     phases,
@@ -203,3 +205,14 @@ export function age(from: number, to: number): string {
 }
 
 // The pane reads helpers and this branch's pull requests itself.
+
+// A link on a card: to a plan, a document, a page, a pull request or any made artifact. A stage card holds the links
+// with its phase; an item holds the links that name it.
+export function asLink(raw: unknown): CardLink | undefined {
+  if (typeof raw !== 'object' || raw === null) return undefined
+  const o = raw as Record<string, unknown>
+  const href = str(o.href)
+  if (href === null) return undefined
+  const phase = num(o.phase)
+  return { phase: phase === undefined ? null : Math.round(phase), item: str(o.item), label: str(o.label) ?? 'Open', href }
+}

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { HYPOTHESIS_STATES, ITEM_STATES, PHASES, STAGE_KEYS, TEMPLATES, actionOf, applyPlan, arrivalOf, asCount, asHypothesis, asItem, cap, figureOf, normalize, num, str } from './model'
+import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
+import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PHASES, STAGE_KEYS, TEMPLATES, actionOf, applyPlan, arrivalOf, asCount, asHypothesis, asItem, cap, figureOf, normalize, num, str } from './model'
 import { poll } from './readers'
 import { CLOCK_MS, PANE, PR_EVERY, TICK_MS, TITLE, say, tick } from './store'
 import { renderPane } from './view'
@@ -34,6 +34,16 @@ export const register: Register = on => {
         type: 'object',
         properties: {
           project: { type: 'string', description: 'The project name, for example: Checkout redesign' },
+          links: {
+            type: 'array',
+            description:
+              'Links on cards to documents and made artifacts: a plan, a spec, a review, a page, a file. phase puts the link on that stage card; item puts it on that item. href is a URL or a file path; label is one to three words.',
+            items: {
+              type: 'object',
+              properties: { phase: { type: 'number' }, item: { type: 'string' }, label: { type: 'string' }, href: { type: 'string' } },
+              required: ['href'],
+            },
+          },
           ticket: {
             type: ['object', 'null'],
             description: 'The ticket this work answers, when there is one: its reference, its title and its link.',
@@ -89,6 +99,7 @@ export const register: Register = on => {
                 status: { type: 'string', enum: ITEM_STATES },
                 after: { type: 'string' },
                 parent: { type: 'string' },
+                note: { type: 'string', description: 'The rough scope, cut or area, in a few words, shown under the name' },
                 when: { type: 'string', description: 'The end of the sentence: Done when ...' },
                 n: { type: 'number' },
                 m: { type: 'number' },
@@ -255,6 +266,10 @@ export const register: Register = on => {
         active,
         template,
         ticket,
+        links:
+          args.links === undefined
+            ? (old?.links ?? [])
+            : (Array.isArray(args.links) ? args.links : []).map(asLink).filter((x): x is CardLink => x !== undefined),
         starts,
         ends,
         project: str(args.project) ?? old?.project ?? 'Project',
