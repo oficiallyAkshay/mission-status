@@ -68,7 +68,7 @@ export type Pr = { number: number; state: string; url: string; title: string; is
 export type Helper = { id: string; description: string; status: string; model: string | null; startTime: number }
 // CI of a pull request an item names: its state and when its checks started and finished.
 // A pull request this session made, as the PRs tab shows it.
-export type SessionPr = { ref: string; number: number; title: string; url: string; state: 'open' | 'draft' | 'merged' | 'closed' | 'conflict'; ci: 'running' | 'passing' | 'failing' | 'none'; branch: string | null; mergedAt: number | null; at: number }
+export type SessionPr = { ref: string; number: number; title: string; url: string; state: 'open' | 'draft' | 'merged' | 'closed' | 'conflict'; ci: 'running' | 'passing' | 'failing' | 'none'; ciStart?: number | null; ciEnd?: number | null; branch: string | null; mergedAt: number | null; at: number }
 export type ItemCi = { state: 'running' | 'passing' | 'failing' | 'none'; start: number | null; end: number | null; mergedAt?: number | null }
 export type Live = { helpers: Helper[]; prs: Pr[]; prsUnread: boolean; at: number; reads: number; git: Git; ci?: Record<string, ItemCi>; sessionPrs?: SessionPr[] }
 

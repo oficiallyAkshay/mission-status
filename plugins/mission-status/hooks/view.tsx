@@ -41,7 +41,19 @@ const isWebUrl = (href: string) => /^https?:\/\/[^\s]+$/i.test(href)
 export function timeOfDay(at: number): string {
   const d = new Date(at)
   const h = d.getHours()
-  return `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}${zoneOf(d)}`
+}
+
+// The machine's time zone as a short name: Eastern Standard Time reads ET, Central European Time reads CET.
+export function zoneOf(d: Date): string {
+  const name = /\(([^)]+)\)/.exec(d.toString())?.[1] ?? ''
+  const short = name
+    .split(/\s+/)
+    .filter(w => !/^(standard|daylight|summer)$/i.test(w))
+    .map(w => w[0] ?? '')
+    .join('')
+    .toUpperCase()
+  return short === '' ? '' : ` ${short}`
 }
 
 // A Claude artifact's address.
@@ -50,12 +62,12 @@ export const isArtifact = (href: string) => /^https:\/\/claude\.ai\/(code\/)?art
 // Opens an artifact inside the Claude desktop app through the session's own Artifact tool. If the tool is missing
 // or refuses, the address opens in the browser, as any web link does.
 export async function openArtifact($: EngineInterface, url: string): Promise<void> {
-  try {
-    await $.tool.call({ tool: 'Artifact', action: 'open', url } as never)
-  } catch {
-    // The tool refused this caller: ask the agent, which has the same tool, to open it.
+  // A refusal comes back as a result with deny, not as an error: either way, ask the agent, which has the same tool.
+  const res = (await Promise.resolve()
+    .then(() => $.tool.call({ tool: 'Artifact', action: 'open', url } as never))
+    .catch(() => null)) as { deny?: unknown } | null
+  if (res === null || res.deny !== undefined)
     await $.prompt.submit({ text: `Open this artifact in the app with the Artifact tool, action open, and say nothing else: ${url}` } as never).catch(() => undefined)
-  }
 }
 
 export function agoOf(ms: number): string {
@@ -301,8 +313,9 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         // The item's pull request CI rides on the item's own line, after the item's time: a part of that time.
         const ci = x.pr != null ? (l?.ci?.[x.pr] ?? null) : null
         const ciTook = ci === null || ci.start === null ? null : (ci.end ?? Date.now()) - ci.start
+        // A done item with passed checks says nothing more; a failure always shows.
         const ciPart =
-          ci === null || ci.state === 'none'
+          ci === null || ci.state === 'none' || (ci.state === 'passing' && state === 'done')
             ? null
             : `  ·  ${ci.state === 'running' ? 'CI' : ci.state === 'failing' ? 'CI failed' : 'CI passed'}${ciTook === null ? '' : ` ${clockOf(ciTook)}`}`
         // Siblings share one trunk, as in a tree view: the line joins every badge of the list, top to bottom.
@@ -347,6 +360,29 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
             </Box>,
           )
         // The item's pull request CI: its state and how long the checks ran, or run so far.
+        // The helpers the session runs now sit under the item in progress, as its children: Smriti's lens jobs under
+        // its pass, a review's readers under the review.
+        if (Svg !== undefined && hostName !== null && x.phase === s.phase && x.name === hostName && running.length > 0) {
+          running.slice(0, 6).forEach((helper, j) =>
+            rows.push(
+              <Box flexDirection="row" gap={0} key={`${key}-helper-${helper.id}`}>
+                {prefix(rails, 22, `${key}-helper-${helper.id}`)}
+                {railBox(down, 22, `${key}-helper-own-${j}`)}
+                <Box flexGrow={1} flexShrink={1} paddingRight={CHEV}>
+                  {svg(stripSvg({ title: cap(helper.description), detail: helper.model, state: 'running', time: age(helper.startTime, t) }), `Helper ${helper.description}: running`, 22, `strip-${helper.id}`)}
+                </Box>
+              </Box>,
+            ),
+          )
+          if (running.length > 6)
+            rows.push(
+              <Box flexDirection="row" gap={0} key={`${key}-helper-more`}>
+                {prefix(rails, 14, `${key}-helper-more`)}
+                {railBox(down, 14, `${key}-helper-more-own`)}
+                <Text size="caption" color={NOTE}>{`${running.length - 6} more helpers run.`}</Text>
+              </Box>,
+            )
+        }
         const mine = s.links.filter(l => l.item !== null && l.item.toLowerCase() === x.name.toLowerCase())
         if (mine.length > 0)
           rows.push(
@@ -372,6 +408,10 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         </Box>
       )
     }
+    const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase()
+    // The item that holds the running helpers: the last item in progress in the current stage, not one named as the stage.
+    const hostName =
+      [...allItems].reverse().find(x => x.phase === s.phase && x.status === 'now' && !sameName(x.name, s.phases[s.phase] ?? ''))?.name ?? null
     const itemTree = (k: number) => (
       // A stage's items are its children: they start where the stage name starts, as nested items start under theirs.
       <Box flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
@@ -446,7 +486,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                 </Text>
               </Box>
             )}
-          {state === 'now' && Svg !== undefined && running.length > 0 && (
+          {state === 'now' && Svg !== undefined && running.length > 0 && (hostName === null || k !== s.phase) && (
             <Box flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
               {running.slice(0, 4).map(x =>
                 svg(
@@ -599,6 +639,9 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       // The PRs tab: every pull request this session made, newest first, as a card that opens to its facts.
       const word = { merged: 'Merged', open: 'Open', draft: 'Draft', conflict: 'Conflict', closed: 'Closed' } as const
       const ciWord = { running: 'CI running', passing: 'CI passed', failing: 'CI failed', none: 'No CI' } as const
+      // CI on the closed row only while it runs (with its time so far) or after it failed; passed CI stays inside the card.
+      const ciShort = (p: (typeof sessionPrs)[number]) =>
+        p.ci === 'running' ? `CI ${p.ciStart != null ? clockOf(Date.now() - p.ciStart) : ''}`.trim() : p.ci === 'failing' && p.state !== 'merged' ? 'CI failed' : null
       const counts = (['merged', 'open', 'draft', 'conflict', 'closed'] as const)
         .map(st => [st, sessionPrs.filter(p => p.state === st).length] as const)
         .filter(([, n]) => n > 0)
@@ -622,6 +665,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                     <Box flexGrow={1} flexShrink={1}>
                       <Text wrap="truncate-end" dimColor={p.state === 'merged' || p.state === 'closed'}>{`#${p.number}  ${p.title}`}</Text>
                     </Box>
+                    {ciShort(p) !== null && <Text size="caption" color={p.ci === 'failing' ? 'error' : ACCENT_TEXT}>{ciShort(p)}</Text>}
                     <Text size="caption" color={p.state === 'conflict' ? 'warning' : SUBTEXT}>{word[p.state]}</Text>
                     <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
                       <Button key={`open-${key}`} label={isOpen ? '−' : '+'} plain dimColor onPress={() => toggleKey(key)} />
@@ -629,7 +673,9 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                   </Box>
                   {isOpen && (
                     <Box flexDirection="column" gap={0} paddingLeft={INDENT}>
-                      <Text size="caption" color={p.ci === 'failing' ? 'error' : NOTE}>{ciWord[p.ci]}</Text>
+                      <Text size="caption" color={p.ci === 'failing' ? 'error' : NOTE}>
+                        {`${ciWord[p.ci]}${p.ciStart != null ? `  ·  ${clockOf((p.ciEnd ?? Date.now()) - p.ciStart)}` : ''}`}
+                      </Text>
                       <Text size="caption" color={NOTE}>{`${p.ref.split('#')[0]}${p.branch !== null ? `  ·  ${p.branch}` : ''}`}</Text>
                       {p.mergedAt !== null && <Text size="caption" color={NOTE}>{`Merged at ${timeOfDay(p.mergedAt)}`}</Text>}
                       {isWebUrl(p.url) && <Text size="caption"><Link href={p.url}>Open on GitHub</Link></Text>}

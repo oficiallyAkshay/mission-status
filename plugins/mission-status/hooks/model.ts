@@ -316,7 +316,7 @@ export const RULE =
   '# Progress pane\nKeep the progress pane current with mcp__mission-status__update at every meaningful change. ' +
   'At each update, look again at the stages: keep a template only while it fits the work, and send new stages when the work changes. ' +
   'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those. ' +
-  'Give each item a stable id, and send small item changes as patch operations. ' +
+  'Give each item a stable id, and send small item changes as patch operations. Never name an item as its stage: an item is work inside the stage. ' +
   'When the work is in another repository than the session folder, send repo once. ' +
   'When an item has a pull request, send its number as the item\'s pr, so the pane shows its CI. ' +
   'When the session follows a runbook (a numbered procedure or checklist), send it as runbooks with each step\'s status, and keep it current. A skill you run with numbered steps gets its tab by itself (id skill-<name>): mark its steps as you go. ' +
@@ -492,6 +492,21 @@ export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVe
   for (const k of ['items', 'patch', 'counts', 'hypotheses', 'links', 'active'] as const)
     if (args[k] !== undefined && !Array.isArray(args[k])) errors.push(`${k} must be a list`)
   if (args.items !== undefined && args.patch !== undefined) errors.push('send items (the whole list) or patch (changes), not both')
+  // An item named as its own stage repeats the card's title: refused, with the fix in the error.
+  {
+    const stages = Array.isArray(args.phases) ? (args.phases as unknown[]).map(String) : typeof args.template === 'string' && args.template in TEMPLATES ? (TEMPLATES[args.template] ?? []) : (old?.phases ?? [])
+    const same = (name: unknown, phase: unknown) =>
+      typeof name === 'string' && typeof phase === 'number' && (stages[Math.round(phase)] ?? '').trim().toLowerCase() === name.trim().toLowerCase()
+    const listed = Array.isArray(args.items) ? (args.items as unknown[]) : []
+    const patched = Array.isArray(args.patch) ? (args.patch as unknown[]) : []
+    for (const raw of [...listed, ...patched]) {
+      if (!isObj(raw)) continue
+      const base = isText(raw.id) ? (old?.items ?? []).find(x => (x.id ?? idOf(x.name)) === raw.id) : undefined
+      const name = raw.name ?? base?.name
+      const phase = raw.phase ?? base?.phase
+      if (same(name, phase)) errors.push(`item ${String(name)} has its stage's own name: name the work inside the stage, not the stage again`)
+    }
+  }
   if (Array.isArray(args.items)) {
     const seen = new Set<string>()
     args.items.forEach((raw, k) => {

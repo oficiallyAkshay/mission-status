@@ -241,3 +241,11 @@ test('a transcript gives every pull request its gh pr create calls made, and no 
   ].join('\n')
   expect(prRefsInTranscript(lines)).toEqual(['acme/app#9'])
 })
+
+test('an item named as its own stage is refused', async ($, on) => {
+  await start($, on)
+  const res = await send($, { project: 'P', phases: ['Plan', 'Wrap up'], phase: 1, items: [{ phase: 1, name: 'Wrap up', status: 'now' }] })
+  expect(String(res.deny)).toContain("has its stage's own name")
+  expect((await send($, { project: 'P', phases: ['Plan', 'Wrap up'], phase: 1, items: [{ phase: 1, name: 'Smriti deep', status: 'now' }] })).deny).toBeUndefined()
+  expect(String((await send($, { patch: [{ op: 'add', id: 'w', phase: 1, name: 'wrap up', status: 'now' }] })).deny)).toContain("has its stage's own name")
+})
