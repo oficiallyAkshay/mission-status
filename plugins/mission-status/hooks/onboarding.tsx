@@ -1,14 +1,12 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 import {
+  AUTO_LABEL,
+  AUTO_LINE,
   CONSENT_CHANGE_LINE,
   CONSENT_LINE,
-  DONE_LINE,
-  DONT_SHARE_LABEL,
   FIELDS_URL,
-  LAST_STEP,
   SCENE,
-  SESSION_TYPES,
   SHARE_LABEL,
   STEPS,
   STILL_ALT,
@@ -17,36 +15,40 @@ import {
   WELCOME_PANE,
   WELCOME_TITLE,
   demoFrame,
-  typeTileSvg,
+  switchSvg,
 } from './onboarding-art'
 import type { Step } from './onboarding-art'
+import { tick } from './store'
+import { CONSENT_KEY, NOTICE_KEY } from './metrics'
+import { AUTO_KEY, setAutoUpdate } from './update'
 
-// The first-run onboarding, desktop app only: a Welcome pane with five steps, and during the steps a shader backdrop.
-// Stored values (types/index.d.ts): `consent` ('yes', 'no' or null) and `onboarded`.
+// $.store key: the onboarding ended once on this install. $.state lasts one session; these choices last.
+export const ONBOARDED_KEY = 'onboarded'
+
+// The first-run onboarding, desktop app only: a Welcome pane with two steps (Welcome with a live demo, then Metrics),
+// and while it is open a shader backdrop.
+// Stored values (types/index.d.ts): `consent` ('yes', 'no' or null) and `onboarded`. The demo reads the pane clock
+// `now` (store.ts): each write redraws its readers, so the demo moves one frame a second.
 const consent = atom({ plugin: 'mission-status', key: 'consent' } as const, null as 'yes' | 'no' | null)
 const onboarded = atom({ plugin: 'mission-status', key: 'onboarded' } as const, false)
+// True once the Metrics step has shown the notice; the switch starts on only then.
+const noticeShown = atom({ plugin: 'mission-status', key: 'metricsNoticeShown' } as const, false)
+// The pane clock, the same stored value as store.ts's `now`, declared here so the scan reads its key.
+const now = atom({ plugin: 'mission-status', key: 'now' } as const, 0)
+// Auto-update: on unless the person turns it off here or later.
+const autoUpdate = atom({ plugin: 'mission-status', key: 'autoUpdate' } as const, null as boolean | null)
 
-// How far the backdrop has settled into its bar at each step: a field at Welcome, the bar at Done.
-const SETTLE = [0, 0.25, 0.5, 0.75, 1] as const
+// How far the backdrop has settled into its bar at each step.
+const SETTLE = [0, 0.6] as const
 
 // The module's own state. A reload starts it over: the pane then shows the first step again.
 let step: Step = 0
 let isActive = false
 let demoStart = 0
-let stopDemo: { cancel: () => void } | null = null
+let demoClock: { cancel: () => void } | null = null
 // True while the onboarding's backdrop is the session's theme. A Backdrop drawn for another plugin means that plugin
 // set its theme after ours: the end of the onboarding then leaves that theme alone.
 let oursStands = false
-
-// For the tests: the module state back to a fresh load.
-export function resetOnboarding(): void {
-  stopDemo?.cancel()
-  step = 0
-  isActive = false
-  demoStart = 0
-  stopDemo = null
-  oursStands = false
-}
 
 async function setBackdrop($: EngineInterface): Promise<void> {
   await $.theme.set({ backdrop: { scene: SCENE }, overrideColorScheme: 'dark' })
@@ -64,31 +66,65 @@ async function restoreBackdrop($: EngineInterface): Promise<void> {
 
 function goTo($: EngineInterface, next: Step): void {
   step = next
-  if (step === 1 && stopDemo === null) {
-    demoStart = Date.now()
-    stopDemo = $.clock.every(1_000, () => $.ui.invalidate('ui.render'))
-  }
-  if (step !== 1 && stopDemo !== null) {
-    stopDemo.cancel()
-    stopDemo = null
-  }
   $.ui.invalidate('ui.render')
+}
+
+// The demo clock runs while the Welcome pane is open: each second it writes the pane clock, which redraws the demo.
+function startDemo($: EngineInterface): void {
+  demoStart = Date.now()
+  if (demoClock === null) demoClock = $.clock.every(1_000, () => void tick($))
+  void tick($)
+}
+
+function stopDemo(): void {
+  demoClock?.cancel()
+  demoClock = null
+}
+
+// The Metrics step shows: the first time, the switch is on, so consent is 'yes' and the notice is recorded as shown.
+// Later visits keep the person's own choice.
+async function showMetrics($: EngineInterface): Promise<void> {
+  if (!(await read($, noticeShown))) {
+    await setConsent($, 'yes')
+    await update($, noticeShown, () => true)
+    await keep($, NOTICE_KEY, true)
+  }
+  goTo($, 1)
+}
+
+// Keeps a choice for later sessions; a store that cannot be written leaves the session's own value.
+async function keep($: EngineInterface, key: string, value: unknown): Promise<void> {
+  await $.store.set(key, value).catch(() => undefined)
+}
+
+async function setConsent($: EngineInterface, value: 'yes' | 'no'): Promise<void> {
+  await update($, consent, () => value)
+  await keep($, CONSENT_KEY, value)
+}
+
+// The session's values start from what this install kept: the onboarding, the consent and the notice.
+async function hydrate($: EngineInterface): Promise<void> {
+  if ((await $.store.get(ONBOARDED_KEY)) === true) await update($, onboarded, () => true)
+  const kept = await $.store.get(CONSENT_KEY)
+  if ((kept === 'yes' || kept === 'no') && (await read($, consent)) === null) await update($, consent, () => kept)
+  if ((await $.store.get(NOTICE_KEY)) === true) await update($, noticeShown, () => true)
+  const auto = await $.store.get(AUTO_KEY)
+  if (typeof auto === 'boolean') await update($, autoUpdate, () => auto)
 }
 
 async function begin($: EngineInterface): Promise<void> {
   isActive = true
   goTo($, 0)
+  startDemo($)
   await setBackdrop($).catch(() => undefined)
   await $.ui.open({ id: WELCOME_PANE, title: WELCOME_TITLE }).catch(() => undefined)
 }
 
 async function finish($: EngineInterface, closePane: boolean): Promise<void> {
-  if (stopDemo !== null) {
-    stopDemo.cancel()
-    stopDemo = null
-  }
+  stopDemo()
   isActive = false
   await update($, onboarded, () => true)
+  await keep($, ONBOARDED_KEY, true)
   await restoreBackdrop($).catch(() => undefined)
   if (closePane) await $.ui.close({ id: WELCOME_PANE }).catch(() => undefined)
 }
@@ -107,6 +143,8 @@ export function registerOnboarding(on: On): void {
   // surface attaches later (the desktop app starts the session first).
   on('session.start', { surface: ['desktop', null] }, async ($, e, next) => {
     await $.command.register({ name: 'mission-status-welcome', description: 'Show the mission-status welcome again' }).catch(() => undefined)
+    // A store that cannot be read leaves the session's own values.
+    await hydrate($).catch(() => undefined)
     try {
       if (!(await read($, onboarded)) && (await isDesktop($, e.surface))) await begin($)
     } catch {
@@ -131,6 +169,7 @@ export function registerOnboarding(on: On): void {
   // The person closes the pane: the onboarding ends where it stands.
   on('ui.close', { id: WELCOME_PANE }, async ($, e, next) => {
     if (e.origin.kind === 'person' && isActive) await finish($, false).catch(() => undefined)
+    else stopDemo()
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
@@ -151,116 +190,58 @@ export function registerOnboarding(on: On): void {
     const ui = $.ui.resolve(e)
     const { Box, Text, Button, Link } = ui
     const Svg = 'Svg' in ui ? ui.Svg : undefined
-    const choice = await read($, consent)
-    const svg = (source: string, alt: string, key: string, height?: number) =>
+    const svg = (source: string, alt: string, key: string, height: number) =>
       Svg === undefined ? <Text key={key}>{alt}</Text> : <Svg key={key} source={source} alt={alt} height={height} />
 
-    const body = (() => {
-      if (step === 0)
-        return (
-          <Box flexDirection="column" gap={1}>
-            <Text wrap="wrap">{WELCOME_LINE}</Text>
-          </Box>
-        )
-      if (step === 1) {
-        const f = demoFrame(Date.now() - demoStart)
-        return (
-          <Box flexDirection="column" gap={1}>
-            <Text size="caption" dimColor wrap="wrap">
-              A 15 second demo of one session, drawn with the pane's own parts.
-            </Text>
-            {svg(f.track.source, f.track.alt, 'demo-track', 30)}
-            <Box flexDirection="row" gap={2} flexWrap="wrap">
-              {f.stages.map(s => (
-                <Box key={`demo-stage-${s.name}`} flexDirection="row" alignItems="center" gap={1}>
-                  {svg(s.badge, `${s.name}: ${s.state === 'done' ? 'done' : s.state === 'now' ? 'in progress' : 'not started'}`, `demo-badge-${s.name}`, 16)}
-                  <Text size="caption" dimColor={s.state === 'next'}>
-                    {s.name}
-                  </Text>
-                </Box>
-              ))}
-            </Box>
-            <Text size="caption" key="demo-action">
-              {f.action}
-            </Text>
-            {svg(f.helper.source, f.helper.alt, 'demo-helper', 22)}
-            {svg(f.tests.source, f.tests.alt, 'demo-tests', 6)}
-          </Box>
-        )
-      }
-      if (step === 2)
-        return (
-          <Box flexDirection="column" gap={1}>
-            <Text wrap="wrap">Each session picks one of nine types. Each type has its own stages.</Text>
-            <Box flexDirection="row" flexWrap="wrap" gap={1}>
-              {SESSION_TYPES.map(t => (
-                <Box key={`type-${t.name}`} flexDirection="column" gap={0} padding={1} borderStyle="round" width={14}>
-                  {svg(typeTileSvg(t.stages), `${t.name}: ${t.stages} stages`, `tile-${t.name}`, 14)}
-                  <Text size="caption" weight="semibold">
-                    {t.name}
-                  </Text>
-                </Box>
-              ))}
-            </Box>
-          </Box>
-        )
-      if (step === 3)
-        return (
-          <Box flexDirection="column" gap={1}>
-            <Text wrap="wrap">{CONSENT_LINE}</Text>
-            <Text size="caption" dimColor wrap="wrap">
-              {CONSENT_CHANGE_LINE} <Link href={FIELDS_URL}>See the field list</Link>
-            </Text>
-            <Box flexDirection="row" gap={1}>
-              <Button
-                key="share"
-                label={SHARE_LABEL}
-                variant={choice === 'yes' ? 'primary' : 'secondary'}
-                onPress={async () => {
-                  await update($, consent, () => 'yes')
-                  goTo($, 4)
-                }}
-              />
-              <Button
-                key="dont-share"
-                label={DONT_SHARE_LABEL}
-                variant={choice === 'no' ? 'primary' : 'secondary'}
-                onPress={async () => {
-                  await update($, consent, () => 'no')
-                  goTo($, 4)
-                }}
-              />
-            </Box>
-            {choice !== null && (
-              <Text size="caption" dimColor>
-                {choice === 'yes' ? 'Your choice: share anonymous usage.' : 'Your choice: do not share.'}
-              </Text>
-            )}
-          </Box>
-        )
+    if (step === 0) {
+      const clock = await read($, now)
+      const f = demoFrame(Math.max(0, clock - demoStart))
       return (
         <Box flexDirection="column" gap={1}>
-          <Text wrap="wrap">{DONE_LINE}</Text>
+          <Text size="heading" weight="semibold">
+            {STEPS[0]}
+          </Text>
+          <Text wrap="wrap">{WELCOME_LINE}</Text>
+          {svg(f.track.source, f.track.alt, 'demo-track', 30)}
+          <Text size="caption" dimColor>
+            {f.action}
+          </Text>
+          {svg(f.helper.source, f.helper.alt, 'demo-helper', 22)}
+          <Box flexDirection="row" justifyContent="flex-end">
+            <Button key="next" label="Next" variant="primary" onPress={() => showMetrics($)} />
+          </Box>
         </Box>
       )
-    })()
+    }
 
-    // On the metrics step, Next shows only once a choice stands: the two choice buttons move on by themselves.
-    const showNext = step !== 3 || choice !== null
+    // Metrics: one switch, on at first. Each turn writes the consent value at once.
+    const isOn = (await read($, consent)) !== 'no'
+    const flip = () => setConsent($, isOn ? 'no' : 'yes')
+    const isAuto = (await read($, autoUpdate)) !== false
+    const flipAuto = () => setAutoUpdate($, !isAuto)
     return (
       <Box flexDirection="column" gap={1}>
-        <Text size="caption" dimColor>{`Step ${step + 1} of ${STEPS.length}`}</Text>
         <Text size="heading" weight="semibold">
-          {STEPS[step]}
+          {STEPS[1]}
         </Text>
-        {body}
-        <Box flexDirection="row" gap={1} justifyContent="flex-end">
-          {step > 0 && <Button key="back" label="Back" onPress={() => goTo($, (step - 1) as Step)} />}
-          {step < LAST_STEP && showNext && <Button key="next" label="Next" variant="primary" onPress={() => goTo($, (step + 1) as Step)} />}
-          {step === LAST_STEP && <Button key="finish" label="Finish" variant="primary" onPress={() => finish($, true)} />}
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          {svg(switchSvg(isOn), `${SHARE_LABEL}: ${isOn ? 'on' : 'off'}`, 'share-switch', 20)}
+          <Button key="share" label={SHARE_LABEL} plain onPress={flip} />
+        </Box>
+        <Text wrap="wrap">{CONSENT_LINE}</Text>
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          {svg(switchSvg(isAuto), `${AUTO_LABEL}: ${isAuto ? 'on' : 'off'}`, 'auto-switch', 20)}
+          <Button key="auto" label={AUTO_LABEL} plain onPress={flipAuto} />
+        </Box>
+        <Text wrap="wrap">{AUTO_LINE}</Text>
+        <Text size="caption" dimColor wrap="wrap">
+          {CONSENT_CHANGE_LINE} <Link href={FIELDS_URL}>See the field list</Link>
+        </Text>
+        <Box flexDirection="row" justifyContent="space-between">
+          <Button key="back" label="Back" onPress={() => goTo($, 0)} />
+          <Button key="done" label="Done" variant="primary" onPress={() => finish($, true)} />
         </Box>
       </Box>
     )
   })
 }
-

@@ -1,5 +1,9 @@
 import { expect, test } from 'claude-code/testing'
 
+// Find a drawing by its description: the test engine's find does not filter on alt, so filter here.
+const svgAlt = async (ui: { findAll: (q: { type: string }) => Promise<{ props?: Record<string, unknown> }[]> }, alt: RegExp | string) =>
+  (await ui.findAll({ type: 'Svg' })).find(x => (typeof alt === 'string' ? x.props?.alt === alt : alt.test(String(x.props?.alt ?? '')))) ?? undefined
+
 const PANE = {
   plugin: 'mission-status',
   component: 'Pane',
@@ -20,9 +24,18 @@ const start = async ($: any, on: any, agents: unknown[] = [], skipProcess = fals
 const send = ($: any, args: Record<string, unknown>) => $.tool.call({ tool: 'mcp__mission-status__update', ...args } as never)
 const text = async (ui: any, re: RegExp) => (await ui.find({ type: 'Text', text: re }))?.text
 
+test('a pane the agent has not filled says it waits for the agent', async ($, on) => {
+  on('tool.call', () => ({ result: 'ok' }))
+  await start($, on)
+  for (let k = 0; k < 5; k++) await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await text(ui, /Waiting for the agent/)).toBe('Waiting for the agent')
+  await ui.unmount()
+})
+
 test('build: each card ends with its exit clause, and its figure follows the clause kind', async ($, on) => {
   await start($, on, [{ id: 'a1', description: 'scan tests', status: 'running', taskStatus: 'running', model: 'haiku', startTime: Date.now() }])
-  const base = { project: 'Vaani Claude mod', goalLine: 'The pane shows the counts.', stage: 'build', phase: 1 }
+  const base = { project: 'Checkout redesign', goalLine: 'The pane shows the counts.', stage: 'build', phase: 1 }
   const counts = (n: number) => [
     { phase: 0, label: 'Rounds', when: 'you pick the pane form', text: 'Met' },
     { phase: 1, label: 'Checks passing', when: 'all pane tests pass', n, m: 11 },
@@ -33,18 +46,45 @@ test('build: each card ends with its exit clause, and its figure follows the cla
   await send($, { ...base, counts: counts(10) })
   await send($, { ...base, counts: counts(11) })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await text(ui, /^Project: Vaani Claude mod$/)).toBe('Project: Vaani Claude mod')
+  expect(await text(ui, /^Project: Checkout redesign$/)).toBe('Project: Checkout redesign')
   for (const stage of ['Plan', 'Build', 'Test', 'Deploy', 'Learn']) expect(await text(ui, new RegExp(`^${stage}$`))).toBe(stage)
   // exit clauses read as conditions, met ones checked
-  expect(await ui.find({ type: 'Svg', alt: /^Done when you pick the pane form\.$/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Svg', alt: /^Done when you approve the look\.$/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Svg', alt: /^Done when the pull request merges\.$/ })).toBeTruthy()
+  // A done stage folds to one line that names its met gate.
+  expect(await text(ui, /^✓ you pick the pane form$/)).toBe('✓ you pick the pane form')
+  expect(await svgAlt(ui, 'Gate: you approve the look')).toBeTruthy()
+  expect(await svgAlt(ui, 'Gate: the pull request merges')).toBeTruthy()
   // cards show a live MM:SS timer, not a count or a status word
   expect(await text(ui, /^00:0\d$/)).toBeTruthy()
   expect(await text(ui, /^Met$/)).toBeUndefined()
   expect(await text(ui, /^11 of 11$/)).toBeUndefined()
-  expect(await ui.find({ type: 'Svg', alt: /Helper scan tests: running/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Svg', alt: /Stage 2 of 5: Build/ })).toBeTruthy()
+  expect(await svgAlt(ui, /Helper scan tests: running/)).toBeTruthy()
+  expect(await svgAlt(ui, /Stage 2 of 5: Build/)).toBeTruthy()
+  await ui.unmount()
+})
+
+test('a pane too narrow for the stage bar shows the stages as wrapped chips', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', phases: ['Plan', 'Repo setup', 'Build', 'Website', 'Review', 'Fix findings', 'Deploy'], phase: 5 })
+  const narrow = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 40 }, surface: 'desktop' })
+  expect(await svgAlt(narrow, /^Stage 6 of 7/)).toBeUndefined()
+  expect(await text(narrow, /^Fix findings$/)).toBe('Fix findings')
+  expect(await text(narrow, /^✓ Build$/)).toBe('✓ Build')
+  await narrow.unmount()
+  const wide = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 140 }, surface: 'desktop' })
+  expect(await svgAlt(wide, /^Stage 6 of 7: Fix findings$/)).toBeTruthy()
+  await wide.unmount()
+})
+
+test('a done stage folds to one line; its + opens the full card again', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', stage: 'build', phase: 1, counts: [{ phase: 0, when: 'Plan approved', text: 'Met' }], links: [{ phase: 0, label: 'Spec', href: 'https://example.com/s' }] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await text(ui, /^✓ Plan approved$/)).toBe('✓ Plan approved')
+  expect(await svgAlt(ui, /Gate( met)?: Plan approved/)).toBeUndefined()
+  expect((await ui.findAll({ type: 'Link' })).some(x => x.props?.href === 'https://example.com/s')).toBe(false)
+  await ui.press({ key: 'open-0' })
+  expect(await svgAlt(ui, /Gate met: Plan approved/)).toBeTruthy()
+  expect((await ui.findAll({ type: 'Link' })).some(x => x.props?.href === 'https://example.com/s')).toBe(true)
   await ui.unmount()
 })
 
@@ -66,7 +106,8 @@ test('a stage opens to its items; an item that waits is indented, parallel items
   // the current stage opens by itself
   // an item in progress carries its runtime after its name
   expect(await text(ui, /^Draw the columns  ·  \d\d:\d\d$/)).toBeTruthy()
-  expect(await ui.find({ type: 'Svg', alt: /^Write the tests waits for Draw the columns\.$/ })).toBeTruthy()
+  // a wait draws a line in the badge column between the two badges
+  expect(await svgAlt(ui, 'Wait line')).toBeTruthy()
   // The spinners show what runs in parallel; no sentence repeats it.
   expect(await text(ui, /items run in parallel/)).toBeUndefined()
   // a later stage stays closed until pressed
@@ -82,8 +123,8 @@ test('one stage is in progress at a time, and the current stage shows its time',
   await start($, on)
   await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 2, name: 'your look review', status: 'now' }] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Svg', alt: /^Test: not started$/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Svg', alt: /^Build: in progress$/ })).toBeTruthy()
+  expect(await svgAlt(ui, /^Test: not started$/)).toBeTruthy()
+  expect(await svgAlt(ui, /^Build: in progress$/)).toBeTruthy()
   expect(await text(ui, /^00:0\d$/)).toBeTruthy()
   await ui.unmount()
 })
@@ -100,13 +141,13 @@ test('a ticket shows at the top, custom stages replace the preset, the git bar o
     stage: 'build',
     phase: 4,
     phases: ['plan', 'build', 'review', 'deploy', 'monitor', 'iterate'],
-    ticket: { ref: 'NIR-1', title: 'Make it general', url: 'https://example.com/NIR-1' },
+    ticket: { ref: 'ABC-1', title: 'Make it general', url: 'https://example.com/ABC-1' },
   })
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect((await ui.find({ type: 'Link' }))?.props?.href).toBe('https://example.com/NIR-1')
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 120 }, surface: 'desktop' })
+  expect((await ui.find({ type: 'Link' }))?.props?.href).toBe('https://example.com/ABC-1')
   expect(await text(ui, /Make it general/)).toBeTruthy()
   expect(await text(ui, /^Monitor$/)).toBe('Monitor')
-  expect(await ui.find({ type: 'Svg', alt: /Stage 5 of 6: Monitor/ })).toBeTruthy()
+  expect(await svgAlt(ui, /Stage 5 of 6: Monitor/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -126,10 +167,12 @@ test('cards carry links and items carry a scope note; dependents indent; only ru
   })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'open-0' })
-  expect(await ui.find({ type: 'Link', href: 'file:///tmp/plan.md' })).toBeTruthy()
-  expect(await ui.find({ type: 'Link', href: 'https://example.com/b' })).toBeTruthy()
+  // a local Markdown file is a button that opens the document pane, not a dead file link
+  expect((await ui.findAll({ type: 'Link' })).some(x => String(x.props?.href ?? '').startsWith('file:'))).toBe(false)
+  expect((await ui.findAll({ type: 'Markdown' })).some(x => String(x.props?.text ?? '').startsWith('[↗ Plan]('))).toBe(true)
+  expect((await ui.findAll({ type: 'Link' })).some(x => x.props?.href === 'https://example.com/b')).toBe(true)
   expect(await text(ui, /^Schema, metrics, onboarding$/)).toBeTruthy()
-  expect(await ui.find({ type: 'Svg', alt: /^Wave 2 waits for Wave 1\.$/ })).toBeTruthy()
+  expect(await svgAlt(ui, 'Wait line')).toBeTruthy()
   expect(await text(ui, /items run in parallel/)).toBeUndefined()
   await ui.unmount()
 })
@@ -142,31 +185,81 @@ test('each item in progress shows its runtime', async ($, on) => {
   await ui.unmount()
 })
 
+test('a passed stage with an unfinished item is not done', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 0, name: 'write the brief', status: 'done' }, { phase: 0, name: 'brand', status: 'now' }] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await svgAlt(ui, /^Plan: in progress$/)).toBeTruthy()
+  expect(await svgAlt(ui, /^Plan: done$/)).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a state the agent left stale shows May be out of date; a fresh one does not', async ($, on) => {
+  let stale = true
+  on('state.get', (async (_: unknown, e: { plugin: string; key: string }, next: (e: unknown) => unknown) => {
+    const got = (await next(e)) as { value?: { value?: { shape?: string; value?: Record<string, unknown> } } } | undefined
+    // A shaped value is stored as { shape, value }: set the flag on the summary inside it.
+    const inner = got?.value?.value
+    if (e.plugin === 'mission-status' && e.key === 'summary' && inner?.value && typeof inner.value === 'object')
+      return { ...got, value: { ...got?.value, value: { ...inner, value: { ...inner.value, mayBeOutOfDate: stale } } } }
+    return got
+  }) as never)
+  await start($, on)
+  await send($, { project: 'P', stage: 'build', phase: 0 })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await text(ui, /^May be out of date$/)).toBe('May be out of date')
+  await ui.unmount()
+  stale = false
+  const ui2 = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await text(ui2, /^May be out of date$/)).toBeUndefined()
+  await ui2.unmount()
+})
+
+test('in-progress cards open by themselves and completed cards close; a press holds until the state changes', async ($, on) => {
+  await start($, on)
+  const items = (aDone: boolean) => [
+    { id: 'a', phase: 0, name: 'old work', status: aDone ? 'done' : 'now' },
+    { id: 'b', phase: 1, name: 'new work', status: 'now' },
+  ]
+  await send($, { project: 'P', stage: 'build', phase: 1, items: items(true) })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await text(ui, /^Old work$/)).toBeUndefined()
+  expect(await text(ui, /^New work/)).toBeTruthy()
+  await ui.press({ key: 'open-0' })
+  expect(await text(ui, /^Old work$/)).toBe('Old work')
+  await ui.unmount()
+  await send($, { project: 'P', stage: 'build', phase: 1, items: items(false) })
+  const ui2 = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // stage 0 is now in progress again: it opens by the rule
+  expect(await text(ui2, /^Old work/)).toBeTruthy()
+  await ui2.unmount()
+})
+
 test('stages can run in parallel', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'build', template: 'product-loop', phase: 1, active: [2] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Svg', alt: /^Build: in progress$/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Svg', alt: /^Review: in progress$/ })).toBeTruthy()
-  expect(await ui.find({ type: 'Svg', alt: /^Deploy: not started$/ })).toBeTruthy()
+  expect(await svgAlt(ui, /^Build: in progress$/)).toBeTruthy()
+  expect(await svgAlt(ui, /^Review: in progress$/)).toBeTruthy()
+  expect(await svgAlt(ui, /^Deploy: not started$/)).toBeTruthy()
   await ui.unmount()
 })
 
-test('the pane says nothing about the owner, and shows the seconds since the last update', async ($, on) => {
+test('the pane says nothing about the owner, and shows no update age', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'build', phase: 0 })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await text(ui, /needs you/i)).toBeUndefined()
-  expect(await ui.find({ type: 'Button', key: 'update' })).toBeTruthy()
-  expect(await text(ui, /^Updated \d+ s ago$/)).toBeTruthy()
+  expect((await ui.findAll({ type: 'Button' })).some(x => x.key === 'update')).toBe(false)
+  expect(await text(ui, /^Updated /)).toBeUndefined()
   await ui.unmount()
 })
 
 test('fix: its own stages and the symptom', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'fix', phase: 1, symptom: 'The pane shows no data after a reload.' })
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Svg', alt: /Stage 2 of 5: Find cause/ })).toBeTruthy()
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 120 }, surface: 'desktop' })
+  expect(await svgAlt(ui, /Stage 2 of 5: Find cause/)).toBeTruthy()
   expect(await text(ui, /^The pane shows no data after a reload\.$/)).toBeTruthy()
   await ui.unmount()
 })
@@ -193,7 +286,7 @@ test('done: every stage passed', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'ship', phase: 5 })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await ui.find({ type: 'Svg', alt: /All stages are done/ })).toBeTruthy()
+  expect(await svgAlt(ui, /All stages are done/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -215,6 +308,6 @@ test('a wait is a full sentence', async ($, on) => {
 
 test('empty: before any update', async $ => {
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await text(ui, /^The pane has no progress data yet\.$/)).toBeTruthy()
+  expect(await text(ui, /^No progress yet\. The agent sends the first state/)).toBeTruthy()
   await ui.unmount()
 })

@@ -9,7 +9,7 @@ test('ages read as plain words', () => {
 })
 
 test('sentence case keeps the rest as written', () => {
-  expect(cap('move into Vaani')).toBe('Move into Vaani')
+  expect(cap('ship to GitHub')).toBe('Ship to GitHub')
 })
 
 test('the same input draws the same source, so an unchanged bar does not flicker; different input, different ids', () => {
@@ -20,13 +20,12 @@ test('the same input draws the same source, so an unchanged bar does not flicker
   expect(ids(one).filter(x => other.includes(x))).toEqual([])
 })
 
-import { actionOf, arrivalOf, secondsOf } from '../hooks/model'
+import { actionOf, secondsOf } from '../hooks/model'
 
 test('the live line uses the chat status words', () => {
   expect(actionOf({ tool: 'Bash', command: 'x', description: 'Run the pane tests' })).toBe('Running a command')
   expect(actionOf({ tool: 'Edit', file_path: '/a/b/register.tsx' })).toBe('Editing a file')
   expect(actionOf({ tool: 'mcp__mission-status__update' })).toBeNull()
-  expect(arrivalOf('anything')).toBe('Thinking')
   expect(secondsOf(12_400)).toBe('12s')
   expect(secondsOf(65_000)).toBe('1m 5s')
 })

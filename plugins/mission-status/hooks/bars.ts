@@ -6,6 +6,11 @@
 const ACCENT = '#8B7CF6'
 const PILL = '#7462E8'
 const GREEN = '#4FA569'
+// On a light page the accent, green, amber and grey step darker, so text keeps 4.5:1 and lines keep 3:1 on white.
+// The dark values stay as they were.
+export const LIGHT = { accent: '#5B4BD6', green: '#2F7D47', amber: '#9A6312', grey: '#6F6D66', ink: '#2A2833', page: '#FAF9F5' }
+export const DARK_PAGE = '#1F1E1D'
+const LINE = '#8B8A85'
 const FONT = "'Anthropic Sans',ui-sans-serif,system-ui,-apple-system,'Segoe UI',sans-serif"
 
 // Each drawing's id prefix comes from its own input: two different drawings in one page never share a clip or a
@@ -22,10 +27,7 @@ const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 export const textWidth = (s: string, px = 12) => Math.ceil([...s].length * px * 0.6)
 const pct = (x: number) => `${(Math.max(0, Math.min(1, x)) * 100).toFixed(2)}%`
 
-const TWINKLE = `<style>.tw{animation:tw 2.4s steps(4) infinite}@keyframes tw{0%{opacity:.15}50%{opacity:.7}100%{opacity:.15}}@media (prefers-reduced-motion:reduce){.tw{animation:none}}</style>`
 
-// The fill: a plain gradient that deepens toward the leading edge. No cells, no motion.
-const LIVE = ''
 function dither(id: string, width: string, height: number, color: string, from = 0.15, to = 0.9): string {
   return (
     `<defs><linearGradient id="${id}g" x1="0" x2="1"><stop offset="0" stop-color="${color}" stop-opacity="${(from * 0.6).toFixed(2)}"/>` +
@@ -34,16 +36,41 @@ function dither(id: string, width: string, height: number, color: string, from =
   )
 }
 
-export type TrackInput = { total: number; done: number; current: string | null; isDone: boolean; doneLabel?: string; clock?: number; names?: string[]; tips?: string[] }
+export type TrackInput = { total: number; done: number; current: string | null; isDone: boolean; doneLabel?: string; clock?: number; names?: string[]; tips?: string[]; checks?: boolean[]; widthPx?: number }
 
-// The track: each stage is one equal segment. Done segments fill with dither and tick marks; the current segment is a
-// full-height pill with the stage name and a shimmer; later segments show a dot at their start.
-export function trackSvg({ total, done, current, isDone, doneLabel = 'Done', clock = 0, names = [], tips = [] }: TrackInput): string {
+// Does every stage label fit the pane's width? The pane draws the bar when it does, and wrapped stage chips when not.
+export function trackFits(t: TrackInput): boolean {
+  if (t.widthPx === undefined) return true
+  const n = Math.max(1, t.total)
+  const seg = t.isDone ? n - 1 : Math.min(t.done, n - 1)
+  const names = t.names ?? []
+  const label = (k: number) => {
+    if (k === seg) return textWidth(t.isDone ? (t.doneLabel ?? 'Done') : (t.current ?? ''), 12)
+    const isPast = t.checks !== undefined ? t.checks[k] === true : k < seg || t.isDone
+    return textWidth(isPast ? `✓ ${names[k] ?? ''}` : (names[k] ?? ''), 11)
+  }
+  let sum = 0
+  for (let k = 0; k < n; k++) sum += Math.max(36, label(k) + 28)
+  return sum <= t.widthPx
+}
+
+export function trackSvg(input: TrackInput): string {
+  const { total, done, current, isDone, doneLabel = 'Done', clock = 0, names = [], tips = [], checks } = input
   const H = 30
   const n = Math.max(1, total)
   const id = uid(total,done,current,isDone,doneLabel,clock,names,tips)
   const seg = isDone ? n - 1 : Math.min(done, n - 1)
-  const fill = isDone ? 1 : (seg + 0.5) / n
+  // Each segment is as wide as its label plus the same padding on both sides, so every name has equal room.
+  const shown = (k: number) => {
+    const name = names[k] ?? ''
+    const isPast = checks !== undefined ? checks[k] === true : k < seg || isDone
+    return isPast ? `✓ ${name}` : name
+  }
+  const weights = Array.from({ length: n }, (_, k) => Math.max(36, textWidth(k === seg ? (isDone ? doneLabel : (current ?? '')) : shown(k), k === seg ? 12 : 11) + 28))
+  const sum = weights.reduce((a, b) => a + b, 0)
+  const at = (k: number) => weights.slice(0, k).reduce((a, b) => a + b, 0) / sum
+  const span = (k: number) => (weights[k] ?? 0) / sum
+  const fill = isDone ? 1 : at(seg) + span(seg) / 2
   const label = isDone ? doneLabel : (current ?? '')
   const color = isDone ? GREEN : ACCENT
   // Every other stage names itself in its own segment: done ones in white with a check, later ones in grey.
@@ -52,29 +79,32 @@ export function trackSvg({ total, done, current, isDone, doneLabel = 'Done', clo
     if (!isDone && k === seg) continue
     if (isDone && k === n - 1) continue
     const name = names[k] ?? ''
-    if (k > 0) marks += `<svg x="${pct(k / n)}" overflow="visible"><rect x="-.5" y="9" width="1" height="${H - 18}" fill="#fff" fill-opacity=".12"/></svg>`
+    if (k > 0 && k !== seg + 1) marks += `<svg x="${pct(at(k))}" overflow="visible"><rect x="-.5" y="9" width="1" height="${H - 18}" class="dv"/></svg>`
     if (name === '') continue
-    const isPast = k < seg || isDone
+    // A check only on a stage that is truly done (the pane passes each stage's real state).
+    const isPast = checks !== undefined ? checks[k] === true : k < seg || isDone
     marks +=
-      `<text x="${pct((k + 0.5) / n)}" y="${H / 2 + 4}" text-anchor="middle" style="font:500 11px ${FONT}" ` +
+      `<text x="${pct(at(k) + span(k) / 2)}" y="${H / 2 + 4}" text-anchor="middle" style="font:500 11px ${FONT}" ` +
       `class="${isPast ? 'np' : 'nf'}">${esc(isPast ? `✓ ${name}` : name)}</text>`
   }
-  const nameStyle = `<style>.np{fill:#fff;fill-opacity:.78}.nf{fill:#A8A69E;fill-opacity:.85}@media (prefers-color-scheme:light){.nf{fill:#6F6D66}}</style>`
+  const nameStyle =
+    `<style>.np{fill:#fff;fill-opacity:.78}.nf{fill:#A8A69E;fill-opacity:.85}.dv{fill:#fff;fill-opacity:.12}` +
+    `@media (prefers-color-scheme:light){.np{fill:${LIGHT.ink};fill-opacity:.85}.nf{fill:${LIGHT.grey};fill-opacity:1}.dv{fill:#000;fill-opacity:.14}}</style>`
   const pill =
-    `<svg x="${pct(seg / n)}" width="${pct(1 / n)}" height="${H}">` +
+    `<svg x="${pct(at(seg))}" width="${pct(span(seg))}" height="${H}">` +
     `<defs><clipPath id="${id}p"><rect width="100%" height="${H}" rx="6"/></clipPath></defs>` +
     `<g clip-path="url(#${id}p)"><rect width="100%" height="${H}" fill="${isDone ? '#3E8E57' : PILL}"/>` +
 
     `</g><text x="50%" y="${H / 2 + 4}" text-anchor="middle" style="font:600 12px ${FONT}" fill="#fff">${esc(label)}</text></svg>`
   const shimmer = `<defs><pattern id="${id}st" width="15" height="9" patternUnits="userSpaceOnUse"><rect x="3" width="2" height="2" fill="#fff"/><rect x="9" y="3" width="2" height="2" fill="#fff"/><rect y="6" width="2" height="2" fill="#fff"/><rect x="12" y="6" width="2" height="2" fill="#fff"/></pattern></defs>`
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">${TWINKLE}${LIVE}${shimmer}${nameStyle}` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">${shimmer}${nameStyle}` +
     `<defs><clipPath id="${id}k"><rect width="100%" height="${H}" rx="6"/></clipPath></defs>` +
     `<g clip-path="url(#${id}k)"><rect width="100%" height="${H}" fill="#808080" fill-opacity=".16"/>` +
     `<rect width="${pct(fill)}" height="${H}" fill="${color}" fill-opacity=".22"/>${dither(`${id}d`, pct(fill), H, color)}${marks}</g>` +
     `${label === '' ? '' : pill}` +
     tips
-      .map((tip, k) => (tip === '' ? '' : `<rect x="${pct(k / n)}" width="${pct(1 / n)}" height="${H}" fill="#000" fill-opacity="0"><title>${esc(tip)}</title></rect>`))
+      .map((tip, k) => (tip === '' ? '' : `<rect x="${pct(at(k))}" width="${pct(span(k))}" height="${H}" fill="#000" fill-opacity="0"><title>${esc(tip)}</title></rect>`))
       .join('') +
     `</svg>`
   )
@@ -92,7 +122,7 @@ export function stripSvg({ title, detail, state, time }: StripInput): string {
       ? `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" repeatCount="indefinite"/></circle>`
       : `<circle cx="12" cy="${H / 2}" r="3.5" fill="${tint}"/>`
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">${TWINKLE}${LIVE}` +
+    `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">` +
     `<style>.i{fill:#F0EEFC}.d{fill:#A7A5AE}@media (prefers-color-scheme:light){.i{fill:#222226}.d{fill:#5B5B5E}}</style>` +
     `<defs><clipPath id="${id}r"><rect width="100%" height="${H}" rx="6"/></clipPath></defs>` +
     // the dots fade out toward the right, so the time stays clear
@@ -104,58 +134,43 @@ export function stripSvg({ title, detail, state, time }: StripInput): string {
   )
 }
 
-// A thin dithered line for a count with a denominator.
-export function lineSvg(value: number, max: number): string {
-  const H = 6
-  const id = uid(value,max)
-  const w = pct(max > 0 ? value / max : 0)
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">${TWINKLE}${LIVE}` +
-    `<defs><clipPath id="${id}r"><rect width="100%" height="${H}" rx="3"/></clipPath></defs>` +
-    `<g clip-path="url(#${id}r)"><rect width="100%" height="${H}" fill="#808080" fill-opacity=".16"/>` +
-    `<rect width="${w}" height="${H}" fill="${ACCENT}" fill-opacity=".35"/>${dither(`${id}d`, w, H, ACCENT)}</g></svg>`
-  )
-}
 
-// The liveness ring: five sections; one more lights each second, round and round. Amber and still when reads stop.
-export function ringSvg(clock: number, isLive: boolean): string {
-  const R = 6
-  const C = 8
-  const color = isLive ? GREEN : '#C0883B'
-  const offset = ((clock / 1000) % 5).toFixed(2)
-  let arcs = ''
-  for (let k = 0; k < 5; k++) {
-    const a0 = ((k * 72 + 10 - 90) * Math.PI) / 180
-    const a1 = ((k * 72 + 62 - 90) * Math.PI) / 180
-    const d = `M${(C + R * Math.cos(a0)).toFixed(2)} ${(C + R * Math.sin(a0)).toFixed(2)} A${R} ${R} 0 0 1 ${(C + R * Math.cos(a1)).toFixed(2)} ${(C + R * Math.sin(a1)).toFixed(2)}`
-    arcs += isLive
-      ? `<path d="${d}" fill="none" stroke="${color}" stroke-width="2.6" stroke-linecap="butt" opacity=".2">` +
-        `<animate attributeName="opacity" values=".2;1;.55;.2;.2" keyTimes="0;.04;.2;.4;1" dur="5s" begin="${(k - Number(offset)).toFixed(2)}s" repeatCount="indefinite"/></path>`
-      : `<path d="${d}" fill="none" stroke="${color}" stroke-width="2.6" stroke-linecap="butt" opacity=".7"/>`
-  }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${arcs}</svg>`
-}
 
 // A value that changed slides in from below while the old one slides out above; after the slide it stands still.
 export function slideSvg(from: string, to: string, sinceMs: number, isAccent: boolean): string {
   const H = 22
   const begin = `-${(Math.max(0, sinceMs) / 1000).toFixed(2)}s`
-  const ink = isAccent ? ACCENT : 'currentColor'
+  const v = `s${uid(isAccent)}`
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">` +
-    `<style>.v{font:600 16px ${FONT};fill:${ink === 'currentColor' ? '#F0EEFC' : ink}}@media (prefers-color-scheme:light){.v{fill:${ink === 'currentColor' ? '#222226' : ink}}}</style>` +
-    `<text class="v" x="100%" y="17" text-anchor="end" opacity="0">${esc(from)}` +
+    `<style>.${v}{font:600 16px ${FONT};fill:${isAccent ? ACCENT : '#F0EEFC'}}@media (prefers-color-scheme:light){.${v}{fill:${isAccent ? LIGHT.accent : '#222226'}}}</style>` +
+    `<text class="${v}" x="100%" y="17" text-anchor="end" opacity="0">${esc(from)}` +
     `<animate attributeName="y" values="17;-4" dur=".5s" begin="${begin}" fill="freeze"/>` +
     `<animate attributeName="opacity" values="1;0" dur=".5s" begin="${begin}" fill="freeze"/></text>` +
-    `<text class="v" x="100%" y="17" text-anchor="end">${esc(to)}` +
+    `<text class="${v}" x="100%" y="17" text-anchor="end">${esc(to)}` +
     `<animate attributeName="y" values="30;17" dur=".5s" begin="${begin}" fill="freeze"/>` +
     `<animate attributeName="opacity" values="0;1" dur=".5s" begin="${begin}" fill="freeze"/></text></svg>`
   )
 }
 
 // A status badge for a stage card: a filled check when done, a pulsing ring when current, a hollow ring when ahead.
-export function badgeSvg(state: 'done' | 'now' | 'next', clock: number, size = 20): string {
+// A badge in a 20 px tall cell when up or down is given: the rail runs into the badge from above and leaves it below.
+export function badgeSvg(state: 'done' | 'now' | 'next' | 'dot', clock: number, size = 20, up?: boolean, down?: boolean): string {
+  if (up !== undefined || down !== undefined) {
+    const inner = badgeSvg(state, clock, size)
+    const pad = (20 - size) / 2
+    const stub = (y1: number, y2: number) => `<path class="wa" d="M8 ${y1} V${y2}" stroke-width="1.5"/>`
+    return (
+      `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="20">${WAITS_STYLE}` +
+      (up === true ? stub(0, pad) : '') +
+      (down === true ? stub(20 - pad, 20) : '') +
+      `<g transform="translate(${(16 - size) / 2} ${pad})">${inner.replace(/^<svg[^>]*>/, '').replace(/<\/svg>$/, '')}</g></svg>`
+    )
+  }
   const S = size
+  // A card whose border carries the motion: a plain purple dot, no spinner.
+  if (state === 'dot')
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><circle cx="${S / 2}" cy="${S / 2}" r="${S * 0.3}" fill="${ACCENT}"/></svg>`
   const c = S / 2
   const id = uid(state, clock, size)
   if (state === 'done')
@@ -171,108 +186,68 @@ export function badgeSvg(state: 'done' | 'now' | 'next', clock: number, size = 2
     const arc = 2 * Math.PI * r
     const begin = `-${((clock / 1000) % 1).toFixed(2)}s`
     return (
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}">` +
-      `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".22" stroke-width="2"/>` +
-      `<circle cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-linecap="round" stroke-dasharray="${(arc * 0.28).toFixed(2)} ${arc.toFixed(2)}">` +
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}}</style>` +
+      `<circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".22" stroke-width="2"/>` +
+      `<circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-linecap="round" stroke-dasharray="${(arc * 0.28).toFixed(2)} ${arc.toFixed(2)}">` +
       `<animateTransform attributeName="transform" type="rotate" from="0 ${c} ${c}" to="360 ${c} ${c}" dur="1s" begin="${begin}" repeatCount="indefinite"/></circle></svg>`
     )
   }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><circle cx="${c}" cy="${c}" r="${c - 2.5}" fill="none" stroke="#A8A69E" stroke-opacity=".55" stroke-width="1.5" stroke-dasharray="3 2.4"/></svg>`
-}
-
-// A thin gradient line whose colours drift along it: the accent under the project heading.
-export function glowLineSvg(clock: number): string {
-  const id = uid(clock)
-  const begin = `-${((clock / 1000) % 6).toFixed(2)}s`
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="3">` +
-    `<defs><linearGradient id="${id}" x1="0" x2="1" spreadMethod="reflect">` +
-    `<stop offset="0" stop-color="${PILL}"/><stop offset=".5" stop-color="#E58BC9"/><stop offset="1" stop-color="${GREEN}"/>` +
-    `<animate attributeName="x1" values="0;1;0" dur="6s" begin="${begin}" repeatCount="indefinite"/>` +
-    `<animate attributeName="x2" values="1;2;1" dur="6s" begin="${begin}" repeatCount="indefinite"/></linearGradient></defs>` +
-    `<rect width="100%" height="3" rx="1.5" fill="url(#${id})" opacity=".85"/></svg>`
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>.bn{stroke:#A8A69E;stroke-opacity:.55}@media (prefers-color-scheme:light){.bn{stroke:${LIGHT.grey};stroke-opacity:.8}}</style>` +
+    `<circle class="bn" cx="${c}" cy="${c}" r="${c - 2.5}" fill="none" stroke-width="1.5"/></svg>`
   )
 }
 
-// A ticker: each line shows for a few seconds, then slides up as the next slides in. Round and round.
-export function tickerSvg(lines: { lead: string; text: string; tone: 'accent' | 'dim' | 'green' }[], clock: number): string {
-  const H = 20
-  const SHOW = 3.2
-  const n = Math.max(1, lines.length)
-  const cycle = SHOW * n
-  const begin = `-${((clock / 1000) % cycle).toFixed(2)}s`
-  const tone = { accent: ACCENT, dim: '#A8A69E', green: GREEN }
-  const cid = uid(lines,clock)
-  let body = ''
-  lines.forEach((l, k) => {
-    // key times: in at k, hold, out at k+1
-    const a = k / n
-    const b = (k + 0.12) / n
-    const c = (k + 0.88) / n
-    const d = (k + 1) / n
-    const kt = [0, a, b, c, d, 1].map(v => Math.min(1, Math.max(0, v)).toFixed(4))
-    // keep keyTimes strictly ordered
-    for (let i = 1; i < kt.length; i++) if (Number(kt[i]) < Number(kt[i - 1])) kt[i] = kt[i - 1] as string
-    const ys = n === 1 ? `14;14;14;14;14;14` : `34;34;14;14;-6;-6`
-    const op = n === 1 ? `1;1;1;1;1;1` : `0;0;1;1;0;0`
-    body +=
-      `<text x="0" y="14" style="font:500 12px ${FONT}" opacity="${n === 1 ? 1 : 0}">` +
-      `<tspan fill="${tone[l.tone]}" style="font-weight:600">${esc(l.lead)}</tspan><tspan class="tk"> ${esc(l.text)}</tspan>` +
-      `<animate attributeName="y" values="${ys}" keyTimes="${kt.join(';')}" dur="${cycle}s" begin="${begin}" repeatCount="indefinite"/>` +
-      `<animate attributeName="opacity" values="${op}" keyTimes="${kt.join(';')}" dur="${cycle}s" begin="${begin}" repeatCount="indefinite"/></text>`
-  })
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">` +
-    `<style>.tk{fill:#E8E6F0}@media (prefers-color-scheme:light){.tk{fill:#2A2A2E}}</style>` +
-    `<defs><clipPath id="${cid}"><rect width="100%" height="${H}"/></clipPath></defs><g clip-path="url(#${cid})">${body}</g></svg>`
-  )
+
+
+
+// The line that runs on beside an item's note, from its badge down to the items that wait for it.
+// The wait line, in the theme's grey (light theme too); the colour argument is kept for callers and not used.
+const WAITS_STYLE = `<style>.wa{stroke:${LINE}}@media (prefers-color-scheme:light){.wa{stroke:${LIGHT.grey}}}</style>`
+export function waitsLineSvg(height = 20): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="${height}">${WAITS_STYLE}<path class="wa" d="M8 0 V${height}" stroke-width="1.5"/></svg>`
 }
 
-// The connector for an item that waits for the one above it: a plain elbow down and right, no arrowhead.
-export function waitsArrowSvg(color: string): string {
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="18">` +
-    `<path d="M3 1 V7 Q3 10 6 10 H12" fill="none" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/></svg>`
-  )
-}
 
-// The live action line on the current card: a new action slides in from below while the last one slides out above.
-export function actionSvg(from: string | null, to: string, sinceMs: number): string {
-  const H = 18
-  const begin = `-${(Math.max(0, sinceMs) / 1000).toFixed(2)}s`
-  const style = `<style>.a{font:400 12px ${FONT};fill:#B9B6C8}@media (prefers-color-scheme:light){.a{fill:#55545C}}</style>`
-  const old =
-    from === null || from === to
-      ? ''
-      : `<text class="a" x="0" y="13" opacity="0">${esc(from)}` +
-        `<animate attributeName="y" values="13;-4" dur=".45s" begin="${begin}" fill="freeze"/>` +
-        `<animate attributeName="opacity" values="1;0" dur=".45s" begin="${begin}" fill="freeze"/></text>`
-  return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">${style}${old}` +
-    `<text class="a" x="0" y="13">${esc(to)}` +
-    (from === null || from === to
-      ? ''
-      : `<animate attributeName="y" values="26;13" dur=".45s" begin="${begin}" fill="freeze"/>` +
-        `<animate attributeName="opacity" values="0;1" dur=".45s" begin="${begin}" fill="freeze"/>`) +
-    `</text></svg>`
-  )
-}
-
-// The exit clause between two cards: a plain line from one card to the next, a node at its middle, and the clause
+// The gate between two cards: a plain line from one card to the next, with a short label on it, and the clause
 // beside the node. It carries no status: the card above holds the figure and the state.
-export function exitSvg(text: string, isLast: boolean): string {
-  const H = 28
+export function exitSvg(text: string, isLast: boolean, isMet = false): string {
+  // A gate between two cards, with its state in the chip: met shows a green check and the label ("Plan approved");
+  // not met shows a flag and "Needs: <label>". The row is tall enough to leave space above and below the chip.
+  const H = 40
   const X = 19
-  const id = uid(text,isLast)
-  const line = '#8B8A85'
-  const node = isLast
-    ? `<rect x="${X - 4.5}" y="${H / 2 - 4.5}" width="9" height="9" rx="1.5" transform="rotate(45 ${X} ${H / 2})" fill="#1F1E1D" stroke="${line}" stroke-width="1.4"/>`
-    : `<circle cx="${X}" cy="${H / 2}" r="4" fill="#1F1E1D" stroke="${line}" stroke-width="1.4"/>`
+  const id = uid(text, isLast, isMet)
+  const PAD = 12
+  const ICON = 12
+  const label = isMet ? text : `Needs: ${text}`
+  const left = X - 10
+  const w = Math.min(360, PAD + ICON + 6 + textWidth(label, 11) + PAD)
+  const ix = left + PAD
+  const iy = H / 2 - ICON / 2
+  const icon = isMet
+    ? `<path class="g${id}" d="M${ix + 1.5} ${iy + 6.5} l3 3 l6 -6.5" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`
+    : `<path class="i${id}" d="M${ix + 2} ${iy + 11.5} V${iy + 1} M${ix + 2} ${iy + 1.5} H${ix + 10} L${ix + 8} ${iy + 4} L${ix + 10} ${iy + 6.5} H${ix + 2}" fill="none" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>`
+  const chip = isMet ? `fill:${DARK_PAGE};stroke:${GREEN};stroke-opacity:.8` : `fill:${DARK_PAGE};stroke:${LINE};stroke-opacity:.7`
+  const chipLight = isMet ? `fill:${LIGHT.page};stroke:${LIGHT.green}` : `fill:${LIGHT.page};stroke:${LIGHT.grey}`
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">` +
-    `<style>.x${id}{font:400 12px ${FONT};fill:#A7A5AE}@media (prefers-color-scheme:light){.x${id}{fill:#5B5B5E}}</style>` +
-    `<line x1="${X}" y1="0" x2="${X}" y2="${isLast ? H / 2 : H}" stroke="${line}" stroke-opacity=".6" stroke-width="1.4"/>` +
-    node +
-    `<text class="x${id}" x="${X + 14}" y="${H / 2 + 4}">${esc(`Done when ${text}`)}</text></svg>`
+    `<style>.t${id}{font:500 11px ${FONT};fill:${isMet ? GREEN : '#B9B6C8'}}.c${id}{${chip}}.el{stroke:${LINE};stroke-opacity:.6}` +
+    `.i${id}{stroke:#B9B6C8}.g${id}{stroke:${GREEN}}` +
+    `@media (prefers-color-scheme:light){.t${id}{fill:${isMet ? LIGHT.green : '#55545C'}}.c${id}{${chipLight}}.el{stroke:${LIGHT.grey};stroke-opacity:.7}.i${id}{stroke:#55545C}.g${id}{stroke:${LIGHT.green}}}</style>` +
+    `<line class="el" x1="${X}" y1="0" x2="${X}" y2="${isLast ? H / 2 : H}" stroke-width="1.4"/>` +
+    `<rect class="c${id}" x="${left}" y="${H / 2 - 10}" width="${w}" height="20" rx="10" stroke-width="1"/>` +
+    icon +
+    `<text class="t${id}" x="${ix + ICON + 6}" y="${H / 2 + 4}">${esc(label)}</text></svg>`
   )
+}
+
+// An empty drawing of a set height: it holds a row's space where no line runs through.
+export function spaceSvg(height: number): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="${height}"></svg>`
+}
+
+
+// A plain line in the flow column, from one card to the next, with no gate on it.
+export function flowLineSvg(height: number): string {
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}">${WAITS_STYLE}<line class="wa" x1="19" y1="0" x2="19" y2="${height}" stroke-width="1.4"/></svg>`
 }

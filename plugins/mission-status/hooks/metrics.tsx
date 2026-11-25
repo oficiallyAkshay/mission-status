@@ -1,14 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
-import type { Task } from '../types'
-import { PANE } from './store'
+import type { Fresh, MetricsSession, Summary, Task } from '../types'
+import { STALE_STEPS } from './model'
+import { FRESH0, PANE } from './store'
 
 // Anonymous metrics, sent only after consent. What is sent, field by field, is in docs/telemetry.md; a test holds this
 // file to that list. Nothing here reads a session id, an account, a path or any text the person or the agent wrote:
 // prompts are sorted on the device into yes or no, and only the word leaves.
 
-// PostHog Cloud US, the Ensemble project. The key is PostHog's public, write-only project token (as Ensemble's
-// docs/analytics.js), so anyone may read it; it can only add events.
+// PostHog Cloud US. The key is PostHog's public, write-only project token, so anyone may read it; it can only add
+// events.
 export const ENDPOINT = 'https://us.i.posthog.com/i/v0/e/'
 export const KEY = 'phc_BGLN5bXDwYbwdzkzci7L2tNbyWXtUfwokDRhP6TG5w2Q'
 export const PRODUCT = 'mission-status'
@@ -22,12 +23,8 @@ export const HOLDBACK_RATE = 0.1
 export const REAL_WORK_CALLS = 5 // a real-work session has 5 or more tool calls
 export const FLUSH_MS = 60_000 // at most one request a minute
 export const MAX_QUEUE = 200 // a full queue drops new events, never blocks
-export const STALE_MS = 10 * 60_000 // stale: 10 minutes of tool calls with no agent update
-export const STALE_STEPS = 3 // or 3 new task steps with no agent update
-export const REMINDER_WINDOW = 3 // an update within 3 tool calls of a reminder follows it
 
 const UPDATE_TOOL = 'mcp__mission-status__update'
-const PLAN_TOOL = 'mcp__ccd_turn__update_plan'
 
 // The fixed, published word list that sorts a prompt as a progress question. Each entry matches whole words, on the
 // prompt in lower case with punctuation removed. Only yes or no leaves the device.
@@ -167,17 +164,22 @@ export function updateEvent(previous: unknown, value: unknown): { event: 'update
 // The values this file reads, declared by plugin and key. Consent and the task list are written elsewhere; holdback
 // is written here and read by the pane and the standing rule.
 const consentAtom = atom({ plugin: 'mission-status', key: 'consent' } as const, null as 'yes' | 'no' | null)
+// Written by onboarding once the metrics notice has been on screen; metrics are on by default, but nothing is sent
+// before the notice has shown once.
+const noticeAtom = atom({ plugin: 'mission-status', key: 'metricsNoticeShown' } as const, false as boolean)
 const holdbackAtom = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
 const tasksAtom = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
+const summaryAtom = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
+const sessionAtom = atom({ plugin: 'mission-status', key: 'metricsSession' } as const, null as MetricsSession | null)
 
 // $.store keys: the install id, and the consent choice kept across sessions by /pane-metrics.
 export const ID_KEY = 'metricsId'
 export const CONSENT_KEY = 'metricsConsent'
+export const NOTICE_KEY = 'metricsNoticeShown'
 
-// What one session counts. Reset at each load; nothing here leaves the device but the words and counts above.
-let calls = 0
-let realWork = false
-let holdback = false
+// What one session counts. The counts that must outlive a reload (an auto-update mid-session) sit in $.state, in
+// metricsSession; the queue and the render count start over with the module.
+let session: MetricsSession = { holdback: false, calls: 0, realWork: false }
 let paneSeen = false
 let paneSent = false
 let asks: boolean[] = []
@@ -185,24 +187,19 @@ let renders = 0
 let queue: Queued[] = []
 let lastSend = -Infinity
 let disabled = false
-// Freshness: since the last agent update.
-let lastUpdateAt: number | null = null
-let staleStart: number | null = null
-let newSteps = 0
-let seenSteps = new Set<string>()
-let reminded = false
-let reminderOpen: number | null = null // tool calls since the open reminder
 
 function reset(): void {
-  calls = 0
-  realWork = holdback = paneSeen = paneSent = reminded = false
+  session = { holdback: false, calls: 0, realWork: false }
+  paneSeen = paneSent = false
   asks = []
   renders = 0
   queue = []
   lastSend = -Infinity
-  lastUpdateAt = staleStart = reminderOpen = null
-  newSteps = 0
-  seenSteps = new Set()
+}
+
+async function save($: EngineInterface): Promise<void> {
+  const kept = session
+  await update($, sessionAtom, () => kept)
 }
 
 async function consentOf($: EngineInterface): Promise<'yes' | 'no' | null> {
@@ -212,8 +209,14 @@ async function consentOf($: EngineInterface): Promise<'yes' | 'no' | null> {
   return kept === 'yes' || kept === 'no' ? kept : null
 }
 
+async function noticeShown($: EngineInterface): Promise<boolean> {
+  if ((await read($, noticeAtom)) === true) return true
+  return (await $.store.get(NOTICE_KEY)) === true
+}
+
+// Sends only when the consent is yes AND the notice has shown at least once.
 async function on_($: EngineInterface): Promise<boolean> {
-  return !disabled && (await consentOf($)) === 'yes'
+  return !disabled && (await consentOf($)) === 'yes' && (await noticeShown($))
 }
 
 // Queues an event after consent; drops it otherwise, or when the queue is full.
@@ -251,69 +254,61 @@ export async function flush($: EngineInterface): Promise<void> {
     .catch(() => undefined)
 }
 
-async function decideHoldback($: EngineInterface): Promise<void> {
-  holdback = !disabled && isHoldback(await consentOf($), await $.clock.now(), Math.random())
-  await update($, holdbackAtom, () => holdback)
-  await track($, 'session_real_work', { holdback: holdback ? 'yes' : 'no' })
-  for (const a of asks) await track($, 'progress_ask', { progress: a ? 'yes' : 'no', holdback: holdback ? 'yes' : 'no' })
+const yn = (b: boolean): 'yes' | 'no' => (b ? 'yes' : 'no')
+
+// The holdback is drawn once per session, at its start, before the first standing rule is composed; a reload keeps
+// the draw (it sits in metricsSession).
+async function startSession($: EngineInterface): Promise<void> {
+  const kept = await read($, sessionAtom)
+  if (kept !== null) {
+    session = kept
+    return
+  }
+  session = { holdback: (await on_($)) && isHoldback(await consentOf($), await $.clock.now(), Math.random()), calls: 0, realWork: false }
+  await update($, holdbackAtom, () => session.holdback)
+  await save($)
+}
+
+// The session reaches real work: it is counted, with the prompts sorted before it and the pane if it showed.
+async function reachRealWork($: EngineInterface): Promise<void> {
+  session = { ...session, realWork: true }
+  await track($, 'session_real_work', { holdback: yn(session.holdback) })
+  for (const a of asks) await track($, 'progress_ask', { progress: yn(a), holdback: yn(session.holdback) })
   asks = []
   if (paneSeen && !paneSent) {
     paneSent = true
-    await track($, 'pane_shown', { holdback: holdback ? 'yes' : 'no' })
+    await track($, 'pane_shown', { holdback: yn(session.holdback) })
   }
 }
 
-async function remind($: EngineInterface, trigger: (typeof STALE_TRIGGERS)[number]): Promise<void> {
-  reminded = true
-  reminderOpen = 0
-  await track($, 'stale_reminder', { trigger })
+async function countCall($: EngineInterface): Promise<void> {
+  session = { ...session, calls: session.calls + 1 }
+  if (!session.realWork && session.calls >= REAL_WORK_CALLS) await reachRealWork($)
+  await save($)
 }
 
-async function onToolCall($: EngineInterface, tool: string, args: Record<string, unknown>): Promise<void> {
-  const now = await $.clock.now()
-  calls += 1
-  if (tool === UPDATE_TOOL) {
-    if (reminderOpen !== null) await track($, 'update_after_reminder', { followed: reminderOpen <= REMINDER_WINDOW ? 'yes' : 'no', steps: reminderOpen })
-    reminderOpen = null
-    reminded = false
-    lastUpdateAt = now
-    staleStart = null
-    newSteps = 0
-    const phase = typeof args.phase === 'number' ? Math.round(args.phase) : null
-    if (phase !== null) {
-      const stages = new Set([phase, ...(Array.isArray(args.active) ? args.active : []).filter((k): k is number => typeof k === 'number').map(Math.round)])
-      const open = (await read($, tasksAtom)).filter(t => t.status === 'now')
-      if (open.length > 0) await track($, 'update_accuracy', { accurate: open.every(t => stages.has(t.phase)) ? 'yes' : 'no' })
-    }
-  } else {
-    if (reminderOpen !== null) {
-      reminderOpen += 1
-      if (reminderOpen > REMINDER_WINDOW) {
-        await track($, 'update_after_reminder', { followed: 'no', steps: reminderOpen })
-        reminderOpen = null
-      }
-    }
-    if (tool === PLAN_TOOL && Array.isArray(args.items)) {
-      for (const it of args.items) {
-        const name = typeof it === 'object' && it !== null ? (it as { content?: unknown }).content : undefined
-        if (typeof name === 'string' && !seenSteps.has(name)) {
-          seenSteps.add(name)
-          if (lastUpdateAt !== null) newSteps += 1
-        }
-      }
-    }
-    if (lastUpdateAt !== null && staleStart === null) staleStart = now
-    if (!reminded && lastUpdateAt !== null) {
-      if (newSteps >= STALE_STEPS) await remind($, 'steps')
-      else if (staleStart !== null && now - staleStart >= STALE_MS) await remind($, 'time')
-    }
+// An agent update that the pane accepted: does the stored stage hold every open task step?
+async function checkAccuracy($: EngineInterface): Promise<void> {
+  const s = await read($, summaryAtom)
+  if (s === null) return
+  const stages = new Set([s.phase, ...(s.active ?? [])])
+  const open = (await read($, tasksAtom)).filter(t => t.status === 'now')
+  if (open.length > 0) await track($, 'update_accuracy', { accurate: yn(open.every(t => stages.has(t.phase))) })
+}
+
+// The stale reminders come from the pane's one freshness record (store.ts), read as it changes.
+export function freshEvents(previous: unknown, value: unknown): { event: string; props: Record<string, unknown> }[] {
+  const p = { ...FRESH0, ...((previous ?? {}) as Partial<Fresh>) }
+  const v = { ...FRESH0, ...((value ?? {}) as Partial<Fresh>) }
+  const out: { event: string; props: Record<string, unknown> }[] = []
+  if (p.outstanding >= 0 && v.lastAgentAt !== p.lastAgentAt && v.outstanding < 0)
+    out.push({ event: 'update_after_reminder', props: { followed: 'yes', steps: p.outstanding } })
+  if (v.ignored > p.ignored) out.push({ event: 'update_after_reminder', props: { followed: 'no', steps: Math.max(p.outstanding, 0) + 1 } })
+  if (v.outstanding === 0 && p.outstanding !== 0) {
+    const trigger = v.lastAgentAt === null ? 'no_state' : p.steps >= STALE_STEPS ? 'steps' : 'time'
+    out.push({ event: 'stale_reminder', props: { trigger } })
   }
-  if (!realWork && calls >= REAL_WORK_CALLS) {
-    realWork = true
-    await decideHoldback($)
-    // The 5th tool call with no agent state: the pane opens and sends the reminder at once.
-    if (lastUpdateAt === null && !reminded) await remind($, 'no_state')
-  }
+  return out
 }
 
 const ANY = /(?:)/
@@ -332,23 +327,28 @@ export function registerMetrics(on: On): void {
     reset()
     await quiet(async () => {
       disabled = Boolean(await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'))
+      await startSession($)
       await $.command.register({ name: 'pane-metrics', description: 'Anonymous metrics for the progress pane: on or off' })
       $.clock.every(FLUSH_MS, () => void quiet(() => flush($)))
     })
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
+  // Counted after the call: an update the pane refused is not an update.
   on('tool.call', { tool: ANY }, async ($, e, next) => {
-    const args = e as unknown as Record<string, unknown>
-    await quiet(() => onToolCall($, String(args.tool ?? ''), args))
-    return next(e)
+    const result = await next(e)
+    await quiet(async () => {
+      await countCall($)
+      if (String((e as unknown as { tool?: unknown }).tool ?? '') === UPDATE_TOOL && result.deny === undefined) await checkAccuracy($)
+    })
+    return result
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
   on('prompt.submit', { text: ANY }, async ($, e, next) => {
     await quiet(async () => {
       if (e.command !== undefined) return
       const ask = isProgressAsk(String(e.text ?? ''))
-      if (realWork) await track($, 'progress_ask', { progress: ask ? 'yes' : 'no', holdback: holdback ? 'yes' : 'no' })
+      if (session.realWork) await track($, 'progress_ask', { progress: yn(ask), holdback: yn(session.holdback) })
       else if ((await on_($)) && asks.length < MAX_QUEUE) asks.push(ask)
     })
     return next(e)
@@ -359,9 +359,9 @@ export function registerMetrics(on: On): void {
     renders += 1
     if (!paneSeen) {
       paneSeen = true
-      if (realWork && !paneSent) {
+      if (session.realWork && !paneSent) {
         paneSent = true
-        void quiet(() => track($, 'pane_shown', { holdback: holdback ? 'yes' : 'no' }))
+        void quiet(() => track($, 'pane_shown', { holdback: yn(session.holdback) }))
       }
     }
     try {
@@ -373,7 +373,7 @@ export function registerMetrics(on: On): void {
   })
 
   // The auto-update part keeps its state in updateState: a new version is an update that worked, a higher failure
-  // count is one that failed.
+  // count is one that failed. The freshness record (fresh) gives the stale reminders; a holdback session has none.
   on('state.set', async ($, e, next) => {
     const w = e as unknown as { plugin?: string; key?: string; value?: unknown; previous?: unknown }
     const result = await next(e)
@@ -381,6 +381,13 @@ export function registerMetrics(on: On): void {
       await quiet(async () => {
         const ev = updateEvent(w.previous, w.value)
         if (ev !== null) await track($, ev.event, ev.props)
+      })
+    }
+    // A write another write beat changed nothing.
+    const landed = (result as { isSet?: boolean } | undefined)?.isSet !== false
+    if (landed && w.plugin === 'mission-status' && w.key === 'fresh' && !session.holdback) {
+      await quiet(async () => {
+        for (const ev of freshEvents(w.previous, w.value)) await track($, ev.event, ev.props)
       })
     }
     return result
@@ -396,6 +403,9 @@ export function registerMetrics(on: On): void {
     if (arg === 'on') {
       await $.store.set(CONSENT_KEY, 'yes')
       await update($, consentAtom, () => 'yes')
+      // The person typed the choice, with the field list named in the reply: that counts as the notice shown.
+      await $.store.set(NOTICE_KEY, true)
+      await update($, noticeAtom, () => true)
       await installId($)
       return { text: disabled ? 'Metrics are on, but CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC stops all sends.' : 'Metrics are on. The field list is in docs/telemetry.md.' }
     }
@@ -407,7 +417,7 @@ export function registerMetrics(on: On): void {
       asks = []
       return { text: 'Metrics are off. The install id is deleted, and nothing more is sent.' }
     }
-    if ((await consentOf($)) !== 'yes') return { text: 'Metrics are off. Type /pane-metrics on to turn them on.' }
+    if (!(await on_($))) return { text: 'Metrics are off. Type /pane-metrics on to turn them on.' }
     const id = await $.store.get(ID_KEY)
     return { text: `Metrics are on. Your install id is ${typeof id === 'string' ? id : 'made at the next send'}. Type /pane-metrics off to turn them off.` }
   })

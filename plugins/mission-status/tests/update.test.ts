@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { MANUAL_COMMAND, updateText } from '../hooks/update-line'
-import { RELEASES_URL, isNewer, releaseVersion } from '../hooks/update'
+import { RELEASES_URL, RELOAD_LIMIT_MS, isNewer, releaseVersion } from '../hooks/update'
 
 // Auto-update tests. The network (http.fetch), the CLI (process.run), the reload (command.run), files, environment,
 // store and clock are all stubs: nothing leaves the machine.
@@ -20,6 +20,7 @@ type World = {
   http: { url: string; init?: unknown }[]
   runs: string[][]
   commands: string[]
+  store: Record<string, unknown>
 }
 
 const setup = async ($: any, on: any, w: Partial<World> = {}) => {
@@ -40,7 +41,7 @@ const setup = async ($: any, on: any, w: Partial<World> = {}) => {
   // The pane's own 1 s and 5 s timers do nothing here, so the clock can move hours at once.
   on('clock.every', { ms: [1000, 5000] }, () => ({ deny: 'off in this test' }))
   const clock = mock.clock(on, { now: 100 * HOUR })
-  mock.store(on)
+  mock.store(on, w.store ?? {})
   mock.env(on, { HOME, ...world.env })
   on('tool.register', () => ({ value: {} }))
   on('command.register', () => ({ value: { command: 'mission-status' } }))
@@ -114,6 +115,16 @@ test('a newer release installs by itself, reloads, and shows "Updated to" for on
   expect(updateText(await state(), clock.now())).toBe('Updated to 1.2.0')
   await clock.advance(2_000)
   expect(updateText(await state(), clock.now())).toBeNull()
+})
+
+test('auto-update off: a newer release waits, installs nothing and says it is available', async ($, on) => {
+  const { world, state } = await setup($, on, { store: { autoUpdate: false } })
+  expect(world.http.length).toBe(1)
+  expect(world.runs).toEqual([])
+  expect(world.commands).toEqual([])
+  const s = await state()
+  expect(s?.phase).toBe('available')
+  expect(updateText(s, 0)).toBe('Version 1.2.0 is available.')
 })
 
 test('the same release installs nothing', async ($, on) => {
@@ -191,6 +202,17 @@ test('a failed update keeps the version, retries at the next check, and shows "U
   expect(world.commands).toEqual(['reload-plugins'])
 })
 
+test('a newer target version starts its failure count again', async ($, on) => {
+  const { world, clock, state } = await setup($, on, { updateExit: 1 })
+  expect((await state())?.failures).toBe(1)
+  // The next check finds a newer release: its first failure is its own first.
+  world.release = 'v1.3.0'
+  await clock.advance(6 * HOUR)
+  const s = await state()
+  expect(s?.version).toBe('1.3.0')
+  expect(s?.failures).toBe(1)
+})
+
 test('a reload that brings back the old version counts as a failure, with no new try at once', async ($, on) => {
   const { world, start, state } = await setup($, on)
   expect((await state())?.phase).toBe('reloading')
@@ -234,11 +256,14 @@ test('release tags: v1.2.0, 1.2.0 and mission-status-v1.2.0 count; drafts, pre-r
   expect(isNewer('1.2', '1.2.1')).toBe(false)
 })
 
-test('a reload that does not take within 5 seconds counts as a failure', async ($, on) => {
+test('a reload that does not take within the limit counts as a failure, and a short wait does not', async ($, on) => {
   const { world, clock, state } = await setup($, on)
   expect(world.commands).toEqual(['reload-plugins'])
-  // The old module's timer still fires: the old code still runs.
+  // The reload waits for an idle session: a few seconds of typing is no failure.
   await clock.advance(5_000)
+  expect((await state())?.failures ?? 0).toBe(0)
+  // The old module's timer still fires: the old code still runs.
+  await clock.advance(RELOAD_LIMIT_MS)
   const s = await state()
   expect(s?.phase).toBe('idle')
   expect(s?.failures).toBe(1)

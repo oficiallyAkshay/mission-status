@@ -7,7 +7,7 @@ People who run long Claude Code sessions ask "where are we?" again and again, an
 A person installs the pane with one command. In the Claude desktop app, every session with real work shows a live view (except during the 30-day measurement holdback below, which applies only to installs that gave metrics consent) of its progress beside the chat: the goal, the stages, what runs now, what gates each stage, the merge state, and the state of each subsession it started. Progress questions asked in text drop by half.
 
 ## Owner rulings that fix scope (2026-11-24)
-Desktop app only (no terminal or VS Code view). All nine session types ship. Onboarding has a WebGL shader background. No tickets. No user settings. Dark and light themes. Public repository and marketplace, MIT. Metrics consent asked once in onboarding; PostHog Cloud US; the Ensemble project with product "pane".
+Desktop app only (no terminal or VS Code view). All nine session types ship. Onboarding has a WebGL shader background. No tickets. No user settings. Dark and light themes. Public repository and marketplace, MIT. Metrics consent asked once in onboarding; PostHog Cloud US, one PostHog project, with product "mission-status".
 
 ## Definitions
 - Real-work session: a session with 5 or more tool calls (tool calls only).
@@ -28,6 +28,9 @@ Desktop app only (no terminal or VS Code view). All nine session types ship. Onb
 ## Not in v1
 Terminal and VS Code views. Tickets and ticket readers. User settings beyond the metrics on and off command. Team or shared views across machines.
 
+## Backlog
+- Summarize button on each stage card. It starts a side chat for the session that explains that stage: how the bug was reproduced, what root cause was found, what the fix changed. The person gets the answer for any stage as it runs, without following the main chat.
+
 ## How the state stays current
 | Trigger | Who acts | What changes |
 |---|---|---|
@@ -46,7 +49,7 @@ Status words and items update as small patches. Tests measure the tokens of each
 - Sent only after consent; `/pane-metrics off` and `/pane-metrics on` change the choice at any time.
 - Allowlist only: words from fixed lists, counts and durations. Errors are codes, never message text. A test fails if any event field holds free text.
 - Never sent: goal text, stage or item names, file names, branch names, commands, pull request titles, links, session titles, session ids, repository names, paths, account ids. One id is allowed: `distinct_id`, a random UUID v4 made on the device at first consent and deleted by the off command. The privacy test fails on any other field whose value looks like an id or a path, and a second test proves that session ids and account ids never appear in any event.
-- PostHog Cloud US, the Ensemble project, `product: "pane"` on each event, `$process_person_profile: false`, `$geoip_disable: true`, project set to discard IP, no autocapture, no session recording, no SDK, a random install id that the off command deletes.
+- PostHog Cloud US, one PostHog project, `product: "mission-status"` on each event, `$process_person_profile: false`, `$geoip_disable: true`, project set to discard IP, no autocapture, no session recording, no SDK, a random install id that the off command deletes.
 - The field list is in the public repository and linked from the consent screen.
 - Respects `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`. Sends at most one batch a minute; drops on failure.
 
@@ -60,7 +63,7 @@ Status words and items update as small patches. Tests measure the tokens of each
 | Health | Render errors per 1,000 renders. Events: `render` (count), `render_error` (code) | under 1 |
 
 ## Done when
-A fresh Mac installs it from the public marketplace with one command; every real-work session outside the holdback shows the pane; all nine types and a parent with two subsessions render in the owner's app and pass his look check; a bad state keeps the last good view; one live test each passes for auto-update (an older install updates to a new release by itself and keeps its state), the compaction rule, the stale reminder, the held turn end, the auto-open at the 5th tool call, a crashed child (shows Stopped) and a cloud child (shows "state not available here"), with results reported as counts; an unknown app version falls back to plain text with a clear message; tests and a Hastkala review pass; the owner approves the public release.
+A fresh Mac installs it from the public marketplace with one command; every real-work session outside the holdback shows the pane; all nine types and a parent with two subsessions render in the owner's app and pass his look check; a bad state keeps the last good view; one live test each passes for auto-update (an older install updates to a new release by itself and keeps its state), the compaction rule, the stale reminder, the held turn end, the auto-open at the 5th tool call, a crashed child (shows Stopped) and a cloud child (shows "state not available here"), with results reported as counts; an unknown app version falls back to plain text with a clear message; tests and a front-end review pass; the owner approves the public release.
 
 ## Order
 Schema and triggers -> (types, subsessions, metrics, onboarding) in parallel -> (core polish, Merge card cases, light theme) in parallel -> packaging -> release checks. The name, brand and site run in their own session.

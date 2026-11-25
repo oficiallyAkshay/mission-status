@@ -82,10 +82,6 @@ export function actionOf(e: Record<string, unknown>): string | null {
   return 'Using a tool'
 }
 
-// A new turn: the chat shows Thinking until the first tool call.
-export function arrivalOf(_text: string): string {
-  return 'Thinking'
-}
 
 
 export const ITEM_STATES: readonly ItemStatus[] = ['done', 'now', 'next', 'failed']
@@ -243,7 +239,9 @@ export const RULE =
   '# Progress pane\nKeep the progress pane current with mcp__mission-status__update at every meaningful change. ' +
   'At each update, look again at the stages: keep a template only while it fits the work, and send new stages when the work changes. ' +
   'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those. ' +
-  'Give each item a stable id, and send small item changes as patch operations.'
+  'Give each item a stable id, and send small item changes as patch operations. ' +
+  'The pane is the progress report, so keep the chat quiet: write in the chat only when something changed that the person must know, ' +
+  'or something needs the person (a decision, an approval, a step only they can do). Send no progress lines, recaps or narration in the chat.'
 
 // The one-line reminder the pane adds to the agent's next step.
 export const REMINDER = 'Progress pane: the state is stale. Send the current state with mcp__mission-status__update now.'
@@ -272,8 +270,6 @@ export function bytesOf(value: unknown): number {
   return n
 }
 
-// Tokens as the plan estimates them: characters / 4.
-export const tokensOf = (value: unknown): number => Math.ceil((JSON.stringify(value) ?? '').length / 4)
 
 // The fields the engine or the test kit puts on a tool call's input, never part of the state.
 const CALL_KEYS = new Set(['tool', 'agentId', 'tool_use_id', 'toolUseId'])
@@ -374,6 +370,23 @@ export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVe
     args.links.forEach((raw, k) => {
       if (!isObj(raw) || !isText(raw.href)) errors.push(`links[${k}] needs href`)
     })
+  return errors
+}
+
+// Items whose parent chain comes back to themselves never draw: each such item is named.
+export function parentLoops(items: Item[]): string[] {
+  const byName = new Map(items.map(x => [`${x.phase}|${x.name}`, x]))
+  const errors: string[] = []
+  for (const x of items) {
+    let at: Item | undefined = x
+    for (let k = 0; k <= items.length && at?.parent != null; k++) {
+      at = byName.get(`${x.phase}|${at.parent}`)
+      if (at === x) {
+        errors.push(`item ${x.name}: its parent chain comes back to itself`)
+        break
+      }
+    }
+  }
   return errors
 }
 

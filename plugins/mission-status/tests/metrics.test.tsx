@@ -8,6 +8,7 @@ import {
   HOLDBACK_DAYS,
   ID_KEY,
   KEY,
+  NOTICE_KEY,
   PROGRESS_WORDS,
   RELEASE_AT,
   clean,
@@ -99,9 +100,41 @@ const events = (w: World) => w.bodies.flatMap(b => b.batch)
 const named = (w: World, name: string) => events(w).filter(x => x.event === name)
 const minute = (w: World) => w.clock.advance(FLUSH_MS + 1)
 const holdbackOf = (w: World) => w.state.filter(x => x.key === 'holdback').at(-1)?.value
-const consented = { [CONSENT_KEY]: 'yes' }
+const consented = { [CONSENT_KEY]: 'yes', [NOTICE_KEY]: true }
 
-// Consent and the off switch
+// Consent and the off switch: on by default, but nothing is sent until the notice has shown once
+
+test('notice: consent yes with no notice shown sends nothing and makes no id', async ($, on) => {
+  const w = await start($, on, { store: { [CONSENT_KEY]: 'yes' } })
+  await prompt($, 'status?')
+  await work($, 8)
+  await minute(w)
+  expect(w.bodies.length).toBe(0)
+  expect(w.store.get(ID_KEY)).toBeUndefined()
+  expect(holdbackOf(w)).toBe(false)
+})
+
+test('notice: once the notice has shown, consent yes sends', async ($, on) => {
+  const w = await start($, on, { store: { [CONSENT_KEY]: 'yes', [NOTICE_KEY]: true } })
+  await work($, 5)
+  await minute(w)
+  expect(w.bodies.length).toBe(1)
+  expect(named(w, 'session_real_work').length).toBe(1)
+})
+
+test('notice: after the notice, consent no sends nothing', async ($, on) => {
+  const w = await start($, on, { store: { [CONSENT_KEY]: 'no', [NOTICE_KEY]: true } })
+  await work($, 8)
+  await minute(w)
+  expect(w.bodies.length).toBe(0)
+})
+
+test('notice: unset consent with the notice shown sends nothing', async ($, on) => {
+  const w = await start($, on, { store: { [NOTICE_KEY]: true } })
+  await work($, 8)
+  await minute(w)
+  expect(w.bodies.length).toBe(0)
+})
 
 test('nothing is sent and no id is made before consent', async ($, on) => {
   const w = await start($, on)
@@ -224,7 +257,8 @@ test('update_accuracy: yes when the current stage holds the open task step, no w
 })
 
 test('stale_reminder: at the 5th tool call with no agent state, then update_after_reminder yes within 3 steps', async ($, on) => {
-  const w = await start($, on, { store: consented })
+  // Outside the holdback window: a holdback session sends no stale events.
+  const w = await start($, on, { store: consented, now: AFTER_WINDOW })
   await work($, 5)
   await work($, 2)
   await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
@@ -234,9 +268,11 @@ test('stale_reminder: at the 5th tool call with no agent state, then update_afte
 })
 
 test('stale_reminder: 3 new task steps with no update, then update_after_reminder no after 3 steps pass', async ($, on) => {
-  const w = await start($, on, { store: consented })
+  // Outside the holdback window: a holdback session sends no stale events.
+  const w = await start($, on, { store: consented, now: AFTER_WINDOW })
   await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
-  const steps = (n: number) => Array.from({ length: n }, (_, k) => ({ content: `Step ${k}`, status: 'pending' }))
+  // The pane's one freshness record counts steps started (store.ts), so the steps here start.
+  const steps = (n: number) => Array.from({ length: n }, (_, k) => ({ content: `Step ${k}`, status: 'in_progress' }))
   await tool($, 'mcp__ccd_turn__update_plan', { items: steps(2) })
   await tool($, 'mcp__ccd_turn__update_plan', { items: steps(3) })
   await work($, 4)
@@ -246,7 +282,8 @@ test('stale_reminder: 3 new task steps with no update, then update_after_reminde
 })
 
 test('stale_reminder: 10 minutes of tool calls with no update, once per stale stretch', async ($, on) => {
-  const w = await start($, on, { store: consented })
+  // Outside the holdback window: a holdback session sends no stale events.
+  const w = await start($, on, { store: consented, now: AFTER_WINDOW })
   await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
   await work($, 1)
   await w.clock.advance(10 * 60_000)

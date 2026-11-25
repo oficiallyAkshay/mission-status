@@ -1,5 +1,8 @@
 import { expect, test } from 'claude-code/testing'
-import { CAP_BYTES, tokensOf } from '../hooks/model'
+import { CAP_BYTES } from '../hooks/model'
+
+// About 4 characters per token.
+const tokensOf = (value: unknown): number => Math.ceil((JSON.stringify(value) ?? '').length / 4)
 
 // v1 scope item 1: the schema's guards on every agent update.
 

@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { CONSENT_LINE, DEMO_MS, DONE_LINE, SESSION_TYPES, STILL_SVG, WELCOME_LINE, demoFrame } from '../hooks/onboarding-art'
+import { CONSENT_LINE, DEMO_MS, STILL_SVG, WELCOME_LINE, demoFrame } from '../hooks/onboarding-art'
 
 const WELCOME = {
   plugin: 'mission-status',
@@ -11,11 +11,11 @@ const WELCOME = {
 const BACKDROP = (plugin: string, scene: string) =>
   ({ plugin: 'mission-status', component: 'Backdrop', requestId: 'backdrop', props: { scene, plugin, glass: false } }) as const
 
-type Log = { opened: { id: string; title?: string }[]; closed: string[]; themes: unknown[]; clears: number; commands: string[]; writes: Record<string, unknown[]> }
+type Log = { opened: { id: string; title?: string }[]; closed: string[]; themes: unknown[]; clears: number; commands: string[]; writes: Record<string, unknown[]>; clocks: number[] }
 
 // Stands for the engine beneath the plugin, and records what the onboarding asks of it.
-const start = async ($: any, on: any, opts: { surface?: string | null; onboarded?: boolean; surfaces?: string[] } = {}) => {
-  const log: Log = { opened: [], closed: [], themes: [], clears: 0, commands: [], writes: {} }
+const start = async ($: any, on: any, opts: { surface?: string | null; onboarded?: boolean; surfaces?: string[]; clock?: { at: number } } = {}) => {
+  const log: Log = { opened: [], closed: [], themes: [], clears: 0, commands: [], writes: {}, clocks: [] }
   on('tool.register', () => ({ value: {} }))
   on('command.register', (_: unknown, e: { name: string }) => (log.commands.push(e.name), { value: { command: e.name } }))
   on('ui.open', (_: unknown, e: { id: string; title?: string }) => (log.opened.push(e), { value: { isPlaced: true } }))
@@ -24,7 +24,7 @@ const start = async ($: any, on: any, opts: { surface?: string | null; onboarded
   on('theme.clear', () => (log.clears++, { value: { isDrawn: false, reason: 'cleared' } }))
   on('session.surfaces', () => ({ value: opts.surfaces ?? [] }))
   on('agent.list', () => ({ value: [] }))
-  on('clock.every', () => ({ value: {} }))
+  on('clock.every', (_: unknown, e: { ms: number }) => (log.clocks.push(e.ms), { value: {} }))
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('session.attach', (_: unknown, e: { clientId: string }) => ({ clientId: e.clientId }))
@@ -34,12 +34,15 @@ const start = async ($: any, on: any, opts: { surface?: string | null; onboarded
     return next(e)
   })
   // An earlier run that finished the onboarding.
+  // The pane clock, set by the test to move the demo.
+  if (opts.clock) on('state.get', { plugin: 'mission-status', key: 'now' }, () => ({ value: { value: opts.clock!.at, version: 1 } }))
   if (opts.onboarded) on('state.get', { plugin: 'mission-status', key: 'onboarded' }, () => ({ value: { value: true, version: 1 } }))
   await $.session.start({ cwd: '/', surface: opts.surface === undefined ? 'desktop' : opts.surface, isInteractive: true })
   return log
 }
 const last = (log: Log, key: string) => log.writes[key]?.at(-1)
-const svgAlt = (ui: any, alt: RegExp) => ui.find({ type: 'Svg', alt } as never)
+// `find` takes no `alt`: read every Svg and match its alt text here.
+const svgAlt = async (ui: any, alt: RegExp) => ((await ui.findAll({ type: 'Svg' })) as { props?: { alt?: string } }[]).find(x => alt.test(x.props?.alt ?? ''))
 const text = async (ui: any, re: RegExp) => (await ui.find({ type: 'Text', text: re }))?.text
 
 test('first run on desktop: the Welcome pane opens and the shader backdrop is set', async ($, on) => {
@@ -69,102 +72,134 @@ test('a desktop app that attaches after the start gets the onboarding', async ($
   expect(log.themes.length).toBe(1)
 })
 
-test('Next and Back walk the five steps: Welcome, Demo, Session types, Metrics, Done', async ($, on) => {
+test('two steps: Welcome with the demo and Next, then Metrics with Back; no step count line', async ($, on) => {
   await start($, on)
   const ui = await $.ui.mount({ ...WELCOME, surface: 'desktop' })
-  expect(await text(ui, /^Step 1 of 5$/)).toBeTruthy()
+  expect(await text(ui, /^Welcome$/)).toBe('Welcome')
   expect(await text(ui, new RegExp(`^${WELCOME_LINE.replace(/\./g, '\\.')}$`))).toBe(WELCOME_LINE)
+  expect(await svgAlt(ui, /^Stage 1 of 5: Plan$/)).toBeTruthy()
+  expect(await text(ui, /^Step \d of \d$/)).toBeUndefined()
   expect(await ui.find({ type: 'Button', key: 'back' })).toBeUndefined()
   await ui.press({ key: 'next' })
-  expect(await text(ui, /^Demo$/)).toBe('Demo')
-  await ui.press({ key: 'next' })
-  expect(await text(ui, /^Session types$/)).toBe('Session types')
+  expect(await text(ui, /^Choices$/)).toBe('Choices')
+  expect(await ui.find({ type: 'Button', key: 'next' })).toBeUndefined()
   await ui.press({ key: 'back' })
-  expect(await text(ui, /^Demo$/)).toBe('Demo')
-  await ui.press({ key: 'next' })
-  await ui.press({ key: 'next' })
-  expect(await text(ui, /^Metrics$/)).toBe('Metrics')
+  expect(await text(ui, /^Welcome$/)).toBe('Welcome')
   await ui.unmount()
 })
 
-test('the demo draws with the pane own drawings and runs through all stages in 15 seconds', async ($, on) => {
+test('the demo shows the bar, one status line and one helper strip, with no badge row or narration', async ($, on) => {
   await start($, on)
   const ui = await $.ui.mount({ ...WELCOME, surface: 'desktop' })
-  await ui.press({ key: 'next' })
   expect(await svgAlt(ui, /^Stage 1 of 5: Plan$/)).toBeTruthy()
-  expect(await svgAlt(ui, /^Helper Scan tests: /)).toBeTruthy()
-  expect(await svgAlt(ui, /^Tests passing: \d+ of 12$/)).toBeTruthy()
-  expect(await svgAlt(ui, /^Plan: in progress$/)).toBeTruthy()
   expect(await text(ui, /^Reading the plan$/)).toBeTruthy()
+  expect(await svgAlt(ui, /^Helper Scan tests: /)).toBeTruthy()
+  expect(await svgAlt(ui, /: in progress$|: not started$/)).toBeUndefined()
+  expect(await text(ui, /demo/i)).toBeUndefined()
   await ui.unmount()
+})
+
+test('the demo moves with the clock: a 1 s clock starts with the pane and each tick shows a later frame, then it loops', async ($, on) => {
+  const clock = { at: Date.now() }
+  const log = await start($, on, { clock })
+  expect(log.clocks).toContain(1_000)
+  const ui = await $.ui.mount({ ...WELCOME, surface: 'desktop' })
+  expect(await svgAlt(ui, /^Stage 1 of 5: Plan$/)).toBeTruthy()
+  clock.at += 4_000
+  await ui.redraw()
+  expect(await svgAlt(ui, /^Stage 2 of 5: Build$/)).toBeTruthy()
+  expect(await text(ui, /^Editing a file$/)).toBeTruthy()
+  clock.at += 6_000
+  await ui.redraw()
+  expect(await svgAlt(ui, /^Stage 4 of 5: Deploy$/)).toBeTruthy()
+  expect(await svgAlt(ui, /^Helper Scan tests: done$/)).toBeTruthy()
+  clock.at += 4_500
+  await ui.redraw()
+  expect(await svgAlt(ui, /^All stages are done\.$/)).toBeTruthy()
+  clock.at += 1_000
+  await ui.redraw()
+  expect(await svgAlt(ui, /^Stage 1 of 5: Plan$/)).toBeTruthy()
+  await ui.unmount()
+})
+
+test('the demo frames: five stages over 15 seconds, then round again', () => {
   expect(DEMO_MS).toBe(15_000)
   expect(demoFrame(0).track.alt).toBe('Stage 1 of 5: Plan')
   expect(demoFrame(4_000).track.alt).toBe('Stage 2 of 5: Build')
   expect(demoFrame(4_000).helper.alt).toBe('Helper Scan tests: running')
-  expect(demoFrame(9_000).tests.n).toBe(12)
+  expect(demoFrame(7_000).action).toBe('Running a command')
   expect(demoFrame(10_000).track.alt).toBe('Stage 4 of 5: Deploy')
   expect(demoFrame(14_500).isDone).toBe(true)
-  expect(demoFrame(14_500).track.alt).toBe('All stages are done.')
-  // the demo loops: 15 s is the start again
   expect(demoFrame(15_000).track.alt).toBe('Stage 1 of 5: Plan')
-  expect(demoFrame(4_000).track.source).toContain('<svg')
-})
-
-test('the nine session types show as small labelled tiles', async ($, on) => {
-  await start($, on)
-  const ui = await $.ui.mount({ ...WELCOME, surface: 'desktop' })
-  await ui.press({ key: 'next' })
-  await ui.press({ key: 'next' })
-  expect(SESSION_TYPES.length).toBe(9)
-  for (const t of SESSION_TYPES) {
-    expect(await text(ui, new RegExp(`^${t.name}$`))).toBe(t.name)
-    expect(await svgAlt(ui, new RegExp(`^${t.name}: \\d stages$`))).toBeTruthy()
-  }
-  await ui.unmount()
+  expect(demoFrame(4_000).track.source).not.toBe(demoFrame(5_000).track.source)
 })
 
 const toMetrics = async ($: any, on: any) => {
   const log = await start($, on)
   const ui = await $.ui.mount({ ...WELCOME, surface: 'desktop' })
-  for (let k = 0; k < 3; k++) await ui.press({ key: 'next' })
+  await ui.press({ key: 'next' })
   return { ui, log }
 }
 
-test('metrics: two buttons and one sentence on what is sent and what is never sent; Next waits for a choice', async ($, on) => {
-  const { ui, log } = await toMetrics($, on)
+test('metrics: one switch, on at first, with the sentence on what is sent and never sent and the field list link', async ($, on) => {
+  const { ui } = await toMetrics($, on)
+  expect(await svgAlt(ui, /^Share anonymous usage: on$/)).toBeTruthy()
   expect((await ui.find({ type: 'Button', key: 'share' }))?.props?.label).toBe('Share anonymous usage')
-  expect((await ui.find({ type: 'Button', key: 'dont-share' }))?.props?.label).toBe("Don't share")
+  expect(await ui.find({ type: 'Button', key: 'dont-share' })).toBeUndefined()
   expect(await text(ui, /^The pane sends only counts/)).toBe(CONSENT_LINE)
   expect(CONSENT_LINE.split(/[.!?](\s|$)/).filter(s => s.trim() !== '').length).toBe(1)
   expect(CONSENT_LINE).toMatch(/never sends/)
-  expect(await ui.find({ type: 'Button', key: 'next' })).toBeUndefined()
-  expect(log.writes.consent).toBeUndefined()
+  expect(await ui.find({ type: 'Link' })).toBeTruthy()
   await ui.unmount()
 })
 
-test('metrics: Share anonymous usage writes consent yes and moves to Done', async ($, on) => {
-  const { ui, log } = await toMetrics($, on)
-  await ui.press({ key: 'share' })
-  expect(last(log, 'consent')).toBe('yes')
-  expect(await text(ui, /^Done$/)).toBe('Done')
-  await ui.unmount()
-})
-
-test("metrics: Don't share writes consent no and moves to Done", async ($, on) => {
-  const { ui, log } = await toMetrics($, on)
-  await ui.press({ key: 'dont-share' })
-  expect(last(log, 'consent')).toBe('no')
-  expect(await text(ui, /^Done$/)).toBe('Done')
-  await ui.unmount()
-})
-
-test('Done: Finish marks onboarded, restores the background and closes the pane', async ($, on) => {
+test('metrics: showing step 2 writes consent yes and records that the notice was shown', async ($, on) => {
   const log = await start($, on)
   const ui = await $.ui.mount({ ...WELCOME, surface: 'desktop' })
-  for (let k = 0; k < 3; k++) await ui.press({ key: 'next' })
-  await ui.press({ key: 'dont-share' })
-  expect(await text(ui, new RegExp(`^${DONE_LINE.replace(/\./g, '\\.')}$`))).toBe(DONE_LINE)
-  await ui.press({ key: 'finish' })
+  expect(log.writes.consent).toBeUndefined()
+  expect(log.writes.metricsNoticeShown).toBeUndefined()
+  await ui.press({ key: 'next' })
+  expect(last(log, 'consent')).toBe('yes')
+  expect(last(log, 'metricsNoticeShown')).toBe(true)
+  await ui.unmount()
+})
+
+test('metrics: turning the switch off writes no at once, and on again writes yes', async ($, on) => {
+  const { ui, log } = await toMetrics($, on)
+  await ui.press({ key: 'share' })
+  expect(last(log, 'consent')).toBe('no')
+  expect(await svgAlt(ui, /^Share anonymous usage: off$/)).toBeTruthy()
+  await ui.press({ key: 'share' })
+  expect(last(log, 'consent')).toBe('yes')
+  expect(await svgAlt(ui, /^Share anonymous usage: on$/)).toBeTruthy()
+  await ui.unmount()
+})
+
+test('choices: auto-update is on at first, and the switch turns it off and on again', async ($, on) => {
+  const { ui, log } = await toMetrics($, on)
+  expect(await svgAlt(ui, /^Update automatically: on$/)).toBeTruthy()
+  await ui.press({ key: 'auto' })
+  expect(last(log, 'autoUpdate')).toBe(false)
+  expect(await svgAlt(ui, /^Update automatically: off$/)).toBeTruthy()
+  await ui.press({ key: 'auto' })
+  expect(last(log, 'autoUpdate')).toBe(true)
+  await ui.unmount()
+})
+
+test('metrics: a second visit keeps the person own choice', async ($, on) => {
+  const { ui, log } = await toMetrics($, on)
+  await ui.press({ key: 'share' })
+  await ui.press({ key: 'back' })
+  await ui.press({ key: 'next' })
+  expect(last(log, 'consent')).toBe('no')
+  expect(await svgAlt(ui, /^Share anonymous usage: off$/)).toBeTruthy()
+  await ui.unmount()
+})
+
+test('metrics: Done ends the onboarding, restores the background and closes the pane', async ($, on) => {
+  const { ui, log } = await toMetrics($, on)
+  await ui.press({ key: 'done' })
+  expect(last(log, 'consent')).toBe('yes')
   expect(last(log, 'onboarded')).toBe(true)
   expect(log.clears).toBe(1)
   expect(log.closed).toContain('mission-status-welcome')
@@ -175,14 +210,13 @@ test('a theme another mod set after ours is left alone at the end', async ($, on
   const other = await $.ui.mount({ ...BACKDROP('some-other-mod', 'lagoon'), surface: 'desktop' } as never)
   await other.unmount()
   const ui = await $.ui.mount({ ...WELCOME, surface: 'desktop' })
-  for (let k = 0; k < 3; k++) await ui.press({ key: 'next' })
-  await ui.press({ key: 'share' })
-  await ui.press({ key: 'finish' })
+  await ui.press({ key: 'next' })
+  await ui.press({ key: 'done' })
   expect(last(log, 'onboarded')).toBe(true)
   expect(log.clears).toBe(0)
 })
 
-test('the backdrop is a Shader over a finished still Svg, and settles as the steps advance', async ($, on) => {
+test('the backdrop is a Shader over a finished still Svg, and settles at the Metrics step', async ($, on) => {
   await start($, on)
   const back = await $.ui.mount({ ...BACKDROP('mission-status', 'mission-status-onboarding'), surface: 'desktop' } as never)
   const shader = await back.find({ type: 'Shader' })
@@ -191,9 +225,8 @@ test('the backdrop is a Shader over a finished still Svg, and settles as the ste
   expect((await back.find({ type: 'Svg' }))?.props?.source).toBe(STILL_SVG)
   const pane = await $.ui.mount({ ...WELCOME, surface: 'desktop' })
   await pane.press({ key: 'next' })
-  await pane.press({ key: 'next' })
   await back.redraw()
-  expect((await back.find({ type: 'Shader' }))?.props?.values?.settle).toBe(0.5)
+  expect((await back.find({ type: 'Shader' }))?.props?.values?.settle).toBe(0.6)
   await pane.unmount()
   await back.unmount()
 })
@@ -214,6 +247,6 @@ test('/mission-status-welcome shows the onboarding again after it ended', async 
   expect(log.opened.some(o => o.id === 'mission-status-welcome')).toBe(true)
   expect(log.themes.length).toBe(1)
   const ui = await $.ui.mount({ ...WELCOME, surface: 'desktop' })
-  expect(await text(ui, /^Step 1 of 5$/)).toBeTruthy()
+  expect(await text(ui, /^Welcome$/)).toBe('Welcome')
   await ui.unmount()
 })
