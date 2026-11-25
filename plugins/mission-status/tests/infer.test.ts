@@ -101,6 +101,15 @@ test('a placed parent that would make a loop is dropped', () => {
   expect(out.map(x => x.parent)).toEqual(['B', null])
 })
 
+test('a loop through an agent parent given by id is dropped too', () => {
+  const items: Item[] = [
+    { id: 'a', phase: 1, name: 'A', status: 'now', after: null, parent: 'b', when: null },
+    { id: 'b', phase: 1, name: 'B', status: 'now', after: null, parent: null, when: null },
+  ]
+  const out = withInferred(items, { marks: {}, parents: { b: 'A' }, seen: [], calls: 0, tokens: 0, fails: 0, off: false })
+  expect(out.map(x => x.parent)).toEqual(['b', null])
+})
+
 test('off with no SARVAM_API_KEY: nothing goes to Sarvam', async ($, on) => {
   const w = await start($, on, null)
   await send($, { ...BASE, items: ITEMS })
