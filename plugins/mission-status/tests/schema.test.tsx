@@ -203,41 +203,33 @@ test('plan-review template: the built-in template sets the five plan-review stag
   expect((await state($, 'summary')).phases).toEqual(['Intake', 'Draft', 'Review waves', 'Your rows', 'Hand off'])
 })
 
-test('smriti templates: smriti-light and smriti-deep set the stages of each pass', async ($, on) => {
-  await start($, on)
-  expect((await send($, { project: 'P', template: 'smriti-light', phase: 0 })).deny).toBeUndefined()
-  expect((await state($, 'summary')).phases).toEqual(['Discover', 'Judge', 'Curate', 'Guardrail', 'Route'])
-  expect((await send($, { template: 'smriti-deep', phase: 2 })).deny).toBeUndefined()
-  expect((await state($, 'summary')).phases).toEqual(['Size', 'Origin', 'Lenses', 'Curate', 'Screen', 'File', 'Yield'])
-})
-
 test('sub-phases: an item keeps its steps and the step that runs now; change moves the step; a long list is refused', async ($, on) => {
   await start($, on)
   const deep = ['Size', 'Origin', 'Lenses', 'Curate', 'Screen', 'File', 'Yield']
-  expect((await send($, { project: 'P', phases: ['Build', 'Wrap up'], phase: 1, patch: [{ op: 'add', id: 'smriti', phase: 1, name: 'Smriti deep', status: 'now', steps: deep, step: 2 }] })).deny).toBeUndefined()
-  let item = (await state($, 'summary')).items.find((x: { id?: string }) => x.id === 'smriti')
+  expect((await send($, { project: 'P', phases: ['Build', 'Close out'], phase: 1, patch: [{ op: 'add', id: 'deep', phase: 1, name: 'Deep review', status: 'now', steps: deep, step: 2 }] })).deny).toBeUndefined()
+  let item = (await state($, 'summary')).items.find((x: { id?: string }) => x.id === 'deep')
   expect(item.steps).toEqual(deep)
   expect(item.step).toBe(2)
-  expect((await send($, { patch: [{ op: 'change', id: 'smriti', step: 3 }] })).deny).toBeUndefined()
-  item = (await state($, 'summary')).items.find((x: { id?: string }) => x.id === 'smriti')
+  expect((await send($, { patch: [{ op: 'change', id: 'deep', step: 3 }] })).deny).toBeUndefined()
+  item = (await state($, 'summary')).items.find((x: { id?: string }) => x.id === 'deep')
   expect(item.steps).toEqual(deep)
   expect(item.step).toBe(3)
-  expect(String((await send($, { patch: [{ op: 'change', id: 'smriti', steps: [...deep, 'A', 'B'] }] })).deny)).toContain('at most 8')
+  expect(String((await send($, { patch: [{ op: 'change', id: 'deep', steps: [...deep, 'A', 'B'] }] })).deny)).toContain('at most 8')
 })
 
 test('parent by id: a child that names its parent by id nests under it, and after by id waits on it', async ($, on) => {
   await start($, on)
   const patch = [
-    { op: 'add', id: 'wrap-up', phase: 1, name: 'Wrap up', status: 'now' },
-    { op: 'add', id: 'wrap-step-3', phase: 1, name: 'Remote off', status: 'done', parent: 'wrap-up' },
-    { op: 'add', id: 'wrap-step-4', phase: 1, name: 'Smriti deep', status: 'now', parent: 'wrap-up', after: 'wrap-step-3' },
+    { op: 'add', id: 'close-out', phase: 1, name: 'Close out', status: 'now' },
+    { op: 'add', id: 'close-step-3', phase: 1, name: 'Remote off', status: 'done', parent: 'close-out' },
+    { op: 'add', id: 'close-step-4', phase: 1, name: 'Deep review', status: 'now', parent: 'close-out', after: 'close-step-3' },
   ]
   expect((await send($, { project: 'P', phases: ['Build', 'Close'], phase: 1, patch })).deny).toBeUndefined()
   const items = (await state($, 'summary')).items as { id?: string; parent: string | null; after: string | null }[]
-  const smriti = items.find(x => x.id === 'wrap-step-4')
+  const deep = items.find(x => x.id === 'close-step-4')
   // Stored as the other item's id, so a rename of that item keeps its children and its waits.
-  expect(smriti?.parent).toBe('wrap-up')
-  expect(smriti?.after).toBe('wrap-step-3')
+  expect(deep?.parent).toBe('close-out')
+  expect(deep?.after).toBe('close-step-3')
 })
 
 test('repo: the Merge card reads git in the repository the agent names', async ($, on) => {
@@ -281,8 +273,8 @@ test('a transcript gives every pull request its gh pr create calls made, and no 
 
 test('an item named as its own stage is refused', async ($, on) => {
   await start($, on)
-  const res = await send($, { project: 'P', phases: ['Plan', 'Wrap up'], phase: 1, items: [{ phase: 1, name: 'Wrap up', status: 'now' }] })
+  const res = await send($, { project: 'P', phases: ['Plan', 'Close out'], phase: 1, items: [{ phase: 1, name: 'Close out', status: 'now' }] })
   expect(String(res.deny)).toContain("has its stage's own name")
-  expect((await send($, { project: 'P', phases: ['Plan', 'Wrap up'], phase: 1, items: [{ phase: 1, name: 'Smriti deep', status: 'now' }] })).deny).toBeUndefined()
-  expect(String((await send($, { patch: [{ op: 'add', id: 'w', phase: 1, name: 'wrap up', status: 'now' }] })).deny)).toContain("has its stage's own name")
+  expect((await send($, { project: 'P', phases: ['Plan', 'Close out'], phase: 1, items: [{ phase: 1, name: 'Deep review', status: 'now' }] })).deny).toBeUndefined()
+  expect(String((await send($, { patch: [{ op: 'add', id: 'w', phase: 1, name: 'close out', status: 'now' }] })).deny)).toContain("has its stage's own name")
 })

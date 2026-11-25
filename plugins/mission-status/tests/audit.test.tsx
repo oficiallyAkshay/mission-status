@@ -25,42 +25,42 @@ const send = ($: any, args: Record<string, unknown>) => $.tool.call({ tool: 'mcp
 // The item rows in the order the pane draws them, read from each row's badge description.
 const STATE = /: (done|in progress|not started)$/
 // Stage badges use the same words, so the stage names are left out.
-const STAGES = ['Plan', 'Build', 'Learn', 'Wrap up']
+const STAGES = ['Plan', 'Build', 'Learn', 'Close out']
 const rows = async (ui: any): Promise<string[]> =>
   (await ui.findAll({ type: 'Svg' })).map((x: any) => String(x.props?.alt ?? '')).filter((a: string) => STATE.test(a)).map((a: string) => a.replace(STATE, '')).filter((n: string, k: number, all: string[]) => !(STAGES.includes(n) && all.indexOf(n) === k))
 
 test('order: items keep the order the agent sent, not done first', async ($, on) => {
   await start($, on)
-  await send($, { project: 'P', phases: ['Plan', 'Wrap up'], phase: 1, items: [
+  await send($, { project: 'P', phases: ['Plan', 'Close out'], phase: 1, items: [
     { id: 'a', phase: 1, name: 'Update', status: 'done' },
     { id: 'b', phase: 1, name: 'Work PR', status: 'now' },
-    { id: 'c', phase: 1, name: 'Smriti deep', status: 'next' },
+    { id: 'c', phase: 1, name: 'Deep review', status: 'next' },
     { id: 'd', phase: 1, name: 'Remote off', status: 'done' },
   ] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await rows(ui)).toEqual(['Update', 'Work PR', 'Smriti deep', 'Remote off'])
+  expect(await rows(ui)).toEqual(['Update', 'Work PR', 'Deep review', 'Remote off'])
   await ui.unmount()
 })
 
-test('nesting: a parent given by id holds its children (the wrap-up skill sends parent: "wrap-up")', async ($, on) => {
+test('nesting: a parent given by id holds its children (a skill sends parent: "close-out")', async ($, on) => {
   await start($, on)
-  await send($, { project: 'P', phases: ['Plan', 'Wrap up'], phase: 1, items: [
-    { id: 'smriti-deep', phase: 1, name: 'Smriti deep', status: 'done' },
-    { id: 'lenses', phase: 1, name: 'Lenses', status: 'done', parent: 'smriti-deep' },
-    { id: 'curator', phase: 1, name: 'Curator', status: 'done', parent: 'smriti-deep' },
+  await send($, { project: 'P', phases: ['Plan', 'Close out'], phase: 1, items: [
+    { id: 'deep-review', phase: 1, name: 'Deep review', status: 'done' },
+    { id: 'lenses', phase: 1, name: 'Lenses', status: 'done', parent: 'deep-review' },
+    { id: 'curator', phase: 1, name: 'Curator', status: 'done', parent: 'deep-review' },
     { id: 'work-pr', phase: 1, name: 'Work PR', status: 'now' },
   ] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   // A done parent is closed, so its children are not drawn at the top level beside Work PR.
-  expect(await rows(ui)).toEqual(['Smriti deep', 'Work PR'])
+  expect(await rows(ui)).toEqual(['Deep review', 'Work PR'])
   await ui.unmount()
 })
 
 test('waits: after given by id orders the siblings', async ($, on) => {
   await start($, on)
-  await send($, { project: 'P', phases: ['Plan', 'Wrap up'], phase: 1, items: [
-    { id: 'wrap-step-1', phase: 1, name: 'What is left', status: 'next', after: 'wrap-step-0' },
-    { id: 'wrap-step-0', phase: 1, name: 'Update', status: 'next' },
+  await send($, { project: 'P', phases: ['Plan', 'Close out'], phase: 1, items: [
+    { id: 'close-step-1', phase: 1, name: 'What is left', status: 'next', after: 'close-step-0' },
+    { id: 'close-step-0', phase: 1, name: 'Update', status: 'next' },
   ] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await rows(ui)).toEqual(['Update', 'What is left'])
@@ -81,23 +81,23 @@ test('rename: a parent renamed by a patch keeps its children', async ($, on) => 
 
 test('stage name: an item cannot end up named as its stage after the stages change', async ($, on) => {
   await start($, on)
-  await send($, { project: 'P', phases: ['Plan', 'Build', 'Learn'], phase: 2, items: [{ id: 'wrap-up', phase: 2, name: 'Wrap up', status: 'now' }] })
-  const r = await send($, { phases: ['Plan', 'Build', 'Wrap up'] })
+  await send($, { project: 'P', phases: ['Plan', 'Build', 'Learn'], phase: 2, items: [{ id: 'close-out', phase: 2, name: 'Close out', status: 'now' }] })
+  const r = await send($, { phases: ['Plan', 'Build', 'Close out'] })
   // Either the stage change is refused, or the pane does not draw the item as a copy of the stage title.
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const refused = /kept the last good view/.test(JSON.stringify(r ?? ''))
-  expect(refused || !(await rows(ui)).includes('Wrap up')).toBe(true)
+  expect(refused || !(await rows(ui)).includes('Close out')).toBe(true)
   await ui.unmount()
 })
 
-test('wrap-up skill: the refusal stays; the steps as items on the Wrap up stage, with no parent card, are accepted', async ($, on) => {
+test('a closing skill: the refusal stays; the steps as items on the Close out stage, with no parent card, are accepted', async ($, on) => {
   await start($, on)
-  await send($, { project: 'P', phases: ['Build', 'Wrap up'], phase: 1 })
-  const card = await send($, { patch: [{ op: 'add', id: 'wrap-up', phase: 1, name: 'Wrap up', status: 'now' }] })
+  await send($, { project: 'P', phases: ['Build', 'Close out'], phase: 1 })
+  const card = await send($, { patch: [{ op: 'add', id: 'close-out', phase: 1, name: 'Close out', status: 'now' }] })
   expect(JSON.stringify(card ?? '')).toMatch(/its stage's own name/)
   const steps = await send($, { patch: [
-    { op: 'add', id: 'wrap-step-0', phase: 1, name: 'Update', status: 'now' },
-    { op: 'add', id: 'wrap-step-1', phase: 1, name: 'What is left', status: 'next', after: 'wrap-step-0' },
+    { op: 'add', id: 'close-step-0', phase: 1, name: 'Update', status: 'now' },
+    { op: 'add', id: 'close-step-1', phase: 1, name: 'What is left', status: 'next', after: 'close-step-0' },
   ] })
   expect(JSON.stringify(steps ?? '')).not.toMatch(/kept the last good view/)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })

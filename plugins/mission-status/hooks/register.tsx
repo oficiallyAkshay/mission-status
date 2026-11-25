@@ -242,7 +242,7 @@ export const register: Register = on => {
                 steps: {
                   type: ['array', 'null'],
                   items: { type: 'string' },
-                  description: "The item's own sub-phases, one to three words each, at most 8: one dot-separated line under the name, in place of child cards. Use it for the phases inside one step, for example a Smriti deep pass inside a wrap-up step. null clears it.",
+                  description: "The item's own sub-phases, one to three words each, at most 8: one dot-separated line under the name, in place of child cards. Use it for the phases inside one step, for example the passes of a review inside one step of the work. null clears it.",
                 },
                 step: { type: ['number', 'null'], description: 'Index of the sub-phase that runs now, from 0. The pane shows it bold and the others faint.' },
                 taskStep: { type: 'string', description: "The task-list step this item stands for, by its text. The item is done when that step is marked done." },

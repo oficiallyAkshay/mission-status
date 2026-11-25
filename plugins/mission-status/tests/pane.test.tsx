@@ -533,11 +533,11 @@ test('PRs tab: a pull request whose checks run shows CI with its time so far on 
 })
 
 test('running helpers show under the item in progress, as its children', async ($, on) => {
-  await start($, on, [{ id: 'h1', description: 'lens taste', status: 'running', taskStatus: 'running', model: 'haiku', startTime: Date.now() }])
-  await send($, { project: 'P', phases: ['Plan', 'Wrap up'], phase: 1, items: [{ phase: 1, name: 'Smriti deep', status: 'now' }, { phase: 1, name: 'Merge wait', status: 'next' }] })
+  await start($, on, [{ id: 'h1', description: 'reader taste', status: 'running', taskStatus: 'running', model: 'haiku', startTime: Date.now() }])
+  await send($, { project: 'P', phases: ['Plan', 'Close out'], phase: 1, items: [{ phase: 1, name: 'Deep review', status: 'now' }, { phase: 1, name: 'Merge wait', status: 'next' }] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const order = (await ui.findAll({ type: 'Svg' })).map(x => String((x as any).props?.alt ?? '')).filter(a => /^(Smriti deep|Merge wait): |^Helper /.test(a))
-  expect(order).toEqual(['Smriti deep: in progress', 'Helper lens taste: running', 'Merge wait: not started'])
+  const order = (await ui.findAll({ type: 'Svg' })).map(x => String((x as any).props?.alt ?? '')).filter(a => /^(Deep review|Merge wait): |^Helper /.test(a))
+  expect(order).toEqual(['Deep review: in progress', 'Helper reader taste: running', 'Merge wait: not started'])
   await ui.unmount()
 })
 
@@ -548,5 +548,18 @@ test('badges and trunk lines draw at a fixed 16 px width, so a column never stre
   const badges = (await ui.findAll({ type: 'Svg' })).filter(x => /^(One|Two): /.test(String((x as any).props?.alt ?? '')))
   expect(badges.length).toBe(2)
   for (const b of badges) expect((b as any).props?.width).toBe(16)
+  await ui.unmount()
+})
+
+test('only an item in progress marks its running sub-phase bold; a done item shows every sub-phase faint', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', stage: 'build', phase: 1, items: [
+    { phase: 1, name: 'Review', status: 'done', steps: ['Read', 'Note'], step: 0 },
+    { phase: 1, name: 'Polish', status: 'now', steps: ['Draft', 'Edit'], step: 1 },
+  ] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const bold = (await ui.findAll({ type: 'Text' })).filter((x: any) => x.props?.weight === 'bold').map((x: any) => x.text)
+  expect(bold).toContain('Edit')
+  expect(bold).not.toContain('Read')
   await ui.unmount()
 })
