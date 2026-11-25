@@ -1,4 +1,6 @@
-import type { Register } from 'claude-code'
+import type { On } from 'claude-code'
 
-// The update module: its own hooks, loaded beside register.tsx (see hooks.json). Built in wave 1.
-export const register: Register = _on => {}
+// The update part: its own hooks, called from register.tsx. Built in wave 1.
+export function registerUpdate(on: On): void {
+  void on
+}

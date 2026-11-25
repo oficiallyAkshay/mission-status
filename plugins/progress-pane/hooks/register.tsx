@@ -5,6 +5,9 @@ import { HYPOTHESIS_STATES, ITEM_STATES, PHASES, STAGE_KEYS, TEMPLATES, actionOf
 import { poll } from './readers'
 import { CLOCK_MS, PANE, PR_EVERY, TICK_MS, TITLE, say, tick } from './store'
 import { renderPane } from './view'
+import { registerMetrics } from './metrics'
+import { registerOnboarding } from './onboarding'
+import { registerUpdate } from './update'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const summary = atom({ plugin: 'progress-pane', key: 'summary' } as const, null as Summary, { shape: 'summary' })
@@ -13,6 +16,11 @@ const tasks = atom({ plugin: 'progress-pane', key: 'tasks' } as const, [] as Tas
 let ticks = 0
 
 export const register: Register = on => {
+  // Each wave-1 part keeps its hooks in its own file.
+  registerOnboarding(on)
+  registerMetrics(on)
+  registerUpdate(on)
+
   on('session.start', async ($, e, next) => {
     await $.tool.register({
       name: 'update',
