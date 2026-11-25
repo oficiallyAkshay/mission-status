@@ -48,7 +48,9 @@ export type Fresh = {
   held: boolean
   outstanding: number
   ignored: number
+  turnEndAt?: number | null
 }
+export type MetricsSession = { holdback: boolean; calls: number; realWork: boolean }
 export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null }
 export type Activity = { text: string; prev: string | null; at: number } | null
 export type Pr = { number: number; state: string; url: string; title: string; isDraft?: boolean; review?: string; merge?: string; ci?: 'passing' | 'failing' | 'running' | 'none' }
@@ -59,8 +61,8 @@ declare module 'claude-code' {
   interface PluginState {
     'mission-status': { summary: Shaped<Summary>; live: Shaped<Live | null>; now: number; open: string[] | null; activity: Activity; tasks: Task[]
       // Wave 1: consent and metrics (metrics.tsx, onboarding.tsx), auto-update (update.tsx)
-      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; holdback: boolean
+      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; holdback: boolean; metricsNoticeShown: boolean; metricsSession: MetricsSession | null; autoUpdate: boolean | null
       // Wave 1: freshness triggers (store.ts)
-      fresh: Fresh }
+      fresh: Fresh; doc: { title: string; path: string } | null }
   }
 }

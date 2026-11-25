@@ -10,19 +10,47 @@ import { UPDATED_SHOWN_MS } from './update-line'
 
 // The public repository's latest release: one request, no account or session data. A placeholder until the
 // repository is public. MISSION_STATUS_RELEASES_URL points the check at a local stand-in for a live test.
-export const RELEASES_URL = 'https://api.github.com/repos/REPLACE-OWNER/mission-status/releases/latest'
+export const RELEASES_URL = 'https://api.github.com/repos/oficiallyAkshay/mission-status/releases/latest'
 export const CHECK_EVERY_MS = 6 * 60 * 60 * 1000
 export const MAX_FAILURES = 3
+export const RELOAD_LIMIT_MS = 2 * 60_000
 const PLUGIN = 'mission-status'
 const CLI_TIMEOUT_MS = 180_000
 // Across sessions: when any session last asked GitHub, and what it found, so sessions share one request per 6 hours.
 const CHECKED_AT = 'updateCheckedAt'
 const FOUND = 'updateFound'
 
-// phase: idle, folder (a development copy), pending (a newer release waits for the turn to end), updating (the CLI
+// phase: idle, folder (a development copy), available (auto-update is off and a newer release waits), pending (a newer release waits for the turn to end), updating (the CLI
 // runs), reloading (installed, the plugins reload), updated (shown for a minute), failed (3 failures or more).
 export type UpdateState = { phase: string; version: string | null; failures: number; at: number } | null
 const updateState = atom({ plugin: 'mission-status', key: 'updateState' } as const, null as UpdateState)
+// The person's choice, asked in the onboarding: on unless they turned it off. Kept across sessions in AUTO_KEY.
+const autoUpdate = atom({ plugin: 'mission-status', key: 'autoUpdate' } as const, null as boolean | null)
+export const AUTO_KEY = 'autoUpdate'
+
+export async function isAutoUpdateOn($: EngineInterface): Promise<boolean> {
+  const v = await read($, autoUpdate)
+  if (v !== null) return v
+  return (await fromStore($, AUTO_KEY)) !== false
+}
+
+// Turns auto-update on or off; on, the check runs at once.
+export async function setAutoUpdate($: EngineInterface, isOn: boolean): Promise<void> {
+  await update($, autoUpdate, () => isOn)
+  await Promise.resolve()
+    .then(() => $.store.set(AUTO_KEY, isOn))
+    .catch(() => undefined)
+  if (isOn) await autoCheck($).catch(() => undefined)
+}
+
+// The person presses Update now on a release that waits: it installs once, as an auto-update would.
+export async function updateNow($: EngineInterface): Promise<void> {
+  const s = await read($, updateState)
+  if (s?.phase !== 'available' || s.version === null) return
+  await set($, x => ({ ...base(x), phase: 'pending' }))
+  isDue = true
+  await installUpdate($)
+}
 
 type Install = { version: string; market: string | null }
 let install: Promise<Install> | null = null
@@ -75,7 +103,9 @@ export const releaseVersion = (r: unknown): string | null => {
 
 // One request to the GitHub releases API. No headers but the API's own; no account or session data.
 async function fetchNewest($: EngineInterface): Promise<string | null> {
-  const url = (await $.env.get('MISSION_STATUS_RELEASES_URL')) || RELEASES_URL
+  // The stand-in address is honoured only on this machine, so the variable cannot send the check elsewhere.
+  const local = (await $.env.get('MISSION_STATUS_RELEASES_URL')) ?? ''
+  const url = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(local) ? local : RELEASES_URL
   const r = await $.http.fetch(url, { headers: { Accept: 'application/vnd.github+json', 'User-Agent': PLUGIN } })
   if (!r.ok) throw new Error(`HTTP ${r.status}`)
   const newest = releaseVersion(JSON.parse(r.text))
@@ -88,10 +118,18 @@ async function fetchNewest($: EngineInterface): Promise<string | null> {
   return newest
 }
 
-const fromStore = ($: EngineInterface, key: string) => Promise.resolve().then(() => $.store.get(key)).catch(() => undefined)
+function fromStore($: EngineInterface, key: string): Promise<unknown> {
+  return Promise.resolve()
+    .then(() => $.store.get(key))
+    .catch(() => undefined)
+}
 
-const set = ($: EngineInterface, fn: (s: UpdateState) => UpdateState) => update($, updateState, fn)
-const base = (s: UpdateState) => s ?? { phase: 'idle', version: null, failures: 0, at: 0 }
+function set($: EngineInterface, fn: (s: UpdateState) => UpdateState) {
+  return update($, updateState, fn)
+}
+function base(s: UpdateState) {
+  return s ?? { phase: 'idle', version: null, failures: 0, at: 0 }
+}
 
 // The check: at session start and every 6 hours. A newer release installs at once when no turn runs, else when the
 // turn ends. A failed check is quiet and counts as no failure.
@@ -115,7 +153,11 @@ export async function autoCheck($: EngineInterface): Promise<void> {
   // the old code starts the check, and the check installs and reloads again.
   if (s && s.failures > 0 && (await $.clock.now()) - s.at < CHECK_EVERY_MS) return
   const version = found
-  await set($, x => ({ ...base(x), phase: x?.phase === 'failed' ? 'failed' : 'pending', version }))
+  // Auto-update off: the pane says a release waits and offers Update now.
+  // A new target version starts its failure count again.
+  const fresh = (x: UpdateState) => (x?.version === version ? base(x) : { ...base(x), phase: 'idle', failures: 0 })
+  if (!(await isAutoUpdateOn($))) return void (await set($, x => ({ ...fresh(x), phase: fresh(x).phase === 'failed' ? 'failed' : 'available', version })))
+  await set($, x => ({ ...fresh(x), phase: fresh(x).phase === 'failed' ? 'failed' : 'pending', version }))
   isDue = true
   if (!isInTurn) await installUpdate($)
 }
@@ -185,7 +227,8 @@ async function reloadPlugins($: EngineInterface) {
   const s = await read($, updateState)
   if (!isRun) return void (await fail($, s?.version ?? null))
   // The reload ends this module and its timers: this timer firing means the old code still runs.
-  $.clock.after(5000, async () => {
+  // The reload command waits for an idle session, so the limit allows a person typing for a while.
+  $.clock.after(RELOAD_LIMIT_MS, async () => {
     const x = await read($, updateState)
     if (x?.phase === 'reloading' && x.version === s?.version) await fail($, x.version)
   })

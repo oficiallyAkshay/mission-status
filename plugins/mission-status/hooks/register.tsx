@@ -1,13 +1,14 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, arrivalOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, refusalOf, stepsStarted, str } from './model'
+import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str } from './model'
 import { poll } from './readers'
-import { CLOCK_MS, PANE, PR_EVERY, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, say, tick } from './store'
+import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, tick } from './store'
 import { renderPane } from './view'
 import { registerMetrics } from './metrics'
 import { registerOnboarding } from './onboarding'
 import { registerUpdate } from './update'
+import { registerDoc } from './doc'
 
 // The holdback (metrics.tsx decides it): a measurement session with no pane and no standing rule.
 const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
@@ -16,13 +17,12 @@ const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, fa
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 
-let ticks = 0
-
 export const register: Register = on => {
   // Each wave-1 part keeps its hooks in its own file.
   registerOnboarding(on)
   registerMetrics(on)
   registerUpdate(on)
+  registerDoc(on)
 
   on('session.start', async ($, e, next) => {
     await $.tool.register({
@@ -99,14 +99,14 @@ export const register: Register = on => {
             items: {
               type: 'object',
               properties: {
-                id: { type: 'string', description: 'A stable id, kept for the life of the item; the name in lower case when absent' },
+                id: { type: 'string', description: 'A stable id, kept for the life of the item; absent, the name in lower case with dashes for spaces' },
                 phase: { type: 'number' },
                 name: { type: 'string', description: 'One to four words' },
                 status: { type: 'string', enum: ITEM_STATES },
                 after: { type: 'string' },
                 parent: { type: 'string' },
                 note: { type: 'string', description: 'The rough scope, cut or area, in a few words, shown under the name' },
-                when: { type: 'string', description: 'The end of the sentence: Done when ...' },
+                when: { type: 'string', description: 'The gate to leave this stage, as an ultra short label of two or three words: Plan approved, Build done, Tests pass, PR merged, Look approved' },
                 n: { type: 'number' },
                 m: { type: 'number' },
                 text: { type: 'string' },
@@ -131,12 +131,12 @@ export const register: Register = on => {
           counts: {
             type: 'array',
             description:
-              'The exit clause of each stage: when the stage is done, and how far it is. when is the end of the sentence "Done when ...", for example: all pane tests pass; you approve the look; the pull request merges. Give n and m for x of y (only when a fixed total exists), n alone for a plain count, text for a status word (Waiting, Met), or none of them.',
+              'The gate of each stage: what must be true to leave it, and how far it is. when is an ultra short label of two or three words, for example: Plan approved; Build done; PR merged. Give n and m for x of y (only when a fixed total exists), n alone for a plain count, text for a status word (Waiting, Met), or none of them.',
             items: {
               type: 'object',
               properties: {
                 phase: { type: 'number', description: 'Index of the stage this exit clause belongs to' },
-                when: { type: 'string', description: 'The end of the sentence: Done when ...' },
+                when: { type: 'string', description: 'The gate to leave this stage, as an ultra short label of two or three words: Plan approved, Build done, Tests pass, PR merged, Look approved' },
                 label: { type: 'string', description: 'A short name for the figure, for example: Tests' },
                 n: { type: 'number' },
                 text: { type: 'string', description: 'A word in place of a number, for example: Waiting, Yes, No' },
@@ -153,10 +153,7 @@ export const register: Register = on => {
     })
     await $.command.register({ name: 'mission-status', description: 'Open the progress pane' })
     $.clock.every(CLOCK_MS, () => void tick($))
-    $.clock.every(TICK_MS, () => {
-      ticks += 1
-      void poll($, ticks % PR_EVERY === 0)
-    })
+    $.clock.every(TICK_MS, () => void poll($))
     void poll($)
     if ((await read($, summary)) !== null && !(await read($, holdback))) void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
     return next(e)
@@ -200,25 +197,27 @@ export const register: Register = on => {
   // After each context compaction the standing rule goes back into the agent's context.
   on('classic.SessionStart', async ($, e, next) => {
     const result = await next(e)
-    if (e.source !== 'compact') return result
+    if (e.source !== 'compact' || (await read($, holdback))) return result
     return { ...result, additionalContext: [...(result.additionalContext ?? []), RULE] }
   }).catch(($, e, next) => next(e))
 
   // A turn ends while the state is stale: hold the end once and ask the agent for an update.
   on('classic.Stop', async ($, e, next) => {
     const result = await next(e)
-    if (result.block !== undefined) return result
+    if (result.block !== undefined || (await read($, holdback))) return result
     const hold = await atTurnEnd($, e.stop_hook_active)
     return hold === null ? result : { ...result, block: hold }
   }).catch(($, e, next) => next(e))
 
   on('turn.complete', async ($, e, next) => {
     await say($, 'Waiting for you').catch(() => undefined)
+    await noteTurnEnd($).catch(() => undefined)
     return next(e)
   })
 
   on('prompt.submit', async ($, e, next) => {
-    await say($, arrivalOf(String((e as unknown as { text?: unknown }).text ?? ''))).catch(() => undefined)
+    await say($, 'Thinking').catch(() => undefined)
+    await noteTurnStart($).catch(() => undefined)
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
@@ -250,7 +249,8 @@ export const register: Register = on => {
     const at = Date.now()
     // Validation: a state that fails writes nothing, so the pane keeps the last good view; the errors go back to the agent.
     const agentVersion = await agentVersionOf($)
-    const first = checkUpdate(args, normalize(await read($, summary)), agentVersion)
+    const before = normalize(await read($, summary))
+    const first = checkUpdate(args, before, agentVersion)
     if (first.length > 0) return { deny: refusalOf(first) }
     const out = { errors: [] as string[] }
     const written = await update($, summary, stored => {
@@ -259,6 +259,8 @@ export const register: Register = on => {
       out.errors = checkUpdate(args, old, agentVersion)
       if (out.errors.length > 0) return stored
       const next = build(old)
+      out.errors = parentLoops(next.items)
+      if (out.errors.length > 0) return stored
       if (bytesOf(next) > CAP_BYTES) {
         out.errors = ['the state would pass the 32 KB cap; send fewer or shorter items']
         return stored
@@ -266,6 +268,17 @@ export const register: Register = on => {
       return next
     })
     if (out.errors.length > 0) return { deny: refusalOf(out.errors) }
+    // The stage list changed: each task step keeps its stage by name, else goes to the current stage.
+    if (written !== null && before !== null && before.phases.join('|') !== written.phases.join('|')) {
+      const names = before.phases
+      const now = written
+      await update($, tasks, list =>
+        list.map(t => {
+          const k = now.phases.indexOf(names[t.phase] ?? '')
+          return { ...t, phase: k >= 0 ? k : Math.min(now.phase, now.phases.length - 1) }
+        }),
+      )
+    }
     await agentUpdated($, num(args.version))
     await tick($)
     // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
@@ -282,10 +295,10 @@ export const register: Register = on => {
           ? custom
           : picked !== undefined
             ? picked
-            : args.phases === undefined && old !== null
+            : args.phases === undefined && old !== null && (args.stage === undefined || args.stage === old.stage)
               ? old.phases
               : PHASES[stage]
-      const template = custom.length >= 2 ? null : typeof args.template === 'string' && picked !== undefined ? args.template : (old?.template ?? null)
+      const template = custom.length >= 2 ? null : typeof args.template === 'string' && picked !== undefined ? args.template : args.stage !== undefined && args.stage !== old?.stage ? null : (old?.template ?? null)
       const active = (Array.isArray(args.active) ? args.active : old?.active ?? [])
         .map(num)
         .filter((k): k is number => k !== undefined && k >= 0 && k < phases.length)
@@ -311,7 +324,8 @@ export const register: Register = on => {
           const was = old?.items.find(y => (y.id ?? idOf(y.name)) === (x.id ?? idOf(x.name)))
           return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null }
         })
-      const waitingRaw = str(args.waitingOn)
+      // An update that leaves waitingOn out keeps the wait; null clears it.
+      const waitingRaw = args.waitingOn === undefined ? (old?.waitingOn ?? null) : str(args.waitingOn)
       // Stage times: a stage starts when the phase first reaches it and ends when the phase passes it. Stages passed
       // before the pane first saw the work have no times.
       const starts = phases.map((_, k) => old?.starts?.[k] ?? null)

@@ -91,6 +91,22 @@ test('stale after 10 minutes of tool calls: a one-line reminder rides on the nex
   expect(ctx(await bash($))).toEqual([])
 })
 
+test('the time between turns does not count: after the person is away, the stale window goes on from where it was', async ($, on) => {
+  on('turn.complete', () => ({ text: '' }))
+  on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  const { clock } = await start($, on)
+  await send($, BASE)
+  await clock.advance(STALE_MS - 2000)
+  expect(ctx(await bash($))).toEqual([])
+  await $.turn.complete({ reason: 'answer', answer: 'Done.' } as never)
+  // The person is away for half an hour; the next turn is not stale at once.
+  await clock.advance(3 * STALE_MS)
+  await $.prompt.submit({ text: 'go on' } as never)
+  expect(ctx(await bash($))).toEqual([])
+  await clock.advance(2000)
+  expect(ctx(await bash($))).toEqual([REMINDER])
+})
+
 test('stale after 3 new task-list steps with no agent update', async ($, on) => {
   await start($, on)
   await send($, BASE)

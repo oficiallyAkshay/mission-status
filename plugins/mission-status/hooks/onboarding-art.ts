@@ -1,54 +1,50 @@
-// The onboarding's words and pictures: the still backdrop, the 15 second demo frames, the nine session types, the
-// consent words. Pure functions and constants, so the tests read them without an engine.
-import { badgeSvg, lineSvg, stripSvg, trackSvg } from './bars'
+// The onboarding's words and pictures: the still backdrop, the 15 second demo frames and the consent words. Pure functions and constants, so the tests read them without an engine.
+import { stripSvg, trackSvg } from './bars'
 
 export const WELCOME_PANE = 'mission-status-welcome'
 export const WELCOME_TITLE = 'Welcome'
 export const SCENE = 'mission-status-onboarding'
 
-export const STEPS = ['Welcome', 'Demo', 'Session types', 'Metrics', 'Done'] as const
-export type Step = 0 | 1 | 2 | 3 | 4
-export const LAST_STEP: Step = 4
+export const STEPS = ['Welcome', 'Choices'] as const
+export type Step = 0 | 1
 
 export const WELCOME_LINE = 'This pane shows the goal, the stages and what runs now in each session, beside the chat.'
-export const DONE_LINE = 'Your next session fills this pane by itself.'
 
 export const SHARE_LABEL = 'Share anonymous usage'
-export const DONT_SHARE_LABEL = "Don't share"
+export const AUTO_LABEL = 'Update automatically'
+export const AUTO_LINE = 'New releases install between turns, never while the agent works.'
+// The switch: a rounded track with a knob, accent when on, grey when off.
+export function switchSvg(isOn: boolean): string {
+  const track = isOn ? '#7462E8' : '#808080'
+  const opacity = isOn ? '1' : '.45'
+  const x = isOn ? 24 : 10
+  return (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="34" height="20">' +
+    `<rect x="1" y="1" width="32" height="18" rx="9" fill="${track}" fill-opacity="${opacity}"/>` +
+    `<circle cx="${x}" cy="10" r="7" fill="#fff"/></svg>`
+  )
+}
 // One sentence: what is sent and what is never sent (product plan, Metrics).
 export const CONSENT_LINE =
   'The pane sends only counts, durations and words from fixed lists with one random install id, and never sends your goals, names, files, branches, commands, links, paths or session and account ids.'
 export const CONSENT_CHANGE_LINE = 'You can change this choice at any time.'
 export const FIELDS_URL = 'https://github.com/oficiallyAkshay/mission-status#metrics'
 
-// The nine session types of v1 (product plan, scope item 2), each with its stage count for the tile drawing.
-export const SESSION_TYPES: readonly { name: string; stages: number }[] = [
-  { name: 'Feature', stages: 5 },
-  { name: 'Bug fix', stages: 5 },
-  { name: 'Incident', stages: 4 },
-  { name: 'Research', stages: 4 },
-  { name: 'Design', stages: 4 },
-  { name: 'Board batch', stages: 4 },
-  { name: 'Review', stages: 3 },
-  { name: 'Migration', stages: 5 },
-  { name: 'Writing', stages: 4 },
-]
-
 // The demo: one made-up session through five stages in 15 s, three seconds a stage, all stages done in the last
-// second. Each frame is drawn by the pane's own drawings in bars.ts.
+// second, then round again. Each frame is drawn by the pane's own drawings in bars.ts: the stage bar, one status line
+// and one helper strip.
 export const DEMO_MS = 15_000
 export const DEMO_STAGES = ['Plan', 'Build', 'Test', 'Deploy', 'Learn'] as const
-const DEMO_ACTIONS = ['Reading the plan', 'Writing the code', 'Running the tests', 'Opening the pull request', 'Writing the lessons']
-const DEMO_TESTS = 12
+const DEMO_ACTIONS = ['Reading the plan', 'Editing a file', 'Running a command', 'Opening the pull request', 'Writing the lessons']
 
 export type DemoFrame = {
   track: { source: string; alt: string }
-  stages: { name: string; state: 'done' | 'now' | 'next'; badge: string }[]
   helper: { source: string; alt: string }
-  tests: { source: string; alt: string; n: number }
   action: string
   isDone: boolean
 }
+
+const mmss = (sec: number) => `00:${String(Math.max(0, Math.min(59, Math.floor(sec)))).padStart(2, '0')}`
 
 export function demoFrame(ms: number): DemoFrame {
   const t = ((ms % DEMO_MS) + DEMO_MS) % DEMO_MS
@@ -56,40 +52,20 @@ export function demoFrame(ms: number): DemoFrame {
   const isDone = sec >= 14
   const at = isDone ? DEMO_STAGES.length : Math.min(DEMO_STAGES.length - 1, Math.floor(sec / 3))
   const current = isDone ? null : (DEMO_STAGES[at] ?? null)
-  const n = Math.max(0, Math.min(DEMO_TESTS, Math.round(((sec - 6) / 3) * DEMO_TESTS)))
-  const helperState = at < 1 ? null : at === 1 ? 'running' : 'done'
+  // The helper runs through Build and Test, from 3 s to 9 s.
+  const helper = sec < 3 ? 'waiting' : sec < 9 ? 'running' : 'done'
   return {
     track: {
       source: trackSvg({ total: DEMO_STAGES.length, done: at, current, isDone, clock: t, names: [...DEMO_STAGES] }),
       alt: isDone ? 'All stages are done.' : `Stage ${at + 1} of ${DEMO_STAGES.length}: ${current ?? ''}`,
     },
-    stages: DEMO_STAGES.map((name, k) => {
-      const state = k < at ? 'done' : k === at ? 'now' : 'next'
-      return { name, state, badge: badgeSvg(state, t, 16) }
-    }),
     helper: {
-      source: stripSvg({ title: 'Scan tests', detail: 'helper', state: helperState === 'running' ? 'running' : 'done', time: helperState === null ? '00:00' : `00:0${Math.min(9, Math.floor(Math.max(0, sec - 3)))}` }),
-      alt: helperState === null ? 'Helper Scan tests: not started' : `Helper Scan tests: ${helperState}`,
+      source: stripSvg({ title: 'Scan tests', detail: 'helper', state: helper === 'done' ? 'done' : 'running', time: mmss(helper === 'waiting' ? 0 : Math.min(sec, 9) - 3) }),
+      alt: `Helper Scan tests: ${helper === 'waiting' ? 'starting' : helper}`,
     },
-    tests: { source: lineSvg(n, DEMO_TESTS), alt: `Tests passing: ${n} of ${DEMO_TESTS}`, n },
     action: isDone ? 'All stages are done' : (DEMO_ACTIONS[at] ?? ''),
     isDone,
   }
-}
-
-// A small tile picture for a session type: a rounded track with one dot per stage, the first stage filled.
-export function typeTileSvg(stages: number): string {
-  const W = 96
-  const H = 14
-  const step = W / stages
-  let dots = ''
-  for (let k = 0; k < stages; k++) {
-    const cx = (k + 0.5) * step
-    dots += k === 0
-      ? `<rect x="${(k * step + 2).toFixed(1)}" y="2" width="${(step - 4).toFixed(1)}" height="${H - 4}" rx="4" fill="#7462E8"/>`
-      : `<circle cx="${cx.toFixed(1)}" cy="${H / 2}" r="2" fill="#8B7CF6" fill-opacity=".55"/>`
-  }
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><rect width="${W}" height="${H}" rx="6" fill="#808080" fill-opacity=".16"/>${dots}</svg>`
 }
 
 // The still backdrop: the shader's settled frame, a soft purple bar of light on a dark ground. It shows alone under

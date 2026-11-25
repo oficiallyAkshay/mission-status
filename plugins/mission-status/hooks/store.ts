@@ -12,7 +12,6 @@ export const ACCENT = '#8B7CF6'
 export const TITLE = 'Progress'
 export const TICK_MS = 5_000 // the pane reads helpers every 5 s
 export const CLOCK_MS = 1_000 // and redraws its timers every second
-export const PR_EVERY = 6 // and pull requests every sixth tick, every 30 s
 
 
 // Shape tags decline what an earlier version stored, which outlives a reload.
@@ -59,7 +58,8 @@ export const fresh = atom({ plugin: 'mission-status', key: 'fresh' } as const, F
 // The engine's clock where it answers, else the wall clock.
 export async function nowOf($: EngineInterface): Promise<number> {
   try {
-    return await $.clock.now()
+    const t = await $.clock.now()
+    return typeof t === 'number' && Number.isFinite(t) ? t : Date.now()
   } catch {
     return Date.now()
   }
@@ -156,6 +156,22 @@ export async function atTurnEnd($: EngineInterface, isHeldAlready: boolean): Pro
   return out.hold
 }
 
+// The stale window counts time at work, not the person's time between turns: a turn end marks the time, and the
+// next prompt moves the window on by the gap.
+export async function noteTurnEnd($: EngineInterface): Promise<void> {
+  const at = await nowOf($)
+  await update($, fresh, raw => ({ ...FRESH0, ...raw, turnEndAt: at }))
+}
+
+export async function noteTurnStart($: EngineInterface): Promise<void> {
+  const at = await nowOf($)
+  await update($, fresh, raw => {
+    const x = { ...FRESH0, ...raw }
+    if (typeof x.turnEndAt !== 'number') return x
+    return { ...x, windowFrom: x.windowFrom === 0 ? 0 : x.windowFrom + Math.max(0, at - x.turnEndAt), turnEndAt: null }
+  })
+}
+
 // A valid agent update: the state is fresh again and the flags clear.
 export async function agentUpdated($: EngineInterface, version: number | undefined): Promise<void> {
   const at = await nowOf($)
@@ -163,7 +179,8 @@ export async function agentUpdated($: EngineInterface, version: number | undefin
     ...FRESH0,
     ...raw,
     lastAgentAt: at,
-    agentVersion: version ?? (raw?.agentVersion ?? 0),
+    // Two updates in flight: the stored version never falls.
+    agentVersion: Math.max(version ?? 0, raw?.agentVersion ?? 0),
     windowFrom: at,
     steps: 0,
     stale: false,

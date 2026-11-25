@@ -14,6 +14,9 @@ test('a holdback session opens no pane and adds no standing rule', async ($, on)
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   on('prompt.compose', () => ({ sections: [] }))
+  on('classic.SessionStart', () => ({}))
+  on('classic.Stop', () => ({}))
+  on('tool.call', () => ({ result: 'ok' }))
   // The stored holdback value reads true; every other stored value passes to the engine.
   on('state.get', async (_: unknown, e: { plugin: string; key: string }, next: (e: unknown) => unknown) =>
     e.plugin === 'mission-status' && e.key === 'holdback' ? { value: { value: true, version: 1 } } : next(e),
@@ -23,4 +26,9 @@ test('a holdback session opens no pane and adds no standing rule', async ($, on)
   expect(opened.filter(id => id === 'progress')).toEqual([])
   const composed = (await $.prompt.compose({} as never)) as { sections: { id: string }[] }
   expect(composed.sections.some(s => s.id === 'mission-status:progress')).toBe(false)
+  // No rule after a compaction, and no held turn end, however stale.
+  const after = (await $.classic.SessionStart({ source: 'compact' } as never)) as { additionalContext?: string[] }
+  expect((after.additionalContext ?? []).some(x => x.includes('Progress pane'))).toBe(false)
+  for (let k = 0; k < 8; k++) await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  expect(((await $.classic.Stop({ stop_hook_active: false } as never)) as { block?: string }).block).toBeUndefined()
 })
