@@ -194,11 +194,12 @@ export function ciOf(rollup: Record<string, unknown>[]): ItemCi {
 
 export async function readItemCi($: EngineInterface, ref: string): Promise<ItemCi | null> {
   const [repo, num] = ref.includes('#') ? ref.split('#') : [null, ref]
-  const out = await runText($, ['gh', 'pr', 'view', String(num), ...(repo ? ['-R', repo] : []), '--json', 'statusCheckRollup'], 20_000)
+  const out = await runText($, ['gh', 'pr', 'view', String(num), ...(repo ? ['-R', repo] : []), '--json', 'statusCheckRollup,mergedAt'], 20_000)
   if (out === null || out === 'missing') return null
   try {
-    const o = JSON.parse(out) as { statusCheckRollup?: Record<string, unknown>[] }
-    return ciOf(Array.isArray(o.statusCheckRollup) ? o.statusCheckRollup : [])
+    const o = JSON.parse(out) as { statusCheckRollup?: Record<string, unknown>[]; mergedAt?: string | null }
+    const merged = typeof o.mergedAt === 'string' ? Date.parse(o.mergedAt) : NaN
+    return { ...ciOf(Array.isArray(o.statusCheckRollup) ? o.statusCheckRollup : []), mergedAt: Number.isFinite(merged) ? merged : null }
   } catch {
     return null
   }

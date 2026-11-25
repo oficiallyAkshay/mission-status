@@ -95,8 +95,10 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const upd = await read($, updateState)
     const auto = await read($, autoUpdate)
     // The model's items plus the task list's steps, each in its stage. A step the model also names shows once.
+    // An item whose pull request merged is done, at the merge time, whatever the agent last sent: no agent call needed.
+    const prMergedAt = (x: Item) => (x.pr != null ? (l?.ci?.[x.pr]?.mergedAt ?? null) : null)
     const allItems: Item[] = [
-      ...s.items,
+      ...s.items.map(x => (x.status !== 'done' && prMergedAt(x) !== null ? { ...x, status: 'done' as const, doneAt: prMergedAt(x), since: null } : x)),
       ...steps
         // A stage the model fills with its own items shows those; the task list fills only stages it leaves empty.
         .filter(x => !s.items.some(y => y.phase === x.phase))
