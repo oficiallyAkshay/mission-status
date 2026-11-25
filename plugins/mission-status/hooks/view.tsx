@@ -188,11 +188,11 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                   : <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>}
               </Box>
               <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-                <Text weight={state === 'now' ? 'semibold' : 'regular'} dimColor={state === 'next'} wrap="truncate">
+                <Text weight={state === 'now' ? 'semibold' : 'regular'} dimColor={state === 'next'} wrap="wrap">
                   {x.name}
                 </Text>
                 {(x.note ?? null) !== null && (
-                  <Text size="caption" dimColor wrap="truncate-end">
+                  <Text size="caption" dimColor wrap="wrap">
                     {x.note}
                   </Text>
                 )}
@@ -207,10 +207,10 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               const mine = s.links.filter(l => l.item !== null && l.item.toLowerCase() === x.name.toLowerCase())
               return mine.length === 0 ? null : <Box paddingLeft={INDENT}>{linkRow(mine, `links-${key}`)}</Box>
             })()}
-            {isOpen && depth < 5 && <Box paddingLeft={INDENT}>{itemCards(kids, depth + 1)}</Box>}
+            {isOpen && depth < 5 && <Box paddingLeft={BADGE}>{itemCards(kids, depth + 1)}</Box>}
             {exit !== null && Svg !== undefined && svg(exitSvg(exit.when ?? '', followers.length === 0), `Done when ${exit.when}.`, 28)}
             {followers.length > 0 && waits < 6 && (
-              <Box flexDirection="column" gap={0} paddingLeft={waits > 0 ? INDENT : 0}>
+              <Box flexDirection="column" gap={0} paddingLeft={waits > 0 ? 1 : 0}>
                 {followers.map(y => row1(y, waits + 1))}
               </Box>
             )}
