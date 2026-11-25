@@ -1,4 +1,5 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
+import { accountHash } from '../hooks/onboarding'
 import { CONSENT_LINE, DEMO_MS, STILL_SVG, WELCOME_LINE, demoFrame } from '../hooks/onboarding-art'
 
 const WELCOME = {
@@ -249,4 +250,33 @@ test('/mission-status-welcome shows the onboarding again after it ended', async 
   const ui = await $.ui.mount({ ...WELCOME, surface: 'desktop' })
   expect(await text(ui, /^Welcome$/)).toBe('Welcome')
   await ui.unmount()
+})
+
+// Once for each account: the store keeps a hash of the signed-in account, so another account sees the onboarding.
+const asAccount = async ($: any, on: any, email: string, kept: Record<string, unknown>) => {
+  const opened: string[] = []
+  mock.store(on, kept)
+  on('session.identity', () => ({ value: { kind: 'claude.ai', organizationId: 'org-1', email, isVerified: true } }))
+  on('tool.register', () => ({ value: {} }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('ui.open', (_: unknown, e: { id: string }) => (opened.push(e.id), { value: { isPlaced: true } }))
+  on('theme.set', () => ({ value: { isDrawn: true, requestId: 'b' } }))
+  on('agent.list', () => ({ value: [] }))
+  on('clock.every', () => ({ value: {} }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  return opened
+}
+
+test('onboarding: once for each account, not for each session', async ($, on) => {
+  const key = `onboarded:${accountHash('claude.ai|org-1|a@example.com')}`
+  const opened = await asAccount($, on, 'a@example.com', { [key]: true })
+  expect(opened).not.toContain('mission-status-welcome')
+})
+
+test('onboarding: another account on the same machine sees it', async ($, on) => {
+  const key = `onboarded:${accountHash('claude.ai|org-1|a@example.com')}`
+  const opened = await asAccount($, on, 'b@example.com', { [key]: true })
+  expect(opened).toContain('mission-status-welcome')
 })
