@@ -79,11 +79,30 @@ jobs:
       - name: test
         run: claude plugin test plugins/mission-status
 
+  # A pull request that changes the plugin must raise its version: every merged
+  # plugin change is a release. Other events have nothing to compare.
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: the plugin version moves with the plugin
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: scripts/check-version.sh "${BASE}" "${HEAD}"
+
   # The one context the branch ruleset requires. It exists on every run and
   # fails unless every job it needs succeeded, so a skipped or cancelled job
   # can never pass for green.
   ci:
-    needs: [checks, test]
+    needs: [checks, test, version]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

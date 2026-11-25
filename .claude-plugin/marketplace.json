@@ -1,6 +1,17 @@
 {
   "name": "mission-status",
-  "owner": { "name": "oficiallyAkshay" },
-  "metadata": { "description": "A live progress pane for Claude Code sessions" },
-  "plugins": [{ "name": "mission-status", "source": "./plugins/mission-status", "description": "A live progress pane for Claude Code sessions in the desktop app" }]
+  "owner": { "name": "oficiallyAkshay", "url": "https://github.com/oficiallyAkshay" },
+  "metadata": { "description": "Know where your agent stands, without reading through its work." },
+  "plugins": [
+    {
+      "name": "mission-status",
+      "source": "./plugins/mission-status",
+      "description": "A live progress pane for Claude Code in the desktop app: the goal, the stages, what done means and where the work is now. It updates itself.",
+      "homepage": "https://github.com/oficiallyAkshay/mission-status",
+      "repository": "https://github.com/oficiallyAkshay/mission-status",
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": ["progress", "status", "pane", "desktop", "agent", "plan"]
+    }
+  ]
 }
