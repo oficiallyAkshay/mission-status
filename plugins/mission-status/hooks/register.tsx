@@ -239,7 +239,14 @@ export const register: Register = on => {
       const items =
         args.items === undefined
           ? (old?.items ?? [])
-          : (Array.isArray(args.items) ? args.items : []).map(asItem).filter((x): x is Item => x !== undefined)
+          : (Array.isArray(args.items) ? args.items : [])
+              .map(asItem)
+              .filter((x): x is Item => x !== undefined)
+              // An item in progress keeps the time it went in progress, for its runtime timer.
+              .map(x => {
+                const was = old?.items.find(y => y.name === x.name)
+                return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null }
+              })
       const waitingRaw = str(args.waitingOn)
       // Stage times: a stage starts when the phase first reaches it and ends when the phase passes it. Stages passed
       // before the pane first saw the work have no times.

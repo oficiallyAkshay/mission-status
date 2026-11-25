@@ -132,6 +132,14 @@ test('cards carry links and items carry a scope note; dependents indent; only ru
   await ui.unmount()
 })
 
+test('each item in progress shows its runtime', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'a', status: 'now' }, { phase: 1, name: 'b', status: 'next' }] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await text(ui, /^00:0\d$/)).toBeTruthy()
+  await ui.unmount()
+})
+
 test('stages can run in parallel', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'build', template: 'product-loop', phase: 1, active: [2] })
@@ -142,13 +150,13 @@ test('stages can run in parallel', async ($, on) => {
   await ui.unmount()
 })
 
-test('the pane says nothing about the owner and has no age line', async ($, on) => {
+test('the pane says nothing about the owner, and shows the seconds since the last update', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'build', phase: 0 })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await text(ui, /needs you/i)).toBeUndefined()
   expect(await ui.find({ type: 'Button', key: 'update' })).toBeTruthy()
-  expect(await text(ui, /ago$/)).toBeUndefined()
+  expect(await text(ui, /^Updated \d+ s ago$/)).toBeTruthy()
   await ui.unmount()
 })
 

@@ -1,6 +1,6 @@
 export type Count = { label: string; when?: string; n?: number; m?: number; text?: string; phase?: number; href?: string; hrefLabel?: string }
 export type ItemStatus = 'done' | 'now' | 'next' | 'failed'
-export type Item = { phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string }
+export type Item = { phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null }
 export type StepStatus = 'done' | 'now' | 'next'
 export type StageKey = 'plan' | 'build' | 'fix' | 'cause' | 'review' | 'ship'
 export type HypothesisState = 'open' | 'testing' | 'ruled out' | 'confirmed'
@@ -29,7 +29,7 @@ export type Summary = {
   change: { label: string; from: string; at: number } | null
   at: number
 } | null
-export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number }
+export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null }
 export type Activity = { text: string; prev: string | null; at: number } | null
 export type Pr = { number: number; state: string; url: string; title: string; isDraft?: boolean; review?: string; merge?: string; ci?: 'passing' | 'failing' | 'running' | 'none' }
 export type Helper = { id: string; description: string; status: string; model: string | null; startTime: number }

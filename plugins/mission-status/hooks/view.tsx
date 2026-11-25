@@ -3,7 +3,7 @@ import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, ProgressProps, RenderChildren, RenderInput, SvgProps } from 'claude-code'
 import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
 import { badgeSvg, exitSvg, waitsArrowSvg, slideSvg, stripSvg, trackSvg } from './bars'
-import { age, cap, clockOf, figureOf, normalize, secondsOf } from './model'
+import { age, cap, clockOf, figureOf, normalize, secondsOf, since } from './model'
 import { prFacts } from './readers'
 import { ACCENT } from './store'
 
@@ -14,6 +14,9 @@ const now = atom({ plugin: 'mission-status', key: 'now' } as const, 0)
 const open = atom({ plugin: 'mission-status', key: 'open' } as const, null as string[] | null)
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
+
+// Subtext (notes, the status line, the update age): a slightly transparent mid gray that reads on dark and light.
+const SUBTEXT = 'rgba(150, 148, 160, 0.78)'
 
 export async function renderPane($: EngineInterface, e: Extract<RenderInput, { component: 'Pane' }>) {
     const ui = $.ui.resolve(e)
@@ -46,7 +49,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         // A stage the model fills with its own items shows those; the task list fills only stages it leaves empty.
         .filter(x => !s.items.some(y => y.phase === x.phase))
         .filter(x => !s.items.some(y => y.name.toLowerCase() === x.name.toLowerCase()))
-        .map(x => ({ phase: x.phase, name: cap(x.name), status: x.status, after: null, parent: null, when: null }) as Item),
+        .map(x => ({ phase: x.phase, name: cap(x.name), status: x.status, after: null, parent: null, when: null, since: x.since ?? null }) as Item),
     ]
 
     // isInteractive draws the picture in a sandboxed frame, where its <title> tooltips show on hover.
@@ -84,8 +87,6 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const CHEV = 3
     // The badge column and the gap beside it: names start this far in, and a child indents by the same amount.
     const BADGE = 2
-    // Subtext (notes, the status line): a slightly transparent mid gray that reads on dark and light.
-    const SUBTEXT = 'rgba(150, 148, 160, 0.78)'
     const INDENT = BADGE + 1
     const MARK = 2
     const FIG = 12
@@ -199,6 +200,11 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                   </Text>
                 )}
               </Box>
+              {state === 'now' && (x.since ?? null) !== null && (
+                <Box flexShrink={0}>
+                  <Text size="caption" color={ACCENT}>{clockOf(Date.now() - (x.since ?? Date.now()))}</Text>
+                </Box>
+              )}
               {kids.length > 0 && (
                 <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
                   <Button key={`open-${key}`} label={isOpen ? '−' : '+'} plain dimColor onPress={() => toggleKey(key)} />
@@ -417,7 +423,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
             <Box flexGrow={1} flexShrink={1}>
               <Text size="heading" weight="semibold" wrap="truncate-end">{`Project: ${s.project}`}</Text>
             </Box>
-            <Box flexShrink={0}>
+            <Box flexShrink={0} flexDirection="row" alignItems="center" gap={1}>
+              <Text size="caption" color={SUBTEXT}>{`Updated ${since(s.at, Date.now())}`}</Text>
               <UpdateButton key="update" label="Update" variant="secondary" onPress={askUpdate} />
             </Box>
           </Box>
