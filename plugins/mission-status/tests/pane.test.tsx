@@ -424,3 +424,17 @@ test('PRs tab: a pull request the session makes is listed with its state, and it
   expect(await text(ui, /^acme\/app  ·  tabs$/)).toBe('acme/app  ·  tabs')
   await ui.unmount()
 })
+
+test('an item with a pull request shows its CI time on its own line, after the item time', async ($, on) => {
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    const isView = e.argv[0] === 'gh' && e.argv[1] === 'pr' && e.argv[2] === 'view'
+    const out = isView ? JSON.stringify({ statusCheckRollup: [{ status: 'IN_PROGRESS', conclusion: '', startedAt: new Date(Date.now() - 65_000).toISOString(), completedAt: '0001-01-01T00:00:00Z' }], mergedAt: null }) : ''
+    return { value: { exitCode: out === '' ? 1 : 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  await start($, on, [], true)
+  await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'Ship it', status: 'now', pr: 7 }] })
+  await new Promise(r => setTimeout(r, 50))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await text(ui, /^Ship it  ·  \d\d:\d\d  ·  CI 01:0\d$/)).toBeTruthy()
+  await ui.unmount()
+})
