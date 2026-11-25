@@ -47,7 +47,7 @@ Every other property is a word from the fixed list shown, or a whole number. The
 
 ### Never sent
 
-Prompt text, goal text, stage or item names, task-list steps, file names, paths, branch names, commands, pull request titles, links, session titles, session ids, repository names, account ids, email addresses, error messages. The code never reads the session id or the account. The tests send these through a session and fail if any of them, or anything that looks like an id or a path other than `distinct_id`, reaches an event.
+Prompt text, goal text, stage or item names, task-list steps, file names, paths, branch names, commands, pull request titles, links, session titles, session ids, repository names, account ids, email addresses, error messages. The metrics code never reads the session id or the account. The onboarding reads the signed-in account once, to show itself once for each account; it keeps only a one-way hash of it in the plugin's local store and sends nothing about it. The tests send these through a session and fail if any of them, or anything that looks like an id or a path other than `distinct_id`, reaches an event.
 
 ## The progress word list
 

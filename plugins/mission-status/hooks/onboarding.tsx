@@ -25,6 +25,26 @@ import { AUTO_KEY, setAutoUpdate } from './update'
 // $.store key: the onboarding ended once on this install. $.state lasts one session; these choices last.
 export const ONBOARDED_KEY = 'onboarded'
 
+// The onboarding shows once for each signed-in account. The store keeps a one-way hash of the account, never the
+// account itself, and nothing about it leaves this machine.
+export function accountHash(text: string): string {
+  let h = 0x811c9dc5
+  for (let k = 0; k < text.length; k++) {
+    h ^= text.charCodeAt(k)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h.toString(16).padStart(8, '0')
+}
+
+async function onboardedKey($: EngineInterface): Promise<string> {
+  try {
+    const id = (await $.session.identity()) as { kind?: string; organizationId?: string; email?: string }
+    return `${ONBOARDED_KEY}:${accountHash(`${id.kind ?? ''}|${id.organizationId ?? ''}|${id.email ?? ''}`)}`
+  } catch {
+    return ONBOARDED_KEY
+  }
+}
+
 // The first-run onboarding, desktop app only: a Welcome pane with two steps (Welcome with a live demo, then Metrics),
 // and while it is open a shader backdrop.
 // Stored values (types/index.d.ts): `consent` ('yes', 'no' or null) and `onboarded`. The demo reads the pane clock
@@ -104,7 +124,7 @@ async function setConsent($: EngineInterface, value: 'yes' | 'no'): Promise<void
 
 // The session's values start from what this install kept: the onboarding, the consent and the notice.
 async function hydrate($: EngineInterface): Promise<void> {
-  if ((await $.store.get(ONBOARDED_KEY)) === true) await update($, onboarded, () => true)
+  if ((await $.store.get(await onboardedKey($))) === true) await update($, onboarded, () => true)
   const kept = await $.store.get(CONSENT_KEY)
   if ((kept === 'yes' || kept === 'no') && (await read($, consent)) === null) await update($, consent, () => kept)
   if ((await $.store.get(NOTICE_KEY)) === true) await update($, noticeShown, () => true)
@@ -124,7 +144,7 @@ async function finish($: EngineInterface, closePane: boolean): Promise<void> {
   stopDemo()
   isActive = false
   await update($, onboarded, () => true)
-  await keep($, ONBOARDED_KEY, true)
+  await keep($, await onboardedKey($), true)
   await restoreBackdrop($).catch(() => undefined)
   if (closePane) await $.ui.close({ id: WELCOME_PANE }).catch(() => undefined)
 }
