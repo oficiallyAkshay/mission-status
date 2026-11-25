@@ -12,6 +12,7 @@
   <a href="https://github.com/oficiallyAkshay/mission-status/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/oficiallyAkshay/mission-status/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <a href="https://github.com/oficiallyAkshay/mission-status/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/oficiallyAkshay/mission-status/actions/workflows/codeql.yml/badge.svg?branch=main"></a>
   <a href="https://scorecard.dev/viewer/?uri=github.com/oficiallyAkshay/mission-status"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/oficiallyAkshay/mission-status/badge"></a>
+  <a href="https://www.bestpractices.dev/projects/17127"><img alt="OpenSSF Best Practices" src="https://www.bestpractices.dev/projects/17127/badge"></a>
   <a href="https://github.com/oficiallyAkshay/mission-status/releases/latest"><img alt="latest release" src="https://img.shields.io/github/v/release/oficiallyAkshay/mission-status?color=8B7CF6"></a>
   <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/license-MIT-2f6f4e?logo=opensourceinitiative&logoColor=white"></a>
   <a href="https://github.com/oficiallyAkshay/clonometer"><img alt="clones of this repository, last seven days and all time" src="https://img.shields.io/badge/dynamic/json?url=https://raw.githubusercontent.com/oficiallyAkshay/mission-status/badges/clones.json&query=$.badge&label=clones&logo=github&logoColor=white"></a>
