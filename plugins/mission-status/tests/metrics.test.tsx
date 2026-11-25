@@ -1,0 +1,433 @@
+import { expect, mock, test } from 'claude-code/testing'
+import {
+  COMMON,
+  CONSENT_KEY,
+  ENDPOINT,
+  EVENTS,
+  FLUSH_MS,
+  HOLDBACK_DAYS,
+  ID_KEY,
+  KEY,
+  PROGRESS_WORDS,
+  RELEASE_AT,
+  clean,
+  isHoldback,
+  isProgressAsk,
+  renderErrorCode,
+  updateEvent,
+  updateFailedCode,
+  uuid4,
+} from '../hooks/metrics'
+
+// Every test runs the whole plugin, its hooks beneath the test's: the world is mocked, and every request to
+// PostHog is caught here, never sent.
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+const IN_WINDOW = RELEASE_AT + 86_400_000
+const AFTER_WINDOW = RELEASE_AT + (HOLDBACK_DAYS + 1) * 86_400_000
+const SESSION_ID = '9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f'
+const ACCOUNT_ID = 'acc-7d1e9a52-0c4b-4f3e-9a8d-6b5c4d3e2f1a'
+
+type Body = { api_key: string; batch: { event: string; distinct_id: string; timestamp: string; properties: Record<string, unknown> }[] }
+
+type World = {
+  bodies: Body[]
+  clock: ReturnType<typeof mock.clock>
+  calls: { sessionId: number; identity: number }
+  // What the plugin kept: the latest value per $.store key (undefined once deleted), and every $.state write.
+  store: Map<string, unknown>
+  state: { key: string; value: unknown }[]
+}
+
+async function start(
+  $: any,
+  on: any,
+  opts: { store?: Record<string, unknown>; env?: Record<string, string>; now?: number; fetch?: 'ok' | 'fail' } = {},
+): Promise<World> {
+  const bodies: Body[] = []
+  const calls = { sessionId: 0, identity: 0 }
+  const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
+  const state: { key: string; value: unknown }[] = []
+  // Recorders sit above the mocks, so each write is seen and then kept.
+  on('store.set', { key: /(?:)/ }, (_: unknown, e: { key: string; value: unknown }, next: any) => {
+    store.set(e.key, e.value)
+    return next(e)
+  })
+  on('store.delete', { key: /(?:)/ }, (_: unknown, e: { key: string }, next: any) => {
+    store.delete(e.key)
+    return next(e)
+  })
+  on('state.set', { key: /(?:)/ }, (_: unknown, e: { key: string; value: unknown }, next: any) => {
+    state.push({ key: e.key, value: e.value })
+    return next(e)
+  })
+  const clock = mock.clock(on, { now: opts.now ?? IN_WINDOW })
+  mock.store(on, opts.store ?? {})
+  mock.env(on, opts.env ?? {})
+  on('tool.register', () => ({ value: {} }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('agent.list', () => ({ value: [] }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.id', () => {
+    calls.sessionId += 1
+    return { value: SESSION_ID }
+  })
+  on('session.identity', () => {
+    calls.identity += 1
+    return { value: { kind: 'claude.ai', organizationId: ACCOUNT_ID, email: 'person@example.com', isVerified: true } }
+  })
+  on('http.fetch', (_: unknown, e: { url: string; init?: { body?: string } }) => {
+    if (e.url !== ENDPOINT) return { value: { status: 404, ok: false, headers: {}, text: '' } }
+    bodies.push(JSON.parse(e.init?.body ?? '{}'))
+    if (opts.fetch === 'fail') return { deny: 'offline' }
+    return { value: { status: 200, ok: true, headers: {}, text: '{"status":1}' } }
+  })
+  on('tool.call', () => ({ result: 'ok' }))
+  on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/Users/someone/private-repo', surface: 'desktop', isInteractive: true })
+  return { bodies, clock, calls, store, state }
+}
+
+const tool = ($: any, name: string, args: Record<string, unknown> = {}) => $.tool.call({ tool: name, ...args } as never)
+const prompt = ($: any, text: string) => $.prompt.submit({ text } as never)
+const work = async ($: any, n: number) => {
+  for (let k = 0; k < n; k++) await tool($, 'Bash', { command: `cat /Users/someone/secret-${k}.txt`, description: 'Read a file' })
+}
+const events = (w: World) => w.bodies.flatMap(b => b.batch)
+const named = (w: World, name: string) => events(w).filter(x => x.event === name)
+const minute = (w: World) => w.clock.advance(FLUSH_MS + 1)
+const holdbackOf = (w: World) => w.state.filter(x => x.key === 'holdback').at(-1)?.value
+const consented = { [CONSENT_KEY]: 'yes' }
+
+// Consent and the off switch
+
+test('nothing is sent and no id is made before consent', async ($, on) => {
+  const w = await start($, on)
+  await prompt($, 'where are we?')
+  await work($, 8)
+  await minute(w)
+  expect(w.bodies.length).toBe(0)
+  expect(w.store.get(ID_KEY)).toBeUndefined()
+})
+
+test('consent no sends nothing', async ($, on) => {
+  const w = await start($, on, { store: { [CONSENT_KEY]: 'no' } })
+  await work($, 8)
+  await minute(w)
+  expect(w.bodies.length).toBe(0)
+})
+
+test('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC stops every send, even after consent', async ($, on) => {
+  const w = await start($, on, { store: consented, env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' } })
+  await work($, 8)
+  await minute(w)
+  expect(w.bodies.length).toBe(0)
+})
+
+test('/pane-metrics on makes a random UUID v4 on the device; off deletes it and stops sends', async ($, on) => {
+  const w = await start($, on)
+  const onText = await $.command.run({ command: 'pane-metrics', args: 'on' } as never)
+  expect(onText.text).toMatch(/Metrics are on/)
+  const id = w.store.get(ID_KEY)
+  expect(String(id)).toMatch(UUID)
+  expect((await $.command.run({ command: 'pane-metrics', args: '' } as never)).text).toContain(String(id))
+  await work($, 5)
+  await minute(w)
+  expect(w.bodies.length).toBe(1)
+  expect(w.bodies[0]?.batch.every(x => x.distinct_id === id)).toBe(true)
+  const offText = await $.command.run({ command: 'pane-metrics', args: 'off' } as never)
+  expect(offText.text).toMatch(/Metrics are off/)
+  expect(w.store.get(ID_KEY)).toBeUndefined()
+  expect(w.store.get(CONSENT_KEY)).toBe('no')
+  await work($, 5)
+  await prompt($, 'status?')
+  await minute(w)
+  expect(w.bodies.length).toBe(1)
+})
+
+test('two UUIDs made on the device differ and are version 4', () => {
+  const a = uuid4()
+  const b = uuid4()
+  expect(a).toMatch(UUID)
+  expect(b).toMatch(UUID)
+  expect(a === b).toBe(false)
+})
+
+// Each event on the wire
+
+test('every event goes to PostHog Cloud US with the public key, product and privacy flags', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await work($, 5)
+  await minute(w)
+  expect(w.bodies.length).toBe(1)
+  expect(w.bodies[0]?.api_key).toBe(KEY)
+  for (const x of events(w)) {
+    expect(x.properties.product).toBe('mission-status')
+    expect(x.properties.$process_person_profile).toBe(false)
+    expect(x.properties.$geoip_disable).toBe(true)
+    expect(x.properties.schema_version).toBe(1)
+    expect(Number.isNaN(Date.parse(x.timestamp))).toBe(false)
+  }
+})
+
+test('session_real_work: sent at the 5th tool call, not before', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await work($, 4)
+  await minute(w)
+  expect(named(w, 'session_real_work').length).toBe(0)
+  await work($, 3)
+  await minute(w)
+  expect(named(w, 'session_real_work').length).toBe(1)
+})
+
+test('progress_ask: prompts are sorted on the device, held until real work, then sent as yes or no', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await prompt($, 'Fix the login bug in /Users/someone/app/login.ts')
+  await prompt($, "What's left?")
+  await work($, 5)
+  await prompt($, 'how far along are we')
+  await prompt($, 'Add a test')
+  await minute(w)
+  const asks = named(w, 'progress_ask').map(x => x.properties.progress)
+  expect(asks).toEqual(['no', 'yes', 'yes', 'no'])
+  for (const x of named(w, 'progress_ask')) expect(x.properties.holdback === 'yes' || x.properties.holdback === 'no').toBe(true)
+})
+
+test('progress_ask: a session without real work sends no prompt sort', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await prompt($, 'status?')
+  await work($, 2)
+  await minute(w)
+  expect(named(w, 'progress_ask').length).toBe(0)
+})
+
+test('the published word list sorts progress questions and leaves work asks alone', () => {
+  for (const ask of ['Status?', 'Where are we?', "what's left", 'Any update?', 'Is it done yet', 'How long will this take?', 'ETA'])
+    expect(isProgressAsk(ask)).toBe(true)
+  for (const ask of ['Fix the status bar colour', 'Add progress tracking to the uploader', 'Run the tests', 'Rename estate.ts'])
+    expect(isProgressAsk(ask) && !/status|progress/i.test(ask)).toBe(false)
+  expect(isProgressAsk('Rename estate.ts')).toBe(false)
+  expect(PROGRESS_WORDS.every(w => w === w.toLowerCase() && /^[a-z ]+$/.test(w))).toBe(true)
+})
+
+test('update_accuracy: yes when the current stage holds the open task step, no when it does not', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 1 })
+  await tool($, 'mcp__ccd_turn__update_plan', { items: [{ content: 'Write the code', status: 'in_progress' }] })
+  await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 1 })
+  await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 3 })
+  await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 3, active: [1] })
+  await minute(w)
+  expect(named(w, 'update_accuracy').map(x => x.properties.accurate)).toEqual(['yes', 'no', 'yes'])
+})
+
+test('stale_reminder: at the 5th tool call with no agent state, then update_after_reminder yes within 3 steps', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await work($, 5)
+  await work($, 2)
+  await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
+  await minute(w)
+  expect(named(w, 'stale_reminder').map(x => x.properties.trigger)).toEqual(['no_state'])
+  expect(named(w, 'update_after_reminder').map(x => [x.properties.followed, x.properties.steps])).toEqual([['yes', 2]])
+})
+
+test('stale_reminder: 3 new task steps with no update, then update_after_reminder no after 3 steps pass', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
+  const steps = (n: number) => Array.from({ length: n }, (_, k) => ({ content: `Step ${k}`, status: 'pending' }))
+  await tool($, 'mcp__ccd_turn__update_plan', { items: steps(2) })
+  await tool($, 'mcp__ccd_turn__update_plan', { items: steps(3) })
+  await work($, 4)
+  await minute(w)
+  expect(named(w, 'stale_reminder').map(x => x.properties.trigger)).toEqual(['steps'])
+  expect(named(w, 'update_after_reminder').map(x => x.properties.followed)).toEqual(['no'])
+})
+
+test('stale_reminder: 10 minutes of tool calls with no update, once per stale stretch', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
+  await work($, 1)
+  await w.clock.advance(10 * 60_000)
+  await work($, 1)
+  await work($, 1)
+  await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 1 })
+  await minute(w)
+  expect(named(w, 'stale_reminder').map(x => x.properties.trigger)).toEqual(['time'])
+  expect(named(w, 'update_after_reminder').map(x => x.properties.followed)).toEqual(['yes'])
+})
+
+test('render and pane_shown: each drawing of the pane is counted; a real-work session that shows it says so once', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await work($, 5)
+  await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
+  const PANE = { plugin: 'mission-status', component: 'Pane', requestId: 'progress', props: { title: 'Progress', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } }
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.unmount()
+  const again = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await again.unmount()
+  await minute(w)
+  expect(named(w, 'pane_shown').length).toBe(1)
+  const renders = named(w, 'render').reduce((n, x) => n + Number(x.properties.count), 0)
+  expect(renders >= 2).toBe(true)
+})
+
+test('render_error sends only a code from a fixed list', () => {
+  expect(renderErrorCode(new TypeError('cannot read /Users/x/file'))).toBe('type')
+  expect(renderErrorCode(new RangeError('x'))).toBe('range')
+  expect(renderErrorCode(new Error('secret text'))).toBe('error')
+  expect(renderErrorCode('a thrown string')).toBe('other')
+  expect(clean('render_error', { code: 'cannot read /Users/x/file' })).toEqual({})
+})
+
+test('update_ok and update_failed follow the auto-update phases, with a code only', () => {
+  const at = { at: 1 }
+  // A release found is not an update yet; reaching 'updated' is.
+  expect(updateEvent({ phase: 'idle', version: null, failures: 0, ...at }, { phase: 'pending', version: '1.2.0', failures: 0, ...at })).toBeNull()
+  expect(updateEvent({ phase: 'pending', version: '1.2.0', failures: 0, ...at }, { phase: 'updating', version: '1.2.0', failures: 0, ...at })).toBeNull()
+  expect(updateEvent({ phase: 'reloading', version: '1.2.0', failures: 0, ...at }, { phase: 'updated', version: '1.2.0', failures: 0, ...at })).toEqual({ event: 'update_ok', props: {} })
+  expect(updateEvent({ phase: 'updated', version: '1.2.0', failures: 0, ...at }, { phase: 'idle', version: '1.2.0', failures: 0, ...at })).toBeNull()
+  // A failure: the code is the step it failed in.
+  expect(updateEvent({ phase: 'updating', version: '1.2.0', failures: 0, ...at }, { phase: 'idle', version: '1.2.0', failures: 1, ...at })).toEqual({ event: 'update_failed', props: { code: 'install' } })
+  expect(updateEvent({ phase: 'reloading', version: '1.2.0', failures: 2, ...at }, { phase: 'failed', version: '1.2.0', failures: 3, ...at })).toEqual({ event: 'update_failed', props: { code: 'reload' } })
+  expect(updateEvent(null, { phase: 'idle', version: null, failures: 0, ...at })).toBeNull()
+  expect(updateFailedCode('pending')).toBe('other')
+  expect(clean('update_failed', { code: 'EACCES /Users/x' })).toEqual({})
+})
+
+// The holdback
+
+test('holdback: 1 in 10 consenting real-work sessions in the 30 days after release, never otherwise', () => {
+  expect(isHoldback('yes', IN_WINDOW, 0.05)).toBe(true)
+  expect(isHoldback('yes', IN_WINDOW, 0.1)).toBe(false)
+  expect(isHoldback('yes', IN_WINDOW, 0.5)).toBe(false)
+  expect(isHoldback('no', IN_WINDOW, 0)).toBe(false)
+  expect(isHoldback(null, IN_WINDOW, 0)).toBe(false)
+  expect(isHoldback('yes', AFTER_WINDOW, 0)).toBe(false)
+  expect(isHoldback('yes', RELEASE_AT - 1, 0)).toBe(false)
+  let n = 0
+  for (let k = 0; k < 10_000; k++) if (isHoldback('yes', IN_WINDOW, Math.random())) n += 1
+  expect(n > 800 && n < 1200).toBe(true)
+})
+
+test('holdback: the decision is written at the 5th tool call and sent with session_real_work', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await work($, 5)
+  const value = holdbackOf(w)
+  expect(typeof value).toBe('boolean')
+  await minute(w)
+  expect(named(w, 'session_real_work')[0]?.properties.holdback).toBe(value ? 'yes' : 'no')
+})
+
+test('holdback: never on an install without consent', async ($, on) => {
+  const w = await start($, on, { now: IN_WINDOW })
+  await work($, 5)
+  expect(holdbackOf(w)).toBe(false)
+})
+
+test('holdback: never after the 30-day window', async ($, on) => {
+  const w = await start($, on, { store: consented, now: AFTER_WINDOW })
+  await work($, 5)
+  expect(holdbackOf(w)).toBe(false)
+  await minute(w)
+  expect(named(w, 'session_real_work')[0]?.properties.holdback).toBe('no')
+})
+
+// Batching
+
+test('batching: at most one request a minute, all events of the minute in it', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  await work($, 5)
+  await prompt($, 'status')
+  await w.clock.advance(30_000)
+  await work($, 5)
+  await minute(w)
+  expect(w.bodies.length).toBe(1)
+  await prompt($, 'status')
+  await w.clock.advance(20_000)
+  expect(w.bodies.length).toBe(1)
+  await minute(w)
+  expect(w.bodies.length).toBe(2)
+})
+
+test('batching: a failed send is dropped, never sent again, and never holds up a tool call', async ($, on) => {
+  const w = await start($, on, { store: consented, fetch: 'fail' })
+  await work($, 5)
+  await minute(w)
+  expect(w.bodies.length).toBe(1)
+  const result = await tool($, 'Bash', { command: 'ls' })
+  expect(result.result).toBe('ok')
+  await minute(w)
+  const realWork = events(w).filter(x => x.event === 'session_real_work').length
+  expect(realWork).toBe(1)
+})
+
+// Privacy
+
+// Fixed words every event may carry; anything else must be a whole number.
+const WORDS = new Set<string>(['mission-status', ...Object.values(EVENTS).flatMap(spec => Object.values(spec).flatMap(f => (f === 'count' ? [] : [...f])))])
+const ID_OR_PATH = /[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}|[0-9a-f]{16,}|[A-Za-z0-9_-]{20,}|\/|\\|~|\.[a-z]{1,4}\b|@/i
+
+async function busySession($: any, on: any): Promise<World> {
+  const w = await start($, on, { store: consented })
+  await prompt($, `Read /Users/someone/notes.md and session ${SESSION_ID}; account ${ACCOUNT_ID}`)
+  await prompt($, 'Where are we on feature/login-redesign?')
+  await tool($, 'mcp__ccd_turn__update_plan', { items: [{ content: `Fix C:\\repo\\app.ts for ${ACCOUNT_ID}`, status: 'in_progress' }] })
+  await work($, 5)
+  await tool($, 'mcp__mission-status__update', {
+    project: `Secret project ${SESSION_ID}`,
+    goalLine: 'Ship /Users/someone/private-repo',
+    stage: 'build',
+    phase: 0,
+    items: [{ phase: 0, name: 'feature/login-redesign', status: 'now' }],
+  })
+  await tool($, 'Edit', { file_path: '/Users/someone/private-repo/src/a.ts', old_string: 'a', new_string: 'b' })
+  await prompt($, `status of https://github.com/someone/private-repo/pull/42?`)
+  const PANE = { plugin: 'mission-status', component: 'Pane', requestId: 'progress', props: { title: 'Progress', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } }
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.unmount()
+  await minute(w)
+  return w
+}
+
+test('privacy: no event field holds free text, an id or a path; only distinct_id is an id', async ($, on) => {
+  const w = await busySession($, on)
+  expect(events(w).length >= 6).toBe(true)
+  for (const b of w.bodies) expect(Object.keys(b).sort()).toEqual(['api_key', 'batch'])
+  for (const x of events(w)) {
+    expect(Object.keys(x).sort()).toEqual(['distinct_id', 'event', 'properties', 'timestamp'])
+    expect(Object.keys(EVENTS).includes(x.event)).toBe(true)
+    expect(String(x.distinct_id)).toMatch(UUID)
+    expect(x.timestamp).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/)
+    const allowed = new Set([...Object.keys(COMMON), ...Object.keys(EVENTS[x.event] ?? {})])
+    for (const [name, value] of Object.entries(x.properties)) {
+      expect(allowed.has(name)).toBe(true)
+      if (typeof value === 'string') {
+        expect(WORDS.has(value)).toBe(true)
+        expect(ID_OR_PATH.test(value)).toBe(false)
+      } else if (typeof value === 'number') expect(Number.isInteger(value) && value >= 0).toBe(true)
+      else expect(typeof value).toBe('boolean')
+    }
+  }
+})
+
+test('privacy: the free-text check itself catches text, ids and paths', () => {
+  for (const bad of ['/Users/someone', SESSION_ID, ACCOUNT_ID, 'a.ts', 'person@example.com', 'C:\\repo', '~/x'])
+    expect(ID_OR_PATH.test(bad) || !WORDS.has(bad)).toBe(true)
+  for (const word of WORDS) expect(ID_OR_PATH.test(word)).toBe(false)
+  expect(clean('progress_ask', { progress: 'where are we', holdback: 'no', note: 'x' })).toEqual({ holdback: 'no' })
+  expect(clean('made_up_event', { a: 1 })).toBeNull()
+  expect(clean('render', { count: 1.5 })).toEqual({})
+})
+
+test('privacy: session ids and account ids never appear in any event, and are never read', async ($, on) => {
+  const w = await busySession($, on)
+  const wire = JSON.stringify(w.bodies)
+  expect(wire.length > 100).toBe(true)
+  for (const secret of [SESSION_ID, ACCOUNT_ID, 'person@example.com', '/Users/someone', 'private-repo', 'login-redesign', 'Secret project'])
+    expect(wire.includes(secret)).toBe(false)
+  expect(wire).not.toMatch(/session_?id|account|organization|email/i)
+  expect(w.calls.sessionId).toBe(0)
+  expect(w.calls.identity).toBe(0)
+})
