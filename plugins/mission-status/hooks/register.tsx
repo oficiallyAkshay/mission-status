@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, prRefsIn, prRefsInTranscript, skillSteps, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
+import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, prRefsIn, prRefsInLines, byteLength, skillSteps, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
 import { poll } from './readers'
 import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, tick } from './store'
 import { renderPane } from './view'
@@ -21,6 +21,46 @@ const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Ta
 const prRefs = atom({ plugin: 'mission-status', key: 'prRefs' } as const, [] as string[])
 // The narrow bar's window: a new current stage brings it back to follow the current stage.
 const barStart = atom({ plugin: 'mission-status', key: 'barStart' } as const, null as number | null)
+
+// The transcript scan: the byte where it stopped (always a line start), and the gh pr create calls seen.
+let scanAt = 0
+let scanBusy = false
+const scanCreates = new Set<string>()
+
+// Reads the session's transcript from where the last scan stopped, in parts of at most 4 MiB (the read limit), and
+// adds each pull request a gh pr create call made to the PRs tab. Deterministic: no model, and nothing is missed
+// from before the pane loaded.
+async function scanTranscript($: EngineInterface): Promise<void> {
+  if (scanBusy) return
+  scanBusy = true
+  try {
+    const path = (await $.session.info()).transcriptPath
+    const size = (await $.fs.stat(path)).size
+    if (size < scanAt) scanAt = 0
+    const found: string[] = []
+    for (let parts = 0; scanAt < size && parts < 20; parts++) {
+      const text = (await $.fs.read(path, { offset: scanAt, length: 4 * 1024 * 1024 })) as string
+      // Only whole lines are read: the next part starts at the start of a line, so no character is cut in two.
+      const end = text.lastIndexOf('\n')
+      // One line longer than a whole part (a huge tool result) is skipped, so the scan never stalls on it.
+      if (end < 0) {
+        scanAt += byteLength(text)
+        continue
+      }
+      const whole = text.slice(0, end + 1)
+      scanAt += byteLength(whole)
+      for (const ref of prRefsInLines(whole.split('\n'), scanCreates)) if (!found.includes(ref)) found.push(ref)
+    }
+    if (found.length > 0) {
+      await update($, prRefs, list => [...new Set([...list, ...found])].slice(-30))
+      void poll($)
+    }
+  } catch {
+    // A transcript that cannot be read leaves the PRs the tool calls showed.
+  } finally {
+    scanBusy = false
+  }
+}
 
 export const register: Register = on => {
   // Each wave-1 part keeps its hooks in its own file.
@@ -195,13 +235,12 @@ export const register: Register = on => {
     })
     await $.command.register({ name: 'mission-status', description: 'Open the progress pane' })
     $.clock.every(CLOCK_MS, () => void tick($))
-    $.clock.every(TICK_MS, () => void poll($))
-    // The PRs tab starts with every pull request this session made before now, read once from its transcript.
-    try {
-      const info = await $.session.info()
-      const found = prRefsInTranscript(await $.fs.read(info.transcriptPath).catch(() => ''))
-      if (found.length > 0) await update($, prRefs, list => [...new Set([...found, ...list])].slice(-30))
-    } catch {}
+    $.clock.every(TICK_MS, () => {
+      void poll($)
+      void scanTranscript($)
+    })
+    // The PRs tab: every pull request this session made, from its transcript, read from the start and then as it grows.
+    void scanTranscript($)
     void poll($)
     if ((await read($, summary)) !== null && !(await read($, holdback))) void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
     return next(e)

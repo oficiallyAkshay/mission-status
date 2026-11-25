@@ -449,9 +449,39 @@ test('a Claude artifact chip opens the artifact in the app through the Artifact 
   const url = 'https://claude.ai/artifact/XQ8eu3nXjMst5azMTe9Y9Q'
   await send($, { project: 'P', stage: 'build', phase: 1, links: [{ phase: 1, label: 'Review', href: url }] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const chip = (await ui.findAll({ type: 'Markdown' })).find(x => String(x.props?.text ?? '').startsWith('[↗ Review]('))
+  const chip = (await ui.findAll({ type: 'Button' })).find(x => x.props?.label === '↗ Review')
   expect(chip).toBeTruthy()
-  await ui.press({ key: String(chip?.key ?? ''), link: { href: url } } as never)
+  await ui.press({ key: String(chip?.key ?? '') })
   expect(opened).toEqual([url])
+  await ui.unmount()
+})
+
+test('the PRs tab finds every pull request in the transcript, past the 4 MiB read limit', async ($, on) => {
+  const lines = (n: number, url: string) => [
+    `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_P${n}","name":"Bash","input":{"command":"gh pr create --fill"}}]}}`,
+    `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_P${n}","content":"${url}"}]}}`,
+  ]
+  const pad = '{"type":"x","pad":"' + 'a'.repeat(1024 * 1024) + '"}'
+  let transcript = [...lines(1, 'https://github.com/acme/app/pull/1'), pad, pad, pad, pad, pad, ...lines(2, 'https://github.com/acme/app/pull/2')].join('\n') + '\n'
+  // ASCII only, so a byte offset is a character offset.
+  const bytes = () => transcript.length
+  on('session.info', () => ({ value: { transcriptPath: '/t.jsonl' } }))
+  on('fs.stat', () => ({ value: { kind: 'file', size: bytes(), mtimeMs: 0, isLink: false } }))
+  on('fs.read', (_: unknown, e: { path: string; offset?: number; length?: number }) => {
+    const at = e.offset ?? 0
+    return { value: transcript.slice(at, at + (e.length ?? transcript.length)) }
+  })
+  on('process.run', (_: unknown, e: { argv: string[] }) => {
+    const ref = e.argv[0] === 'gh' && e.argv[2] === 'view' ? e.argv[3] : null
+    const out = ref ? JSON.stringify({ number: Number(ref), title: `PR ${ref}`, url: `https://github.com/acme/app/pull/${ref}`, state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE', statusCheckRollup: [], mergedAt: null, headRefName: 'b' }) : ''
+    return { value: { exitCode: out === '' ? 1 : 0, stdout: out, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+  })
+  await start($, on, [], true)
+  await send($, { project: 'P', stage: 'build', phase: 1 })
+  await new Promise(r => setTimeout(r, 100))
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'tab-prs', link: { href: 'https://tab.local/prs' } } as never)
+  expect(await text(ui, /^#1  PR 1$/)).toBeTruthy()
+  expect(await text(ui, /^#2  PR 2$/)).toBeTruthy()
   await ui.unmount()
 })
