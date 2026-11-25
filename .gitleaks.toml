@@ -1,0 +1,8 @@
+# gitleaks settings: the default rules, plus one allowlisted value.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "PostHog project keys are public and write-only by design (docs/telemetry.md): they can only add events."
+regexTarget = "match"
+regexes = ['''phc_[A-Za-z0-9]{20,}''']
