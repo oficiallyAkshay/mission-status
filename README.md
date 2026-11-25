@@ -4,6 +4,8 @@ Know where your agent stands, without reading through its work.
 
 mission-status is a live progress pane for Claude Code in the Claude desktop app. It sits beside the chat and shows the goal, the stages, what done means for each stage, and where the work is right now. The agent keeps it current, so you never ask "where are we?" again.
 
+The chat goes quiet. You hear from the agent only when something changed or needs you: a decision, an approval, or a step only you can do.
+
 ## Install
 
 In a Claude Code session in the desktop app, run:
