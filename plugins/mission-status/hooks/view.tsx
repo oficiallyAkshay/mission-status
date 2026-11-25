@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, ProgressProps, RenderChildren, RenderInput, SvgProps } from 'claude-code'
 import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { trackFits, badgeSvg, exitSvg, flowLineSvg, spaceSvg, waitsLineSvg, slideSvg, stripSvg, trackSvg } from './bars'
+import { barWindow, trackFits, badgeSvg, exitSvg, flowLineSvg, spaceSvg, waitsLineSvg, slideSvg, stripSvg, trackSvg } from './bars'
 import { age, cap, clockOf, figureOf, normalize } from './model'
 import { prFacts } from './readers'
 import type { MergeLive } from './readers'
@@ -17,6 +17,8 @@ const now = atom({ plugin: 'mission-status', key: 'now' } as const, 0)
 const open = atom({ plugin: 'mission-status', key: 'open' } as const, null as string[] | null)
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
+// The first stage a narrow bar shows, after the person moves it; null follows the current stage.
+const barStartAtom = atom({ plugin: 'mission-status', key: 'barStart' } as const, null as number | null)
 const autoUpdate = atom({ plugin: 'mission-status', key: 'autoUpdate' } as const, null as boolean | null)
 const updateState = atom({ plugin: 'mission-status', key: 'updateState' } as const, null as { phase: string; version: string | null; failures: number; at: number } | null)
 
@@ -31,10 +33,6 @@ const ACCENT_TEXT = 'merged'
 // Only web addresses open as links; a file:, javascript: or app-scheme address shows as text.
 const isWebUrl = (href: string) => /^https?:\/\/[^\s]+$/i.test(href)
 
-// Stage chips when the bar is too narrow: the current stage in the bar's pill purple, done ones tinted, later ones grey.
-const PILL_BG = '#7462E8'
-const CHIP_BG_DONE = 'rgba(139, 124, 246, 0.22)'
-const CHIP_BG_NEXT = 'rgba(128, 128, 128, 0.16)'
 
 export const STALE_MS = 15 * 60_000
 
@@ -439,6 +437,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     })
     const barInput = { total, done: Math.min(s.phase, total), current, isDone, clock: 0, names: s.phases, tips, checks: s.phases.map((_, k) => stageState(k) === 'done'), widthPx: Math.max(160, (e.props.bodyColumns || 50) * 8 - 32) }
     const barFits = Svg === undefined || trackFits(barInput)
+    const barStart = await read($, barStartAtom)
     // The git bar: one line, closed by default; open, it lists the facts behind the line.
     const g = l?.git ?? null
     const isGitOpen = isOpenKey('git')
@@ -574,21 +573,32 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         </Box>
 
         {(() => {
-          // The bar while every stage name fits; when the pane is too narrow, the stages flow as chips onto more lines.
+          // A pane too narrow for every stage name shows a window of the stages, with ‹ and › to move it.
           if (barFits) return null
+          const n = s.phases.length
+          const win = barWindow({ ...barInput, widthPx: barInput.widthPx - 56 }, barStart)
+          const part = {
+            ...barInput,
+            widthPx: undefined,
+            total: win.to - win.from + 1,
+            done: (isDone ? n : Math.min(s.phase, n)) - win.from,
+            isDone: isDone && win.to === n - 1,
+            names: s.phases.slice(win.from, win.to + 1),
+            tips: tips.slice(win.from, win.to + 1),
+            checks: barInput.checks.slice(win.from, win.to + 1),
+          }
+          const move = (to: number) => void update($, barStartAtom, () => Math.max(0, Math.min(to, n - 1)))
           return (
-            <Box flexDirection="row" flexWrap="wrap" gap={1} key="stage-chips">
-              {s.phases.map((name, k) => {
-                const state = stageState(k)
-                const isCurrent = !isDone && k === s.phase
-                return (
-                  <Box key={`chip-${k}`} backgroundColor={isCurrent ? PILL_BG : state === 'done' ? CHIP_BG_DONE : CHIP_BG_NEXT} paddingX={1} flexShrink={0}>
-                    <Text weight={isCurrent ? 'semibold' : undefined} color={isCurrent ? '#FFFFFF' : state === 'now' ? ACCENT_TEXT : state === 'done' ? undefined : SUBTEXT}>
-                      {state === 'done' ? `✓ ${name}` : name}
-                    </Text>
-                  </Box>
-                )
-              })}
+            <Box flexDirection="row" alignItems="center" gap={1} key="stage-window">
+              <Box width={3} flexShrink={0}>
+                {win.from > 0 ? <Button key="bar-left" label="‹" plain onPress={() => move(win.from - 1)} /> : <Text>{''}</Text>}
+              </Box>
+              <Box flexGrow={1} flexShrink={1}>
+                {svg(trackSvg(part), `Stages ${win.from + 1} to ${win.to + 1} of ${n}${isDone ? '' : `; current: ${current}`}`, 30, 'stage-bar', true)}
+              </Box>
+              <Box width={3} flexShrink={0}>
+                {win.to < n - 1 ? <Button key="bar-right" label="›" plain onPress={() => move(win.from + 1)} /> : <Text>{''}</Text>}
+              </Box>
             </Box>
           )
         })()}

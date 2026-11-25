@@ -59,7 +59,9 @@ export function trackSvg(input: TrackInput): string {
   const H = 30
   const n = Math.max(1, total)
   const id = uid(total,done,current,isDone,doneLabel,clock,names,tips)
-  const seg = isDone ? n - 1 : Math.min(done, n - 1)
+  // done may sit outside 0..n-1 for a window of the stages: before it, the window is all ahead; past it, all done.
+  const seg = isDone ? n - 1 : Math.max(0, Math.min(done, n - 1))
+  const isOut = !isDone && (done < 0 || done >= n)
   // Each segment is as wide as its label plus the same padding on both sides, so every name has equal room.
   const shown = (k: number) => {
     const name = names[k] ?? ''
@@ -70,16 +72,16 @@ export function trackSvg(input: TrackInput): string {
   const sum = weights.reduce((a, b) => a + b, 0)
   const at = (k: number) => weights.slice(0, k).reduce((a, b) => a + b, 0) / sum
   const span = (k: number) => (weights[k] ?? 0) / sum
-  const fill = isDone ? 1 : at(seg) + span(seg) / 2
-  const label = isDone ? doneLabel : (current ?? '')
+  const fill = isDone || done >= n ? 1 : done < 0 ? 0 : at(seg) + span(seg) / 2
+  const label = isDone ? doneLabel : isOut ? '' : (current ?? '')
   const color = isDone ? GREEN : ACCENT
   // Every other stage names itself in its own segment: done ones in white with a check, later ones in grey.
   let marks = ''
   for (let k = 0; k < n; k++) {
-    if (!isDone && k === seg) continue
+    if (!isDone && !isOut && k === seg) continue
     if (isDone && k === n - 1) continue
     const name = names[k] ?? ''
-    if (k > 0 && k !== seg + 1) marks += `<svg x="${pct(at(k))}" overflow="visible"><rect x="-.5" y="9" width="1" height="${H - 18}" class="dv"/></svg>`
+    if (k > 0 && (isOut || k !== seg + 1)) marks += `<svg x="${pct(at(k))}" overflow="visible"><rect x="-.5" y="9" width="1" height="${H - 18}" class="dv"/></svg>`
     if (name === '') continue
     // A check only on a stage that is truly done (the pane passes each stage's real state).
     const isPast = checks !== undefined ? checks[k] === true : k < seg || isDone
@@ -250,4 +252,33 @@ export function spaceSvg(height: number): string {
 // A plain line in the flow column, from one card to the next, with no gate on it.
 export function flowLineSvg(height: number): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}">${WAITS_STYLE}<line class="wa" x1="19" y1="0" x2="19" y2="${height}" stroke-width="1.4"/></svg>`
+}
+
+// The window of stages a narrow bar shows: as many as fit, from start. With no start, the window that holds the
+// current stage, grown to the right first.
+export function barWindow(t: TrackInput, start: number | null): { from: number; to: number } {
+  const n = Math.max(1, t.total)
+  const fits = (from: number, to: number) =>
+    trackFits({
+      ...t,
+      total: to - from + 1,
+      done: t.done - from,
+      names: (t.names ?? []).slice(from, to + 1),
+      checks: t.checks?.slice(from, to + 1),
+    })
+  if (start === null) {
+    const cur = t.isDone ? n - 1 : Math.max(0, Math.min(t.done, n - 1))
+    let from = cur
+    let to = cur
+    for (let grew = true; grew; ) {
+      grew = false
+      if (to + 1 < n && fits(from, to + 1)) (to += 1), (grew = true)
+      if (from - 1 >= 0 && fits(from - 1, to)) (from -= 1), (grew = true)
+    }
+    return { from, to }
+  }
+  const from = Math.max(0, Math.min(start, n - 1))
+  let to = from
+  while (to + 1 < n && fits(from, to + 1)) to += 1
+  return { from, to }
 }
