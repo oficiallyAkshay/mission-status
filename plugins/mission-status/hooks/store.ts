@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { Activity, Count, Fresh, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { AUTO_OPEN_CALLS, CHECK_MS, checkLine, FIRST_REMINDER, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, STALE_MS, STALE_STEPS, autoSummary, normalize } from './model'
+import { AUTO_OPEN_CALLS, CHECK_MS, checkLine, FIRST_REMINDER, TURN_TEXT, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, STALE_MS, STALE_STEPS, autoSummary, normalize } from './model'
 
 // The holdback (metrics.tsx decides it): a measurement session with no pane and no standing rule.
 const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
@@ -87,7 +87,7 @@ export async function afterToolCall($: EngineInterface): Promise<string | null> 
   // What the committed run of the updater decided (update may run it again on a write race).
   const out = { line: null as string | null, openAuto: false }
   const f = await update($, fresh, raw => {
-    let x: Fresh = { ...FRESH0, ...raw, calls: (raw?.calls ?? 0) + 1 }
+    let x: Fresh = { ...FRESH0, ...raw, calls: (raw?.calls ?? 0) + 1, turnCalls: (raw?.turnCalls ?? 0) + 1 }
     out.line = null
     out.openAuto = false
     if (x.windowFrom === 0) x.windowFrom = at
@@ -155,9 +155,14 @@ export async function atTurnEnd($: EngineInterface, isHeldAlready: boolean): Pro
     const due = shown && (at - x.windowFrom >= STALE_MS || x.steps >= STALE_STEPS)
     if ((x.stale || due) && !x.held && !isHeldAlready) {
       out.hold = HOLD_TEXT
-      return { ...x, stale: true, held: true, outstanding: 0, windowFrom: at, steps: 0 }
+      return { ...x, stale: true, held: true, outstanding: 0, windowFrom: at, steps: 0, turnCalls: 0, turnUpdated: false }
     }
-    return x
+    // A turn that ran tool calls and sent no update is held once, so the pane moves at every turn.
+    if (shown && !isHeldAlready && (x.turnCalls ?? 0) > 0 && x.turnUpdated !== true) {
+      out.hold = TURN_TEXT
+      return { ...x, turnCalls: 0, turnUpdated: false }
+    }
+    return { ...x, turnCalls: 0, turnUpdated: false }
   })
   await markOutOfDate($, f)
   return out.hold
@@ -194,6 +199,7 @@ export async function agentUpdated($: EngineInterface, version: number | undefin
     held: false,
     outstanding: -1,
     ignored: 0,
+    turnUpdated: true,
   }))
 }
 

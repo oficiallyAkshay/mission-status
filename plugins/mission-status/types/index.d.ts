@@ -57,6 +57,9 @@ export type Fresh = {
   ignored: number
   turnEndAt?: number | null
   checkAt?: number
+  // Tool calls in the current turn, and whether an agent update came in it.
+  turnCalls?: number
+  turnUpdated?: boolean
 }
 export type MetricsSession = { holdback: boolean; calls: number; realWork: boolean }
 export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null; doneAt?: number | null }

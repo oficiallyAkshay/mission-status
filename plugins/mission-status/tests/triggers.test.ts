@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { CHECK_MS, FIRST_REMINDER, HOLD_TEXT, REMINDER, RULE, STALE_MS } from '../hooks/model'
+import { CHECK_MS, FIRST_REMINDER, HOLD_TEXT, REMINDER, RULE, STALE_MS, TURN_TEXT } from '../hooks/model'
 
 // The freshness triggers: product plan, "How the state stays current".
 
@@ -162,4 +162,16 @@ test('every 2 minutes with no agent update, a check names the items still in pro
   await send($, { phase: 0 })
   await clock.advance(CHECK_MS - 1000)
   expect(ctx(await bash($))).toEqual([])
+})
+
+test('a turn that ran tool calls and sent no update is held once at its end; a turn that sent one is not', async ($, on) => {
+  await start($, on)
+  await send($, BASE)
+  expect((await $.classic.Stop({ stop_hook_active: false })).block).toBeUndefined()
+  await bash($)
+  expect((await $.classic.Stop({ stop_hook_active: false })).block).toBe(TURN_TEXT)
+  expect((await $.classic.Stop({ stop_hook_active: true })).block).toBeUndefined()
+  await bash($)
+  await send($, { phase: 1 })
+  expect((await $.classic.Stop({ stop_hook_active: false })).block).toBeUndefined()
 })
