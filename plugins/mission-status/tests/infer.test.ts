@@ -1,8 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { INFER_MS, MAX_FAILS, SARVAM_URL, SURE, buildRequest, readAnswer, toolLines, withInferred } from '../hooks/infer'
+import { INFER_MS, MAX_FAILS, JEV_URL, SURE, buildRequest, readAnswer, toolLines, withInferred } from '../hooks/infer'
 import type { Item } from '../types'
 
-// The state marker (infer.ts): Sarvam Prism marks items and places new ones; the agent's own update wins.
+// The state marker (infer.ts): Jev marks items and places new ones; the agent's own update wins.
 
 const PANE = {
   plugin: 'mission-status',
@@ -40,7 +40,7 @@ const start = async ($: any, on: any, key: string | null = 'k-test'): Promise<Wo
   on('agent.list', () => ({ value: [] }))
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('tool.call', () => ({ result: 'ok' }))
-  on('env.get', (_: unknown, e: { name: string }, next: any) => (e.name === 'SARVAM_API_KEY' ? { value: w.key } : next(e)))
+  on('env.get', (_: unknown, e: { name: string }, next: any) => (e.name === 'JEV_API_KEY' ? { value: w.key } : next(e)))
   on('session.info', () => ({ value: { transcriptPath: '/t.jsonl' } }))
   on('fs.stat', () => ({ value: { kind: 'file', size: w.transcript.length, mtimeMs: 0, isLink: false } }))
   on('fs.read', (_: unknown, e: { offset?: number; length?: number }) => {
@@ -48,8 +48,8 @@ const start = async ($: any, on: any, key: string | null = 'k-test'): Promise<Wo
     return { value: w.transcript.slice(at, at + (e.length ?? w.transcript.length)) }
   })
   on('http.fetch', (_: unknown, e: { url: string; init?: { body?: string; headers?: Record<string, string> } }) => {
-    if (e.url !== SARVAM_URL) return { value: { status: 404, ok: false, headers: {}, text: '' } }
-    w.bodies.push({ ...JSON.parse(e.init?.body ?? '{}'), key: e.init?.headers?.['api-subscription-key'] })
+    if (e.url !== JEV_URL) return { value: { status: 404, ok: false, headers: {}, text: '' } }
+    w.bodies.push({ ...JSON.parse(e.init?.body ?? '{}'), key: e.init?.headers?.authorization })
     return { value: { status: w.answer.status, ok: w.answer.status < 300, headers: {}, text: w.answer.text } }
   })
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
@@ -65,7 +65,7 @@ const bash = async ($: any) => {
   return $.tool.call({ tool: 'Bash', command: 'ls' } as never)
 }
 const choice = (c: string, p: number) => ({ type: 'choice', choice: c, confidence: p, probabilities: { [c]: p } })
-const answer = (answers: Record<string, unknown>) => JSON.stringify({ model: 'sarvam-prism', answers, usage: { input_tokens: 321, output_tokens: 0 } })
+const answer = (answers: Record<string, unknown>) => JSON.stringify({ model: 'jev-1.13.0', answers, usage: { input_tokens: 321, output_tokens: 0 } })
 const tick = async (w: World) => {
   await w.clock.advance(INFER_MS + 1)
   await new Promise(r => setTimeout(r, 20))
@@ -110,7 +110,7 @@ test('a loop through an agent parent given by id is dropped too', () => {
   expect(out.map(x => x.parent)).toEqual(['b', null])
 })
 
-test('off with no SARVAM_API_KEY: nothing goes to Sarvam', async ($, on) => {
+test('off with no JEV_API_KEY: nothing goes to Jev', async ($, on) => {
   const w = await start($, on, null)
   await send($, { ...BASE, items: ITEMS })
   for (let k = 0; k < 3; k++) await bash($)
@@ -127,13 +127,12 @@ test('with the key: a sure answer marks the item as inferred, and the agent upda
   await tick(w)
   expect(w.bodies.length).toBe(1)
   const body = w.bodies[0]
-  expect(body.model).toBe('sarvam-prism')
-  expect(body.key).toBe('k-test')
+  expect(body.model).toBe('jev-1.13.0')
+  expect(body.key).toBe('Bearer k-test')
   const sent = JSON.stringify(body.state)
   expect(sent).not.toContain('SECRET FILE BODY')
   expect(sent).not.toContain('SECRET OUTPUT LINE')
   expect(sent).not.toContain('SECRET README TEXT')
-  expect(body.state.recentToolCalls.length).toBeLessThanOrEqual(40)
   let ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await texts(ui)).some((t: string) => t.includes('inferred'))).toBe(true)
   await ui.unmount()
@@ -199,4 +198,16 @@ test('one request at most every 30 s, however many tool calls come between', asy
   expect(w.bodies.length).toBe(1)
   await tick(w)
   expect(w.bodies.length).toBe(2)
+})
+
+test('no caps: every tool call in the tail and every open item goes, with whole lines', () => {
+  const long = 'x'.repeat(500)
+  const many = Array.from({ length: 60 }, (_, k) => use(`m${k}`, 'Bash', { command: `${long} ${k}` }) + '\n' + result(`m${k}`, 'ok')).join('\n')
+  const lines = toolLines(many)
+  expect(lines.length).toBe(60)
+  expect(lines[0]?.length).toBeGreaterThan(500)
+  const items = Array.from({ length: 30 }, (_, k) => ({ key: `i${k}`, name: `Item ${k}`, phase: 1, status: 'now' as const, parent: null }))
+  const plan = buildRequest(items, lines, [])!
+  expect(plan.ask.length).toBe(30)
+  expect(JSON.parse(plan.body).state.items.length).toBe(30)
 })
