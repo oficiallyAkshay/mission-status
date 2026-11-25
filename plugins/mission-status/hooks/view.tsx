@@ -409,13 +409,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         </Box>
       )
 
-    // The app measures the scroll range in text rows, but each drawing is taller than a row in pixels, so the last
-    // part of a long pane gets cut. Space at the bottom covers the extra height: about half a row for each drawing.
-    const drawings = 1 + s.phases.length * 2 + allItems.length + (s.links.length > 0 ? 1 : 0)
-    const tailRows = Math.ceil(drawings / 2) + 2
-
     return (
-      <Box flexDirection="column" gap={2} paddingBottom={tailRows}>
+      <Box flexDirection="column" gap={2} paddingBottom={1}>
         {/* The header: the title and the Update button share one centred row; the goal sits one line below it. */}
         <Box flexDirection="column" gap={1}>
           <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
