@@ -84,6 +84,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const CHEV = 3
     // The badge column and the gap beside it: names start this far in, and a child indents by the same amount.
     const BADGE = 2
+    // Subtext (notes, the status line): a slightly transparent mid gray that reads on dark and light.
+    const SUBTEXT = 'rgba(150, 148, 160, 0.78)'
     const INDENT = BADGE + 1
     const MARK = 2
     const FIG = 12
@@ -188,11 +190,11 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                   : <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>}
               </Box>
               <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-                <Text weight={state === 'now' ? 'semibold' : 'regular'} dimColor={state === 'next'} wrap="wrap">
+                <Text weight={state === 'now' ? 'semibold' : 'regular'} dimColor={state === 'done'} color={state === 'next' ? 'subtle' : undefined} wrap="wrap">
                   {x.name}
                 </Text>
                 {(x.note ?? null) !== null && (
-                  <Text size="caption" dimColor wrap="wrap">
+                  <Text size="caption" color={SUBTEXT} wrap="wrap">
                     {x.note}
                   </Text>
                 )}
@@ -218,7 +220,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         )
       }
       return (
-        <Box flexDirection="column" gap={0} marginTop={depth === 0 ? 1 : 0}>
+        <Box flexDirection="column" gap={0}>
           {running > 1 && small(`${running} items run in parallel.`)}
           {roots.map(x => row1(x, 0))}
         </Box>
@@ -226,7 +228,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     }
     const itemTree = (k: number) => (
       // A stage's items are its children: they start where the stage name starts, as nested items start under theirs.
-      <Box flexDirection="column" gap={0} paddingLeft={INDENT}>
+      <Box flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
         {itemCards(allItems.filter(x => x.phase === k && (x.parent === null || !allItems.some(y => y.name === x.parent && y.phase === k))), 0)}
       </Box>
     )
@@ -288,17 +290,17 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
             // The live line has the card's full width and ends in an ellipsis when it is too long.
             <Box paddingLeft={INDENT} paddingRight={1}>
               {/* Always text, at one size: a drawn slide used a smaller font than the text after it. */}
-              <Text dimColor wrap="truncate-end">{`${act.text}  ${secondsOf(Date.now() - act.at)}`}</Text>
+              <Text color={SUBTEXT} wrap="truncate-end">{`${act.text}  ${secondsOf(Date.now() - act.at)}`}</Text>
             </Box>
           )}
           {isOpen && itemTree(k)}
           {state === 'now' &&
             s.waitingOn !== null && (
-              <Box paddingLeft={INDENT} marginTop={1}>
-                {row(
-                  <Text color="warning">{`The work waits on ${s.waitingOn.charAt(0).toLowerCase()}${s.waitingOn.slice(1)}.`}</Text>,
-                  small(age(s.waitingSince, t)),
-                )}
+              <Box marginTop={1} borderStyle="single" borderColor="warning" paddingX={1}>
+                <Text color="warning" wrap="wrap">
+                  {`Waiting on ${s.waitingOn.charAt(0).toLowerCase()}${s.waitingOn.slice(1)}`}
+                  <Text dimColor>{`  ·  ${age(s.waitingSince, t)}`}</Text>
+                </Text>
               </Box>
             )}
           {state === 'now' && Svg !== undefined && running.length > 0 && (

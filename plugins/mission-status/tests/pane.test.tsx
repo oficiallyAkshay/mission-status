@@ -126,7 +126,7 @@ test('cards carry links and items carry a scope note; dependents indent; only ru
   await ui.press({ key: 'open-0' })
   expect(await ui.find({ type: 'Link', href: 'file:///tmp/plan.md' })).toBeTruthy()
   expect(await ui.find({ type: 'Link', href: 'https://example.com/b' })).toBeTruthy()
-  expect(await text(ui, /^schema, metrics, onboarding$/)).toBeTruthy()
+  expect(await text(ui, /^Schema, metrics, onboarding$/)).toBeTruthy()
   expect(await ui.find({ type: 'Svg', alt: /^Wave 2 waits for Wave 1\.$/ })).toBeTruthy()
   expect(await text(ui, /items run in parallel/)).toBeUndefined()
   await ui.unmount()
@@ -199,7 +199,7 @@ test('a wait is a full sentence', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'ship', phase: 3, waitingOn: 'The CI gate check' })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await text(ui, /^The work waits on the CI gate check\.$/)).toBeTruthy()
+  expect(await text(ui, /^Waiting on the CI gate check/)).toBeTruthy()
   await ui.unmount()
 })
 
