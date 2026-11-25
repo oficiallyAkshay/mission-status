@@ -110,6 +110,22 @@ export function skillSteps(md: string): string[] {
   return out
 }
 
+// Every pull request a session made, from its transcript (JSON lines): each gh pr create call's own result.
+export function prRefsInTranscript(text: string): string[] {
+  const creates = new Set<string>()
+  const out: string[] = []
+  for (const line of text.split('\n')) {
+    if (line.includes('gh pr create') && line.includes('"tool_use"')) {
+      for (const m of line.matchAll(/"id":"(toolu_[\w]+)","name":"Bash","input":\{"command":"([^"\\]|\\.)*?gh pr create/g)) creates.add(m[1] ?? '')
+    }
+    if (line.includes('"tool_result"') && line.includes('/pull/')) {
+      const id = /"tool_use_id":"(toolu_[\w]+)"/.exec(line)?.[1]
+      if (id !== undefined && creates.has(id)) for (const ref of prRefsIn('gh pr create', line)) if (!out.includes(ref)) out.push(ref)
+    }
+  }
+  return out
+}
+
 // The pull requests a tool call made: every pull request address in the output of a gh pr create call, as owner/name#number.
 export function prRefsIn(command: string, output: string): string[] {
   if (!/\bgh\s+pr\s+create\b/.test(command)) return []

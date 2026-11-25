@@ -1,1 +1,1 @@
-{ "name": "mission-status", "version": "0.8.4", "description": "A live progress pane for Claude Code sessions in the desktop app", "license": "MIT", "types": "./types/index.d.ts" }
+{ "name": "mission-status", "version": "0.8.5", "description": "A live progress pane for Claude Code sessions in the desktop app", "license": "MIT", "types": "./types/index.d.ts" }

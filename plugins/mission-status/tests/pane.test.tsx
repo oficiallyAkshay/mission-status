@@ -438,3 +438,20 @@ test('an item with a pull request shows its CI time on its own line, after the i
   expect(await text(ui, /^Ship it  ·  \d\d:\d\d  ·  CI 01:0\d$/)).toBeTruthy()
   await ui.unmount()
 })
+
+test('a Claude artifact chip opens the artifact in the app through the Artifact tool', async ($, on) => {
+  const opened: string[] = []
+  on('tool.call', { tool: 'Artifact' }, (_: unknown, e: { action?: string; url?: string }) => {
+    if (e.action === 'open' && typeof e.url === 'string') opened.push(e.url)
+    return { result: 'opened' }
+  })
+  await start($, on)
+  const url = 'https://claude.ai/artifact/XQ8eu3nXjMst5azMTe9Y9Q'
+  await send($, { project: 'P', stage: 'build', phase: 1, links: [{ phase: 1, label: 'Review', href: url }] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const chip = (await ui.findAll({ type: 'Markdown' })).find(x => String(x.props?.text ?? '').startsWith('[↗ Review]('))
+  expect(chip).toBeTruthy()
+  await ui.press({ key: String(chip?.key ?? ''), link: { href: url } } as never)
+  expect(opened).toEqual([url])
+  await ui.unmount()
+})
