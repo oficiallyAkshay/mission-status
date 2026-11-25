@@ -298,6 +298,9 @@ export function checkLine(names: string[]): string {
 export const REMINDER = 'Progress pane: the state is stale. Send the current state with mcp__mission-status__update now.'
 export const FIRST_REMINDER =
   'Progress pane: it opened by itself from the task list and waits for you. Send the first state with mcp__mission-status__update now.'
+// The end of a turn that did work but sent the pane nothing: one short request, so the pane moves every turn.
+export const TURN_TEXT =
+  'Progress pane: this turn did work but sent no update. Before you end the turn, send what changed (stage, items, gates) with mcp__mission-status__update.'
 export const HOLD_TEXT =
   'Progress pane: the state is stale. Before you end the turn, send the current state with mcp__mission-status__update.'
 
