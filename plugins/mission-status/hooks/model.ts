@@ -110,11 +110,30 @@ export function skillSteps(md: string): string[] {
   return out
 }
 
+// The UTF-8 size of a text, for byte offsets into a file.
+export function byteLength(text: string): number {
+  let n = 0
+  for (let k = 0; k < text.length; k++) {
+    const c = text.charCodeAt(k)
+    if (c < 0x80) n += 1
+    else if (c < 0x800) n += 2
+    else if (c >= 0xd800 && c <= 0xdbff) {
+      n += 4
+      k++
+    } else n += 3
+  }
+  return n
+}
+
 // Every pull request a session made, from its transcript (JSON lines): each gh pr create call's own result.
 export function prRefsInTranscript(text: string): string[] {
-  const creates = new Set<string>()
+  return prRefsInLines(text.split('\n'), new Set<string>())
+}
+
+// The same over some lines, with the gh pr create calls seen so far kept in creates, so a scan can go in parts.
+export function prRefsInLines(lines: string[], creates: Set<string>): string[] {
   const out: string[] = []
-  for (const line of text.split('\n')) {
+  for (const line of lines) {
     if (line.includes('gh pr create') && line.includes('"tool_use"')) {
       for (const m of line.matchAll(/"id":"(toolu_[\w]+)","name":"Bash","input":\{"command":"([^"\\]|\\.)*?gh pr create/g)) creates.add(m[1] ?? '')
     }

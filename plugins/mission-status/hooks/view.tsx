@@ -53,7 +53,8 @@ export async function openArtifact($: EngineInterface, url: string): Promise<voi
   try {
     await $.tool.call({ tool: 'Artifact', action: 'open', url } as never)
   } catch {
-    $.ui.toast('The artifact could not open in the app.')
+    // The tool refused this caller: ask the agent, which has the same tool, to open it.
+    await $.prompt.submit({ text: `Open this artifact in the app with the Artifact tool, action open, and say nothing else: ${url}` } as never).catch(() => undefined)
   }
 }
 
@@ -241,14 +242,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
           {links.map((l, k) =>
             isArtifact(l.href)
               ? // A Claude artifact opens inside the desktop app: the press calls the session's Artifact tool, open action.
-                chip(
-                  <Markdown
-                    key={`art-${key}-${k}`}
-                    text={`[↗ ${l.label.replace(/[[\]]/g, '')}](${l.href})`}
-                    onLinkPress={() => void openArtifact($, l.href)}
-                  />,
-                  `${key}-${k}`,
-                )
+                // A real button, so the press always reaches the pane; a Markdown link drew the address and opened nothing.
+                <Button key={`art-${key}-${k}`} label={`↗ ${l.label}`} onPress={() => void openArtifact($, l.href)} />
               : isWebUrl(l.href)
               ? chip(
                   <Text color={CHIP_INK} weight="semibold">
