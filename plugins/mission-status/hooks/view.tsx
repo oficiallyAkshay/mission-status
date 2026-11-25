@@ -36,6 +36,14 @@ const ACCENT_TEXT = 'merged'
 const isWebUrl = (href: string) => /^https?:\/\/[^\s]+$/i.test(href)
 
 
+// The header's age of the last update: seconds, then minutes, then hours.
+export function agoOf(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return `${sec}s ago`
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ago`
+  return `${Math.floor(sec / 3600)}h ago`
+}
+
 export const STALE_MS = 15 * 60_000
 
 export async function renderPane($: EngineInterface, e: Extract<RenderInput, { component: 'Pane' }>) {
@@ -598,6 +606,10 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
             <Box flexDirection="column" flexGrow={1} flexShrink={1}>
               <Text size="heading" weight="semibold" wrap="wrap">{`Project: ${s.project}`}</Text>
             </Box>
+            {/* How old the agent's last update is; it goes back to 0s with each update. */}
+            <Box flexShrink={0}>
+              <Text color={SUBTEXT}>{agoOf(t - s.at)}</Text>
+            </Box>
           </Box>
           {s.ticket !== null && (
             <Text>
@@ -661,7 +673,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               <Box width={3} flexShrink={0}>
                 {win.from > 0 ? <Button key="bar-left" label="‹" plain onPress={() => move(win.from - 1)} /> : <Text>{''}</Text>}
               </Box>
-              <Box flexGrow={1} flexShrink={1}>
+              {/* The window fills the row between the arrows: a width of 0 with flexGrow takes all the room left. */}
+              <Box flexGrow={1} flexShrink={1} width={0} minWidth={0}>
                 {svg(trackSvg(part), `Stages ${win.from + 1} to ${win.to + 1} of ${n}${isDone ? '' : `; current: ${current}`}`, 30, 'stage-bar', true)}
               </Box>
               <Box width={3} flexShrink={0}>
