@@ -141,14 +141,14 @@ test('merge card: an open pull request shows its state, CI and review', async ($
   expect(await mountText($, /^Review needed$/)).toBe('Review needed')
 })
 
-test('poll timing: git every 5 s at all times, GitHub every 30 s while a pull request is open', async ($, on) => {
+test('poll timing: git every 5 s at all times, GitHub every 60 s while a pull request is open', async ($, on) => {
   const { clock, calls, shared } = await boot($, on, { gh: 'ok', prs: [OPEN_PR] })
   const git0 = calls.gitStatus
   for (let k = 0; k < 12; k++) await clock.advance(GIT_MS)
-  // 12 more polls 5 s apart, 60 s in all: 12 more git reads; GitHub at 0, 30 and 60 s.
+  // 12 more polls 5 s apart, 60 s in all: 12 more git reads; GitHub at 0 and 60 s.
   expect(git0).toBe(1)
   expect(calls.gitStatus).toBe(13)
-  expect(calls.gh).toBe(3)
+  expect(calls.gh).toBe(2)
   expect(shared()?.prs[0]?.number).toBe(7)
 })
 
@@ -179,7 +179,7 @@ test('backoff: a failed GitHub read waits 60 s, then 120 s, up to 10 minutes, an
   const w: World = { gh: 'ok', prs: [OPEN_PR] }
   const { clock, calls, shared } = await boot($, on, w)
   w.gh = 'fail'
-  for (let k = 0; k < 6; k++) await clock.advance(GIT_MS)
+  for (let k = 0; k < 12; k++) await clock.advance(GIT_MS)
   expect(calls.gh).toBe(2)
   // 55 s later: still inside the 60 s wait.
   for (let k = 0; k < 11; k++) await clock.advance(GIT_MS)
@@ -201,7 +201,7 @@ test('failed source read: the card keeps the last pull request and says when it 
   const { clock } = await boot($, on, w)
   await send($, clock)
   w.gh = 'fail'
-  for (let k = 0; k < 6; k++) await clock.advance(GIT_MS)
+  for (let k = 0; k < 12; k++) await clock.advance(GIT_MS)
   expect(await mountText($, /^Pull request read failed; this shows the last good read\. Next try in (under 1|1|2) min\.$/)).toBeTruthy()
   expect(await mountText($, /^CI passing$/)).toBe('CI passing')
 })
@@ -220,7 +220,7 @@ test('one poller per repository: a fresh shared read is used, not read again', a
   await send($, clock)
   expect(await mountText($, /^\+5 −1$/)).toBe('+5 −1')
   expect(await mountText($, /^CI running$/)).toBe('CI running')
-  // 5 s on, the git read is due here; GitHub still serves from the shared read until its 30 s are up.
+  // 5 s on, the git read is due here; GitHub still serves from the shared read until its 60 s are up.
   await clock.advance(GIT_MS)
   expect(calls.gitStatus).toBeGreaterThan(0)
   expect(calls.gh).toBe(0)
@@ -321,4 +321,13 @@ test('item CI: the checks of an item pull request give its state and run time', 
   expect(running.state).toBe('running')
   expect(running.end).toBe(null)
   expect(ciOf([{ status: 'COMPLETED', conclusion: 'FAILURE', startedAt: t0, completedAt: t0 }]).state).toBe('failing')
+})
+
+test('poll timing: an agent update reads GitHub at once, before its 60 s turn', async ($, on) => {
+  const { clock, calls } = await boot($, on, { gh: 'ok', prs: [OPEN_PR] })
+  const before = calls.gh
+  for (let k = 0; k < 3; k++) await clock.advance(GIT_MS)
+  expect(calls.gh).toBe(before)
+  await send($, clock)
+  expect(calls.gh).toBe(before + 1)
 })
