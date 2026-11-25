@@ -2,7 +2,7 @@
 
 <p align="center"><b>Know where your agent stands, without reading through its work.</b></p>
 
-<p align="center"><img src="docs/assets/runbook-tab.png" alt="The mission-status pane on its Runbook tab, during the release of this repository: every step, its state and what it waits on" width="403"></p>
+<p align="center"><img src="docs/assets/progress-tab.png" alt="The mission-status pane on its Progress tab: the goal, the stages, what each stage needs to be done, and the work running now" width="403"></p>
 
 <p align="center">
   <a href="LICENSE"><img alt="MIT licence" src="https://img.shields.io/badge/license-MIT-2f6f4e?logo=opensourceinitiative&logoColor=white"></a>
