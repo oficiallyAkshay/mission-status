@@ -3,7 +3,7 @@ import { expect, test } from 'claude-code/testing'
 const PANE = {
   plugin: 'progress-pane',
   component: 'Pane',
-  requestId: 'vaani',
+  requestId: 'progress',
   props: { title: 'Progress', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
 } as const
 

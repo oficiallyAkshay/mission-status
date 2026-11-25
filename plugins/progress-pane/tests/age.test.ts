@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { age, cap, clockOf } from '../hooks/register'
+import { age, cap, clockOf } from '../hooks/model'
 import { trackSvg } from '../hooks/bars'
 
 test('ages read as plain words', () => {
@@ -20,7 +20,7 @@ test('the same input draws the same source, so an unchanged bar does not flicker
   expect(ids(one).filter(x => other.includes(x))).toEqual([])
 })
 
-import { actionOf, arrivalOf, secondsOf } from '../hooks/register'
+import { actionOf, arrivalOf, secondsOf } from '../hooks/model'
 
 test('the live line uses the chat status words', () => {
   expect(actionOf({ tool: 'Bash', command: 'x', description: 'Run the pane tests' })).toBe('Running a command')
@@ -36,7 +36,7 @@ test('the stage timer reads MM:SS, and H:MM:SS past an hour', () => {
   expect(clockOf(3_725_000)).toBe('1:02:05')
 })
 
-import { applyPlan, normalize } from '../hooks/register'
+import { applyPlan, normalize } from '../hooks/model'
 
 test('task-list steps slot into the stage in progress when they first appear, and keep it', () => {
   const one = applyPlan([], { items: [{ content: 'Read the API', status: 'in_progress' }, { content: 'Build it', status: 'pending' }] }, 1)
@@ -52,7 +52,7 @@ test('a state stored by an earlier version keeps its data and gains the new fiel
   expect(kept?.items[0]?.after).toBeNull()
 })
 
-import { asPr, prFacts } from '../hooks/register'
+import { asPr, prFacts } from '../hooks/readers'
 import { badgeSvg } from '../hooks/bars'
 
 test('a small badge stays small', () => {

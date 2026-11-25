@@ -1,6 +1,7 @@
 export type Count = { label: string; when?: string; n?: number; m?: number; text?: string; phase?: number; href?: string; hrefLabel?: string }
 export type ItemStatus = 'done' | 'now' | 'next' | 'failed'
 export type Item = { phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; n?: number; m?: number; text?: string }
+export type StepStatus = 'done' | 'now' | 'next'
 export type StageKey = 'plan' | 'build' | 'fix' | 'cause' | 'review' | 'ship'
 export type HypothesisState = 'open' | 'testing' | 'ruled out' | 'confirmed'
 export type Hypothesis = { text: string; state: HypothesisState }
@@ -34,6 +35,8 @@ export type Live = { helpers: Helper[]; prs: Pr[]; prsUnread: boolean; at: numbe
 
 declare module 'claude-code' {
   interface PluginState {
-    'progress-pane': { summary: Shaped<Summary>; live: Shaped<Live | null>; now: number; open: string[] | null; activity: Activity; tasks: Task[] }
+    'progress-pane': { summary: Shaped<Summary>; live: Shaped<Live | null>; now: number; open: string[] | null; activity: Activity; tasks: Task[]
+      // Wave 1: consent and metrics (metrics.tsx, onboarding.tsx), auto-update (update.tsx)
+      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null }
   }
 }
