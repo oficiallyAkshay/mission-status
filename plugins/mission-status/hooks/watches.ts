@@ -121,6 +121,20 @@ export function jobName(raw: string, kind?: string | null): string {
   return name !== '' ? name : kind === 'monitor' ? 'Background monitor' : 'Background shell'
 }
 
+// ---- Which jobs are watches ----
+// A background job is a watch only when it waits for something: a Monitor, a job that printed the WATCH/HIT/VALUE/
+// PROGRESS protocol, a job the agent named in its update, or a shell whose command waits (a sleep or until loop, a
+// --watch flag, gh run watch, tail -f). A shell that only does work (a build, a test run, a script) is not a watch.
+const WAITS = /\b(until|while)\b[\s\S]*\bdo\b|\bsleep\s+\d|--watch\b|\bgh\s+run\s+watch\b|\btail\s+-[A-Za-z]*[fF]|(^|[;&|]\s*)watch(\s|$)/
+export const isWatchJob = (j: Job, named: boolean): boolean =>
+  named ||
+  j.kind === 'monitor' ||
+  j.shape != null ||
+  (j.hits ?? 0) > 0 ||
+  (j.values ?? []).length > 0 ||
+  (j.progress ?? '') !== '' ||
+  WAITS.test(j.command ?? '')
+
 // ---- What the strip draws ----
 export type WatchRow = {
   id: string
@@ -146,7 +160,7 @@ export function watchRows(p: { jobs: Job[]; helpers: Helper[]; agent: AgentWatch
   const { at } = p
   const byJob = new Map(p.agent.filter(w => w.job != null).map(w => [w.job as string, w]))
   const rows: WatchRow[] = []
-  for (const j of keepEnded(p.jobs)) {
+  for (const j of keepEnded(p.jobs.filter(x => isWatchJob(x, byJob.has(x.id))))) {
     const said = byJob.get(j.id)
     rows.push({
       id: `job-${j.id}`,

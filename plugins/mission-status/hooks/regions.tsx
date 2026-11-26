@@ -355,16 +355,9 @@ export const sectionHead = (r: Region, key: string, title: string, count: string
     </Box>
   )
 }
-function watchBlock(r: Region, c: StageState, w: WatchRow, folded: boolean): RenderChildren {
-  const { Text, B, svg, Button } = r
-  const { t, badgeFor, toggleWatch, removeWatches } = c
+// What a watch card holds under its title line; an ended watch with none has nothing to unfold.
+function watchLines(w: WatchRow, t: number): string[] {
   const ended = w.endedAt !== null
-  const st = ended ? (w.outcome === 'failed' ? 'failed' : 'done') : 'running'
-  const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-  const shape = w.shape ?? (w.source === 'helper' ? 'helper' : w.kind ?? 'watch')
-  const meta = ended
-    ? `${w.outcome === 'failed' ? 'Failed' : w.outcome === 'hit' ? 'Hit' : 'Complete'} ${clock(w.endedAt ?? t)}`
-    : `${shape} · ${durationOf(Math.max(0, t - w.since)) || '0s'}`
   const lines: string[] = []
   if (w.shape === 'trend' && w.values.length > 0) {
     lines.push([String(w.values[w.values.length - 1]), spark(w.values), trendWord(w.values)].filter(x => x !== '').join('  '))
@@ -376,10 +369,23 @@ function watchBlock(r: Region, c: StageState, w: WatchRow, folded: boolean): Ren
   if (!ended && w.due !== null) lines.push(`Next check in ${durationOf(Math.max(0, w.due - t))}`)
   if (!ended && lines.length === 0 && w.shape === 'until') lines.push('Ends at its first hit')
   if (!ended && lines.length === 0 && w.shape === 'stream') lines.push('No hits yet')
+  return lines
+}
+function watchBlock(r: Region, c: StageState, w: WatchRow, folded: boolean, lines: string[]): RenderChildren {
+  const { Text, B, svg, Button } = r
+  const { t, badgeFor, toggleWatch, removeWatches } = c
+  const ended = w.endedAt !== null
+  const st = ended ? (w.outcome === 'failed' ? 'failed' : 'done') : 'running'
+  const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  const shape = w.shape ?? (w.source === 'helper' ? 'helper' : w.kind ?? 'watch')
+  const meta = ended
+    ? `${w.outcome === 'failed' ? 'Failed' : w.outcome === 'hit' ? 'Hit' : 'Complete'} ${clock(w.endedAt ?? t)}`
+    : `${shape} · ${durationOf(Math.max(0, t - w.since)) || '0s'}`
   return B.Row({
     id: `watch-${w.id}`,
     align: folded ? 'center' : undefined,
-    control: ended ? B.Control({ id: `watch-${w.id}`, open: !folded, onPress: () => void toggleWatch(w.id) }) : undefined,
+    // Only an ended watch with lines under it folds; one with nothing to show has no + or −.
+    control: ended && lines.length > 0 ? B.Control({ id: `watch-${w.id}`, open: !folded, onPress: () => void toggleWatch(w.id) }) : undefined,
     badge: svg(badgeFor(st as NodeStatus), `${w.source === 'helper' ? 'Helper ' : ''}${w.name}: ${ended ? meta.toLowerCase() : 'running'}`, 16, `watch-badge-${w.id}`, undefined, 16) ?? <Text>{ended ? '✓' : '●'}</Text>,
     title: <Text weight="semibold" dimColor={ended} wrap="wrap">{cap(w.name)}</Text>,
     meta: [
@@ -387,7 +393,7 @@ function watchBlock(r: Region, c: StageState, w: WatchRow, folded: boolean): Ren
       // An ended watch can be removed; a running one cannot.
       ended && <Button key={`watch-remove-${w.id}`} label="Remove" plain dimColor onPress={() => void removeWatches([w.id])} />,
     ],
-    body: folded ? undefined : lines.map((x, k) => B.Note({ key: `watch-${w.id}-l${k}`, children: x })),
+    body: folded || lines.length === 0 ? undefined : lines.map((x, k) => B.Note({ key: `watch-${w.id}-l${k}`, children: x })),
   })
 }
 // The newest ended first after the running ones (watches.ts order). Watches show only on the Watches tab.
@@ -399,8 +405,10 @@ function watchCards(r: Region, c: StageState, rows: readonly WatchRow[]): Render
   const { B } = r
   return rows.map(w => {
     // An ended watch folds to one line (its badge, name and end), as a done stage does; + opens it again.
-    const folded = w.endedAt !== null && !c.watchOpen.includes(w.id)
-    return B.Card({ id: `watch-card-${w.id}`, active: w.endedAt === null, flat: folded, children: watchBlock(r, c, w, folded) })
+    // An ended watch with nothing under its title line is always one flat line.
+    const lines = watchLines(w, c.t)
+    const folded = w.endedAt !== null && (lines.length === 0 || !c.watchOpen.includes(w.id))
+    return B.Card({ id: `watch-card-${w.id}`, active: w.endedAt === null, flat: folded, children: watchBlock(r, c, w, folded, lines) })
   })
 }
 // The Watches tab: every watch, running first, then the ended ones newest first.

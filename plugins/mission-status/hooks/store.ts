@@ -33,7 +33,8 @@ export function addJob(list: Job[], tool: string, args: Record<string, unknown>,
   const id = /\bID:?\s*([A-Za-z0-9_-]{4,})/.exec(resultText)?.[1]
   if (id === undefined || list.some(j => j.id === id)) return list
   const said = [args.description, args.command, args.prompt].find(x => typeof x === 'string' && x.trim() !== '') as string | undefined
-  return [...list, { id, kind: isShell ? 'shell' : 'monitor', description: (said ?? tool).trim().slice(0, 120), at, path: outputPathOf(resultText), read: 0 }]
+  const command = typeof args.command === 'string' ? args.command.slice(0, 400) : null
+  return [...list, { id, kind: isShell ? 'shell' : 'monitor', description: (said ?? tool).trim().slice(0, 120), command, at, path: outputPathOf(resultText), read: 0 }]
 }
 
 // At a turn end the engine lists every job still in flight (subagents are left to the helper list). A job it lists
@@ -46,7 +47,7 @@ export function jobsAtTurnEnd(list: Job[], tasks: readonly { id?: unknown; type?
     .filter(t => !list.some(j => j.id === String(t.id)))
     .map(t => {
       const said = [t.description, t.command].find(x => typeof x === 'string' && x.trim() !== '') as string | undefined
-      return { id: String(t.id), kind: typeof t.type === 'string' ? t.type : 'job', description: (said ?? 'Background job').trim().slice(0, 120), at }
+      return { id: String(t.id), kind: typeof t.type === 'string' ? t.type : 'job', description: (said ?? 'Background job').trim().slice(0, 120), command: typeof t.command === 'string' ? t.command.slice(0, 400) : null, at }
     })
   return keepEnded([...kept, ...added])
 }

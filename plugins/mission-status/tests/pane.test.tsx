@@ -604,7 +604,9 @@ test('Progress shows no watch cards; the Watches tab shows every watch, and Remo
   on('tool.call', { tool: 'Bash' }, (_: unknown, e: { description: string }) => ({ result: `Command running in background with ID: ${e.description}. Output is being written to: /tmp/x` }))
   await start($, on)
   await send($, { project: 'P', phases: ['Build', 'Ship'], phase: 0, items: [{ phase: 0, name: 'Code', status: 'now' }] })
-  for (const id of ['wa001', 'wa002', 'wa003', 'wa004']) await $.tool.call({ tool: 'Bash', command: 'watch', description: id, run_in_background: true } as never)
+  for (const id of ['wa001', 'wa002', 'wa003', 'wa004']) await $.tool.call({ tool: 'Bash', command: 'gh run watch 7', description: id, run_in_background: true } as never)
+  // A background build is work, not a watch: it never shows on the Watches tab.
+  await $.tool.call({ tool: 'Bash', command: 'npm run build', description: 'wa009', run_in_background: true } as never)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const shown = async (u: any, re = /^wa00\d: running$/) => (await u.findAll({ type: 'Svg' })).map((x: any) => String(x.props?.alt ?? '')).filter((a: string) => re.test(a))
   expect((await shown(ui)).length).toBe(0)
@@ -620,6 +622,9 @@ test('Progress shows no watch cards; the Watches tab shows every watch, and Remo
   const after = await $.ui.mount({ ...PANE, surface: 'desktop' })
   // The Watches tab stays open across mounts.
   expect((await shown(after, /^wa00\d: complete /)).length).toBe(2)
+  // An ended watch with nothing under its title has no + or − to press.
+  expect((await after.findAll({ type: 'Button' })).filter((x: any) => x.props?.label === '+' || x.props?.label === '−').length).toBe(0)
+  expect((await shown(after, /^wa009: /)).length).toBe(0)
   await after.press({ key: 'act-watches-all' })
   expect((await shown(after, /^wa00\d: complete /)).length).toBe(0)
   expect((await shown(after)).length).toBe(2)
