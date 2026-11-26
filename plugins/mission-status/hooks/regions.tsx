@@ -1,7 +1,7 @@
 import { atom, update } from 'claude-code'
 import type { EngineInterface, RenderChildren } from 'claude-code'
 import type { Count, HypothesisState, Helper, Item, PrRecord, Runbook, RunbookStep } from '../types'
-import { stepsRailSvg, prIconSvg, badgeSvg, exitSvg, flowLineSvg, waitsLineSvg, stripSvg } from './bars'
+import { stepsRailSvg, prIconSvg, badgeSvg, exitSvg, flowLineSvg, waitsLineSvg } from './bars'
 import { age, cap } from './model'
 import type { deriveNow } from './store'
 import { type NodeStatus, stageKey } from './machine'
@@ -297,15 +297,7 @@ export function stageCard(r: Region, c: StageState, name: string, k: number) {
       ),
       k === s.phase && hasSvg && running.length > 0 && hostKey === null && (
         <Box key={`helpers-${k}`} flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
-          {/* The timer is text beside the strip, so the strip's source never changes and its spinner never restarts. */}
-          {running.slice(0, 4).map(x => (
-            <Box key={`strip-row-${x.id}`} flexDirection="row" alignItems="center" gap={1} minWidth={0}>
-              <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                {svg(stripSvg({ title: cap(x.description), detail: x.model, state: 'running', now: Date.now() }), `Helper ${x.description}: running`, 22, `strip-${x.id}`)}
-              </Box>
-              {B.Time({ key: `strip-time-${x.id}`, children: age(x.startTime, t) })}
-            </Box>
-          ))}
+          {running.slice(0, 4).map(x => B.Helper({ id: x.id, description: x.description, model: x.model, time: age(x.startTime, t) }))}
           {running.length > 4 && B.Caption({ children: `${running.length - 4} more helpers run.` })}
         </Box>
       ),

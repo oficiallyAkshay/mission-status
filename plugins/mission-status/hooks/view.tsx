@@ -2,8 +2,8 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, RenderChildren, RenderInput, SvgProps } from 'claude-code'
 import type { Count, Item, ItemStatus, Live, PrRecord, Runs } from '../types'
-import { prIconSvg, badgeSvg, failedBadgeSvg, needsBadgeSvg, stepPulseSvg, pulseWidth, waitsLineSvg, stripSvg } from './bars'
-import { age, cap, findRef, workOrder } from './model'
+import { prIconSvg, badgeSvg, failedBadgeSvg, needsBadgeSvg, waitsLineSvg } from './bars'
+import { age, findRef, workOrder } from './model'
 import { deriveNow } from './store'
 import { type NodeStatus, type Timing, itemKey, stageKey, timeOf } from './machine'
 import { openDoc } from './doc'
@@ -287,10 +287,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               // Sub-sub-steps that run at the same time: each name pulses while the item runs, with a small offset
               // between them, never one after another.
               (x.steps ?? []).length > 0 && x.stepsParallel === true && Svg !== undefined &&
-                B.ChipRow({
-                  id: `${key}-psteps`,
-                  children: (x.steps ?? []).map((name, j) => svg(stepPulseSvg(name, j, st === 'running', Date.now()), name, 16, `${key}-pstep-${j}`, undefined, pulseWidth(name))),
-                }),
+                B.Shimmer({ id: `${key}-psteps`, names: x.steps ?? [], running: st === 'running' }),
               // Sub-sub-steps in order, on one dot-separated line: the one that runs now in full-opacity body text, the
               // rest faint.
               (x.steps ?? []).length > 0 && (x.stepsParallel !== true || Svg === undefined) &&
@@ -302,15 +299,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                   ]),
                 }),
               // The helpers the session runs now sit under the item in progress, as its children.
-              ...helpers.slice(0, 6).map(helper => (
-                // The timer is text beside the strip, so the strip's source never changes and its spinner never restarts.
-                <Box key={`${key}-helper-${helper.id}`} flexDirection="row" alignItems="center" gap={1} paddingRight={CHEV} minWidth={0}>
-                  <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                    {svg(stripSvg({ title: cap(helper.description), detail: helper.model, state: 'running', now: Date.now() }), `Helper ${helper.description}: running`, 22, `strip-${helper.id}`)}
-                  </Box>
-                  {B.Time({ key: `${key}-helper-${helper.id}-time`, children: age(helper.startTime, t) })}
-                </Box>
-              )),
+              ...helpers.slice(0, 6).map(helper => B.Helper({ id: helper.id, description: helper.description, model: helper.model, time: age(helper.startTime, t), paddingRight: CHEV })),
               helpers.length > 6 && B.Caption({ key: `${key}-more`, children: `${helpers.length - 6} more helpers run.` }),
               mine.length > 0 && linkRow(mine, `links-${key}`),
               // Children start one space below the item's last line, the same space as between siblings.
