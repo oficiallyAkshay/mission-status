@@ -28,7 +28,7 @@ A real-work session is a session with 5 or more tool calls.
 
 ### Events
 
-A headless session (claude -p, an SDK host, a helper job) sends no event. Every other property is a word from the fixed list shown, a whole number, or a scrambled id (16 hex characters, below). The code drops any property or value not in this table.
+A headless session (claude -p, an SDK host, a helper job) sends no event. The desktop app starts a session the same way, so a session counts from the moment the app attaches to it. Every other property is a word from the fixed list shown, a whole number, or a scrambled id (16 hex characters, below). The code drops any property or value not in this table.
 
 | Event | When | Properties |
 |---|---|---|
