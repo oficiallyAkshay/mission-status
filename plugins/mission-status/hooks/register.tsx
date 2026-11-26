@@ -4,8 +4,9 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Job, Summary, Task, Wakeup } from '../types'
 import { RULE, UPDATE_TOOL, applyGoal, goalOf, CAP_BYTES, applyPlan, applyUpdate, argsOf, bytesOf, checkUpdate, idOf, normalize, parentLoops, refusalOf, stepsStarted, PR_MAKERS, prRefsIn, prRefsInLines, branchesIn, unionRefs, byteLength, skillSteps, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
 import { paneSeen, poll } from './readers'
-import { CLOCK_MS, PANE, savedKey, TICK_MS, TITLE, afterToolCall, agentUpdated, addJob, applyWakeup, endJobs, jobsAtTurnEnd, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, settle, heldReasons, noteEvent, tick, tickIfTimer } from './store'
+import { CLOCK_MS, PANE, savedKey, TICK_MS, TITLE, afterToolCall, agentUpdated, addJob, applyWakeup, jobsAtTurnEnd, stopJob, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, settle, heldReasons, noteEvent, tick, tickIfTimer } from './store'
 import { renderPane } from './view'
+import { applyNotifications } from './watches'
 import { UPDATE_SCHEMA } from './update-schema'
 import { registerMetrics } from './metrics'
 import { registerOnboarding } from './onboarding'
@@ -128,7 +129,7 @@ async function trackJob($: EngineInterface, e: { tool: unknown; agentId?: string
     if (e.agentId !== undefined) return
     if (String(e.tool) === 'TaskStop') {
       const id = String(args.task_id ?? args.shell_id ?? '')
-      await update($, jobs, list => (list ?? []).filter(j => j.id !== id))
+      await update($, jobs, list => stopJob(list ?? [], id, Date.now()))
     } else {
       await update($, jobs, list => addJob(list ?? [], String(e.tool), args, JSON.stringify(result ?? ''), Date.now()))
     }
@@ -340,8 +341,8 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     await noteTurnStart($).catch(() => undefined)
-    // A task notification that names a job as ended takes it out of the Watching strip.
-    await update($, jobs, list => endJobs(list ?? [], String((e as unknown as { text?: unknown }).text ?? ''))).catch(() => undefined)
+    // A task notification that names a job: a hit on a running watch, or its end (C).
+    await update($, jobs, list => applyNotifications(list ?? [], String((e as unknown as { text?: unknown }).text ?? ''), Date.now())).catch(() => undefined)
     // A /goal starts the pane with that goal, or sets the goal line of the one that runs.
     try {
       const ev = e as unknown as { text?: unknown; command?: unknown }

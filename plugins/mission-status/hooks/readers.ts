@@ -1,10 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Helper, ItemCi, Live, PrRecord, Summary } from '../types'
+import type { Helper, ItemCi, Job, Live, PrRecord, Summary } from '../types'
 import { nowOf } from './store'
+import { byteLength } from './model'
+import { applyOutput } from './watches'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const live = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
+// Background jobs (watches): the poll reads each running job's new output for HIT, VALUE and other lines.
+const jobs = atom({ plugin: 'mission-status', key: 'jobs' } as const, [] as Job[])
+const nowAtom = atom({ plugin: 'mission-status', key: 'now' } as const, 0)
 
 // Each pull request is read at most once a minute, whether the pane shows or not; a merged or closed one is not read
 // again. A rate-limited reply stops every GitHub read for a while:
@@ -401,7 +406,30 @@ export function poll($: EngineInterface, force = false): Promise<void> {
   return current
 }
 
+// Each running job's output since the last read, at most 256 KiB a pass: its watch lines move its hits, readings and
+// progress. A file that cannot be read is tried again next pass.
+async function readJobs($: EngineInterface): Promise<void> {
+  const list = (await read($, jobs).catch(() => [])) ?? []
+  const due = list.filter(j => j.endedAt == null && typeof j.path === 'string' && j.path !== '')
+  if (due.length === 0) return
+  const at = Date.now()
+  const changed = new Map<string, Job>()
+  for (const j of due) {
+    try {
+      const text = await $.fs.read(j.path as string, { as: 'text', offset: j.read ?? 0, length: 256 * 1024 })
+      if (text === '') continue
+      const out = applyOutput(j, text, at)
+      if (out.used > 0) changed.set(j.id, { ...out.job, read: (j.read ?? 0) + byteLength(text.slice(0, out.used)) })
+    } catch {}
+  }
+  if (changed.size > 0) await update($, jobs, now => (now ?? []).map(j => changed.get(j.id) ?? j)).catch(() => undefined)
+  // A running watch's time moves on this 5 s read, not on the 1 s clock: a 1 s redraw while a watch runs would
+  // rebuild every spinner each second.
+  else await update($, nowAtom, () => Date.now()).catch(() => undefined)
+}
+
 async function pollOnce($: EngineInterface): Promise<void> {
+  await readJobs($).catch(() => undefined)
   let helpers: Helper[] = []
   try {
     helpers = (await $.agent.list()).map(a => ({

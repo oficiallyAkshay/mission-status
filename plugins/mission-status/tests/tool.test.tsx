@@ -1,7 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { brokenRules, derive, type Facts, itemKey, itemRule, mergeItems, NO_FACTS, type NodeStatus, stageRule, timeOf } from '../hooks/machine'
 import { applyGoal, applyPlan, applyUpdate, goalOf, asTemplates, CAP_BYTES, CHECK_MS, FIRST_REMINDER, HOLD_TEXT, prRefsInTranscript, REMINDER, REMIND_MS, RULE, skillSteps, templatesLine, TURN_TEXT } from '../hooks/model'
-import { addJob, applyWakeup, endJobs, jobsAtTurnEnd, settleRuns } from '../hooks/store'
+import { addJob, applyWakeup, jobsAtTurnEnd, settleRuns, stopJob } from '../hooks/store'
+import { applyNotifications, applyOutput, isWatchItem, spark, trendWord, watchRows } from '../hooks/watches'
 import { type Item, type Summary, type Task } from '../types'
 
 // Each block below was one test file. The blocks keep their own helpers and state; one file runs in one child.
@@ -770,7 +771,7 @@ test('the owner\'s Analyze card: the checklist step joins "Warehouse load", and 
 })
 
 test('the owner\'s Live test card: task-list steps done before the agent\'s items show above them, not at the bottom', () => {
-  const items = [it('Watch stage spinner', 0, 'now', { seenAt: 2000 }), it('Check colours', 0, 'done', { seenAt: 2000 }), it('Your verdict', 0, 'needs', { seenAt: 3000 })]
+  const items = [it('Check stage spinner', 0, 'now', { seenAt: 2000 }), it('Check colours', 0, 'done', { seenAt: 2000 }), it('Your verdict', 0, 'needs', { seenAt: 3000 })]
   const s = one(items, ['Live test'], 0)
   const steps: Task[] = [
     { name: 'Start a branch from latest main', status: 'done', phase: 0, seenAt: 1000 },
@@ -778,7 +779,7 @@ test('the owner\'s Live test card: task-list steps done before the agent\'s item
     { name: 'Late step', status: 'next', phase: 0, seenAt: 2500 },
   ]
   const merged = mergeItems(s, steps, { ...NO_FACTS, turnOpen: true })
-  expect(merged.map(x => x.name)).toEqual(['Start a branch from latest main', 'Redo the spinner fixes', 'Watch stage spinner', 'Check colours', 'Late step', 'Your verdict'])
+  expect(merged.map(x => x.name)).toEqual(['Start a branch from latest main', 'Redo the spinner fixes', 'Check stage spinner', 'Check colours', 'Late step', 'Your verdict'])
 })
 
 test('a task-list step and an agent item get the time they first appeared, kept across later updates', () => {
@@ -818,7 +819,7 @@ test('wakeups: a scheduled wakeup is kept with its due time, a new one replaces 
 })
 
 test('the standing rule sends watches to the strip, not to items', () => {
-  expect(RULE).toContain('Watching strip')
+  expect(RULE).toContain('Watching section')
   expect(RULE).toContain('/goal')
   expect(RULE).toContain('never send an item that repeats one')
 })
@@ -836,25 +837,66 @@ test('the owner\'s Plan and Build cards: a task-list step slotted in an earlier 
   expect(merged.filter(x => /watches/i.test(x.name)).map(x => x.name)).toEqual(['Watches strip'])
 })
 
-test('jobs: a background Bash call and a Monitor join the strip by the id their result names; a foreground call does not', () => {
-  const res = 'Command running in background with ID: b2aw45xp4. Output is being written to: /tmp/x'
+test('jobs: a background Bash call and a Monitor join by the id their result names, with the output file; a foreground call does not', () => {
+  const res = 'Command running in background with ID: b2aw45xp4. Output is being written to: /tmp/x/b2aw45xp4.output'
   const one = addJob([], 'Bash', { command: 'gh pr checks 53 --watch', description: 'Watch CI checks', run_in_background: true }, res, 1000)
-  expect(one).toEqual([{ id: 'b2aw45xp4', kind: 'shell', description: 'Watch CI checks', at: 1000 }])
+  expect(one).toEqual([{ id: 'b2aw45xp4', kind: 'shell', description: 'Watch CI checks', at: 1000, path: '/tmp/x/b2aw45xp4.output', read: 0 }])
   expect(addJob([], 'Bash', { command: 'ls' }, res, 1000)).toEqual([])
   expect(addJob(one, 'Bash', { description: 'again', run_in_background: true }, res, 2000)).toBe(one)
   expect(addJob([], 'Monitor', { description: 'Deploy log' }, 'Monitor started (ID: mon_1234)', 1000).map(j => j.kind)).toEqual(['monitor'])
 })
 
-test('jobs: the turn-end list replaces the kept one, keeps start times, and leaves subagents to the helper list', () => {
+test('jobs: at a turn end a job no longer listed stays as complete, a new one joins, and subagents stay with the helper list', () => {
   const kept = [{ id: 'b1', kind: 'shell', description: 'Watch CI', at: 1000 }, { id: 'gone', kind: 'shell', description: 'Old', at: 500 }]
   const next = jobsAtTurnEnd(kept, [{ id: 'b1', type: 'shell', description: 'x' }, { id: 'a1', type: 'subagent', description: 'Review' }, { id: 'm1', type: 'monitor', description: 'Deploy log' }], 3000)
-  expect(next).toEqual([{ id: 'b1', kind: 'shell', description: 'Watch CI', at: 1000 }, { id: 'm1', kind: 'monitor', description: 'Deploy log', at: 3000 }])
+  expect(next.map(j => [j.id, j.endedAt ?? null, j.outcome ?? null])).toEqual([['b1', null, null], ['gone', 3000, 'done'], ['m1', null, null]])
+  expect(stopJob(next, 'b1', 4000).find(j => j.id === 'b1')?.endedAt).toBe(4000)
 })
 
-test('jobs: a task notification that names a job as completed takes it out; a running one stays', () => {
-  const kept = [{ id: 'b1', kind: 'shell', description: 'A', at: 1 }, { id: 'b2', kind: 'shell', description: 'B', at: 1 }]
-  expect(endJobs(kept, '<task-notification><task-id>b1</task-id><status>completed</status></task-notification>').map(j => j.id)).toEqual(['b2'])
-  expect(endJobs(kept, 'no notification here')).toBe(kept)
+test('watch lines (A): WATCH names the shape, HIT counts, VALUE builds a trend, PROGRESS and DONE; a half line waits', () => {
+  const job = { id: 'b1', kind: 'shell', description: 'Feed', at: 0 }
+  const out = applyOutput(job, '[2026-11-26T05:00:00Z] WATCH: stream Virama alerts\nnoise\nHIT: NIFTY crossed 24,310\nHIT: BANKNIFTY fell 1%\nPROGRESS: 2 feeds live\nHIT: half', 5000)
+  expect(out.job.description).toBe('Virama alerts')
+  expect(out.job.shape).toBe('stream')
+  expect(out.job.hits).toBe(2)
+  expect(out.job.last).toBe('BANKNIFTY fell 1%')
+  expect(out.job.progress).toBe('2 feeds live')
+  expect(out.used).toBe('[2026-11-26T05:00:00Z] WATCH: stream Virama alerts\nnoise\nHIT: NIFTY crossed 24,310\nHIT: BANKNIFTY fell 1%\nPROGRESS: 2 feeds live\n'.length)
+  const until = applyOutput({ ...job, shape: 'until' }, 'HIT: all checks pass\nHIT: again\n', 6000).job
+  expect([until.endedAt, until.outcome, until.hits]).toEqual([6000, 'hit', 2])
+  const trend = applyOutput(job, 'VALUE: 100\nVALUE: 120\nVALUE: 142 queue\n', 7000).job
+  expect([trend.shape, trend.values]).toEqual(['trend', [100, 120, 142]])
+  expect(spark([100, 120, 142])).toBe('▁▄█')
+  expect(trendWord([100, 120, 142])).toBe('up 42')
+  expect(applyOutput(job, 'DONE: deploy live\n', 8000).job.outcome).toBe('hit')
+})
+
+test('watch notifications (C): a running job counts a hit; completed ends it as complete, failed as failed', () => {
+  const kept = [{ id: 'm1', kind: 'monitor', description: 'Errors', at: 0 }, { id: 'b2', kind: 'shell', description: 'CI', at: 0 }]
+  const a = applyNotifications(kept, '<task-notification><task-id>m1</task-id><status>running</status><summary>3 new errors</summary></task-notification>', 10)
+  expect([a[0]?.hits, a[0]?.last]).toEqual([1, '3 new errors'])
+  const b = applyNotifications(a, '<task-notification><task-id>b2</task-id><status>failed</status></task-notification>', 20)
+  expect([b[1]?.endedAt, b[1]?.outcome]).toEqual([20, 'failed'])
+  expect(applyNotifications(kept, 'plain text')).toBe(kept)
+})
+
+test('watch detection: items that name watching or waiting leave the cards; work items and a watch item with children stay', () => {
+  const items = [it('Watch CI on the pane pull request', 0, 'now'), it('Wait for the deploy', 0, 'next'), it('Monitor error rate', 0, 'now'), it('Write the parser', 0, 'now'), it('Watch party', 0, 'now'), it('Step', 0, 'now', { parent: 'Watch party' })]
+  expect(items.filter(x => isWatchItem(x, items)).map(x => x.name)).toEqual(['Watch CI on the pane pull request', 'Wait for the deploy', 'Monitor error rate'])
+  const merged = mergeItems(one(items, ['Build', 'Ship'], 0), [], { ...NO_FACTS, turnOpen: true })
+  expect(merged.map(x => x.name)).toEqual(['Write the parser', 'Watch party', 'Step'])
+})
+
+test('watch rows: running first in start order, then ended newest first; a due wakeup and a done watch item show as complete', () => {
+  const rows = watchRows({
+    jobs: [{ id: 'b1', kind: 'shell', description: 'CI', at: 30 }, { id: 'b0', kind: 'shell', description: 'Old CI', at: 5, endedAt: 50, outcome: 'hit' }],
+    helpers: [{ id: 'h1', description: 'Review', status: 'running', model: 'haiku', startTime: 10 }],
+    agent: [{ id: 'v', name: 'Virama alerts', shape: 'stream', status: 'running', hits: 3, at: 20 }],
+    items: [it('Wait for deploy', 0, 'done', { doneAt: 60 })],
+    wakeups: [{ reason: 'Check again', due: 40, at: 1 }],
+    at: 100,
+  })
+  expect(rows.map(r => [r.name, r.endedAt])).toEqual([['Review', null], ['Virama alerts', null], ['CI', null], ['Wait for deploy', 60], ['Old CI', 50], ['Check again', 40]])
 })
 
 test('parallel lets an item run beside the one before it; without it, it waits', () => {

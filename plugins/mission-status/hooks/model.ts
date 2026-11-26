@@ -1,4 +1,4 @@
-import type { CardLink, Count, Hypothesis, HypothesisState, Item, ItemStatus, StepEntry, StageKey, Summary, Task, Ticket, Runbook, RunbookStatus, RunbookStep } from '../types'
+import type { CardLink, Count, Hypothesis, HypothesisState, Item, ItemStatus, StepEntry, StageKey, Summary, Task, Ticket, Runbook, RunbookStatus, RunbookStep, AgentWatch } from '../types'
 
 
 // Templates: quick choices of stage lists. The model picks one that fits the session, or writes its own stages
@@ -389,6 +389,7 @@ export function normalize(raw: Summary): Summary {
     version: typeof r.version === 'number' ? r.version : 0,
     repo: typeof r.repo === 'string' && r.repo.startsWith('/') ? r.repo : null,
     runbooks: Array.isArray(r.runbooks) ? (r.runbooks as unknown[]).map(asRunbook).filter((x): x is Runbook => x !== undefined) : [],
+    watches: Array.isArray(r.watches) ? (r.watches as AgentWatch[]) : [],
     waitingForAgent: r.waitingForAgent === true,
     mayBeOutOfDate: r.mayBeOutOfDate === true,
     agentVersion: typeof r.agentVersion === 'number' ? r.agentVersion : 0,
@@ -470,7 +471,7 @@ export const RULE =
   'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those. ' +
   'Each task-list step is already an item: never send an item that repeats one under another name; to add a note or a pull request to a step, send its item with taskStep set to the step\'s exact text. ' +
   'When the person sets a goal with /goal, the pane shows it as the goal line by itself: send a project name and stages that fit it. ' +
-  'Background watches (a background shell, a Monitor, a scheduled wakeup, a helper) show in the pane\'s own Watching strip: never send an item for watching or waiting on them. ' +
+  'Watches are background work that waits for something (CI, a deploy, an alert feed, a trend): they show in the pane\'s Watching section, never on the stage cards. A background shell, a Monitor, a helper or a scheduled wakeup shows by itself; send watches only to name, shape (until, stream, trend) or report hits on one. Never send an item for watching or waiting. ' +
   'The pane has four levels: a card is one stage (phases); a step is an item in a card; a sub-step is an item under a step (its parent); ' +
   'sub-sub-steps are one line under a sub-step (its steps; stepsParallel when they run at the same time). ' +
   'Give each step a stable id, and send small step changes as patch operations. Never name a step as its card: a step is work inside the card. ' +
@@ -480,6 +481,44 @@ export const RULE =
   'The pane is the only progress report. In the chat, write only what the person must do or decide to unblock the work ' +
   '(a decision, an approval, a step only they can do), and a direct answer when they ask a question. ' +
   'Send no progress lines, status, recaps, plans or narration in the chat: put them in the pane.'
+
+// Watches the agent reports, merged by id: a sent watch replaces its fields, {id, remove: true} drops it. A
+// watch keeps when it was first seen, and when it first hit or ended; readings add up to the last 24.
+export function mergeWatches(old: AgentWatch[], sent: unknown[], at: number): AgentWatch[] {
+  let out = [...old]
+  for (const raw of sent) {
+    if (raw === null || typeof raw !== 'object') continue
+    const o = raw as Record<string, unknown>
+    const id = typeof o.id === 'string' ? o.id.trim() : ''
+    if (id === '') continue
+    if (o.remove === true) {
+      out = out.filter(w => w.id !== id)
+      continue
+    }
+    const was = out.find(w => w.id === id)
+    const shape = o.shape === 'until' || o.shape === 'stream' || o.shape === 'trend' ? o.shape : (was?.shape ?? null)
+    const status = o.status === 'running' || o.status === 'hit' || o.status === 'ended' ? o.status : (was?.status ?? 'running')
+    const value = typeof o.value === 'number' && Number.isFinite(o.value) ? o.value : null
+    const last = typeof o.last === 'string' ? o.last.slice(0, 160) : (was?.last ?? null)
+    const next: AgentWatch = {
+      id,
+      name: typeof o.name === 'string' && o.name.trim() !== '' ? o.name.trim().slice(0, 80) : (was?.name ?? id),
+      shape,
+      status,
+      hits: typeof o.hits === 'number' ? o.hits : (was?.hits ?? 0),
+      last,
+      lastAt: typeof o.last === 'string' && o.last !== was?.last ? at : (was?.lastAt ?? null),
+      value: null,
+      values: value !== null ? [...(was?.values ?? []), value].slice(-24) : (was?.values ?? []),
+      progress: typeof o.progress === 'string' ? o.progress.slice(0, 120) : (was?.progress ?? null),
+      job: typeof o.job === 'string' ? o.job : (was?.job ?? null),
+      at: was?.at ?? at,
+      endedAt: status === 'running' ? null : (was?.endedAt ?? at),
+    }
+    out = was === undefined ? [...out, next] : out.map(w => (w.id === id ? next : w))
+  }
+  return out.slice(-12)
+}
 
 // The one-line reminder the pane adds to the agent's next step.
 // The check every 2 minutes: the items the pane still shows in progress, asked about by name.
@@ -966,6 +1005,7 @@ export function applyUpdate(old: Summary, args: Record<string, unknown>, at: num
     project: str(args.project) ?? old?.project ?? 'Project',
     repo: args.repo === undefined ? (old?.repo ?? null) : str(args.repo),
     runbooks: Array.isArray(args.runbooks) ? mergeRunbooks(old?.runbooks ?? [], args.runbooks) : (old?.runbooks ?? []),
+    watches: Array.isArray(args.watches) ? mergeWatches(old?.watches ?? [], args.watches, at) : (old?.watches ?? []),
     goalLine: args.goalLine === undefined ? (old?.goalLine ?? null) : str(args.goalLine),
     stage,
     phases,

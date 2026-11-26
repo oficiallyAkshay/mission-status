@@ -7,8 +7,9 @@ import { findRef, workOrder } from './model'
 import { deriveNow } from './store'
 import { type NodeStatus, type Timing, itemKey, stageKey, timeOf } from './machine'
 import { openDoc } from './doc'
+import { isWatchItem, watchRows } from './watches'
 import { blocks, durationOf, SPACE, SUBTEXT, ACCENT_TEXT } from './blocks'
-import { type Region, type StageState, agoOf, STALE_MS, isWebUrl, header, prsTab, progressTab, runbookTab } from './regions'
+import { type Region, type StageState, agoOf, STALE_MS, isWebUrl, header, prsTab, progressTab, runbookTab, watchesTab } from './regions'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const live = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
@@ -18,6 +19,7 @@ const runsAtom = atom({ plugin: 'mission-status', key: 'runs' } as const, {} as 
 const seenAtom = atom({ plugin: 'mission-status', key: 'seenAt' } as const, 0)
 const wakeupsAtom = atom({ plugin: 'mission-status', key: 'wakeups' } as const, [] as Wakeup[])
 const jobsAtom = atom({ plugin: 'mission-status', key: 'jobs' } as const, [] as Job[])
+const watchOpenAtom = atom({ plugin: 'mission-status', key: 'watchOpen' } as const, [] as string[])
 // The pane's open tab: null is Progress, else a runbook's id.
 const tabAtom = atom({ plugin: 'mission-status', key: 'tab' } as const, null as string | null)
 // The open tab inside each pull request card, by its reference.
@@ -149,10 +151,16 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     // What the pane reads itself.
     const helpersAll = l?.helpers ?? []
     const running = helpersAll.filter(x => x.status === 'running')
-    // Wakeups the session scheduled that are not yet due: they join the Watching strip.
-    const due = ((await safe(read($, wakeupsAtom), [])) ?? []).filter(w => w.due > t)
-    // Background jobs in flight (a shell, a Monitor, a workflow): the helper list holds only subagents.
-    const jobs = (await safe(read($, jobsAtom), [])) ?? []
+    // Watches (watches.ts): background jobs (the helper list holds only subagents), subagents, the agent's own
+    // reports, the items that name watching or waiting, and scheduled wakeups.
+    const watches = watchRows({
+      jobs: (await safe(read($, jobsAtom), [])) ?? [],
+      helpers: helpersAll,
+      agent: s.watches ?? [],
+      items: s.items.filter(x => isWatchItem(x, s.items)),
+      wakeups: (await safe(read($, wakeupsAtom), [])) ?? [],
+      at: t,
+    })
     // The session's pull requests: the newest 20 it made, each from its one record.
     const sessionPrs = ((await safe(read($, prRefsAtom), [])) ?? [])
       .slice(-20)
@@ -315,7 +323,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const hostKey = facts.hostKey
     // A root is an item no item holds in the machine's tree, so an item in a parent loop still shows.
     const isRoot = (x: Item) => !allItems.some(y => machine.kids(y).includes(x))
-    const stage: StageState = { s, machine, allItems, opened, measures, isDone, t, running, due, jobs, hostKey, stageState, stageTimeText, badgeFor, needsWord, toggle, itemCards, isRoot }
+    const stage: StageState = { s, machine, allItems, opened, measures, isDone, t, running, watches, watchOpen: (await safe(read($, watchOpenAtom), [])) ?? [], seeAll: () => void update($, tabAtom, () => 'watches'), toggleWatch: (id: string) => update($, watchOpenAtom, list => ((list ?? []).includes(id) ? (list ?? []).filter(x => x !== id) : [...(list ?? []), id].slice(-20))), hostKey, stageState, stageTimeText, badgeFor, needsWord, toggle, itemCards, isRoot }
 
     // Tabs: Progress, then one tab for each runbook the session follows. A press switches the view.
     const runbooks = s.runbooks ?? []
@@ -323,14 +331,17 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const book = runbooks.find(r => r.id === tab) ?? null
     // Tabs: Progress, PRs (always), then each runbook or skill the session follows.
     const onPrs = tab === 'prs'
+    const onWatches = tab === 'watches'
     // The tab bar (blocks.tsx Tabs): Progress, PRs, then one tab for each runbook or skill. One runbook: its tab reads
     // Runbook (or Skill), and its title heads the view. Several: each tab carries its title.
     const pick = (value: string | null) => () => void update($, tabAtom, () => value)
     const tabRow = B.Tabs({
       id: 'tabs',
       tabs: [
-        { key: 'tab-progress', icon: '◔', label: 'Progress', on: book === null && !onPrs, onPress: pick(null) },
+        { key: 'tab-progress', icon: '◔', label: 'Progress', on: book === null && !onPrs && !onWatches, onPress: pick(null) },
         { key: 'tab-prs', icon: '⎇', label: sessionPrs.length > 0 ? `PRs ${sessionPrs.length}` : 'PRs', on: onPrs, onPress: pick('prs') },
+        // Watches: a tab while the session has a watch, or while it is the open tab.
+        ...(watches.length > 0 || onWatches ? [{ key: 'tab-watches', icon: '◌', label: `Watches ${watches.filter(w => w.endedAt === null).length}`, on: onWatches, onPress: pick('watches') }] : []),
         ...runbooks.map(r => ({
           key: `tab-${r.id}`,
           icon: r.id.startsWith('skill-') ? '✦' : '☰',
@@ -346,6 +357,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       return prsTab($, region, { sessionPrs, prTabs, prsStale, prsReadAt, clock, nowOrRead, isOpenKey, toggleKey })
     }
     if (book !== null) return runbookTab(region, book)
+    if (onWatches) return watchesTab(region, stage)
 
     return progressTab(region, stage, header($, region, { s, turnOpen: facts.turnOpen, t, seen, clock, upd, auto, isDone, readFailed, askUpdate }))
 }
