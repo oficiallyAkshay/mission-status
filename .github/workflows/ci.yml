@@ -62,9 +62,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # The plugin's own checks, with the engine's own commands: manifest, hooks
-  # and types through `claude plugin validate`, and the test files through
-  # `claude plugin test`. Neither needs a login.
+  # The plugin's own checks, with the engine's own commands: the manifest and
+  # what the hooks call through `claude plugin validate`, and the test files
+  # through `claude plugin test`. Neither needs a login. Neither type-checks:
+  # the engine's types come only with a loaded copy, so the type-check runs in
+  # scripts/check.sh before each pull request.
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 15

@@ -43,8 +43,6 @@ const cards = [
   { out: 'site/og.png', width: 1200, height: 630, css: CARD_CSS },
   { out: 'docs/assets/social-preview.png', width: 1280, height: 640, css: CARD_CSS },
   { out: 'docs/assets/progress-tab.png', width: 1600, height: 1075, css: WINDOW_CSS },
-  // The hero's still for a browser with no script: the pane alone, at twice its size for sharp screens.
-  { out: 'site/pane-still.png', width: 1440, height: 1000, css: null, selector: '#pane', scale: 2 },
 ]
 const browser = await chromium.launch()
 for (const c of cards) {

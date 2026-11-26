@@ -35,7 +35,7 @@ The pane has four levels: a **card** for each stage, **steps** inside a card, **
 
 <p align="center">🤫<br><b>A quiet chat</b><br>The chat holds only what needs you: a decision, an approval, or a step only you can do.</p>
 
-<p align="center">🔒<br><b>Private stays private</b><br>Usage counts are anonymous, never hold your words, files or names, and turn off with one command. The step marker sends only tool names and step names to your own session's model, and stays off when nonessential traffic is off.</p>
+<p align="center">🔒<br><b>Private stays private</b><br>Usage counts are anonymous, never hold your words, files or names, and turn off with one command. The step marker sends tool names, step names and a short line per tool call (a Bash description, or the command when there is none, and its last output line; file base names; search patterns and queries; fetched URLs) to your own session's model, never file contents, and stays off when nonessential traffic is off.</p>
 
 <p align="center">📊<br><b>Live numbers</b><br>Git, pull requests, checks and helpers come from their own sources; pull requests stay current even while the pane is closed.</p>
 
@@ -75,7 +75,7 @@ The pane opens by itself once a session does real work, and `/mission-status` op
 
 ## Security and limits
 
-No credential needed. The pane runs inside Claude Code on your machine, and it calls no model of its own.
+No credential needed. The pane runs inside Claude Code on your machine, and it calls no model of its own: the step marker asks your session's own model.
 
 - ❎ sends your prompts, goals, files, branch names or paths anywhere
 - ❎ names your account or session in any event

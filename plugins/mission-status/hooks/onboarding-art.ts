@@ -28,7 +28,7 @@ export function switchSvg(isOn: boolean): string {
 export const CONSENT_LINE =
   'The pane sends only counts, words from fixed lists, one random install id and scrambled ids for projects and pull requests, and never sends your goals, names, files, branches, commands, links, paths or session and account ids.'
 export const CONSENT_CHANGE_LINE = 'You can change this choice at any time.'
-export const FIELDS_URL = 'https://github.com/oficiallyAkshay/mission-status#metrics'
+export const FIELDS_URL = 'https://github.com/oficiallyAkshay/mission-status/blob/main/docs/telemetry.md'
 
 // The demo: one made-up session through five stages in 15 s, three seconds a stage, all stages done in the last
 // second, then round again. Each frame is drawn by the pane's own drawings in bars.ts: the stage bar, one status line

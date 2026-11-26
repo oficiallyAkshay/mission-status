@@ -5,6 +5,8 @@ import type { Summary } from '../types'
 // The quiet chat. While the pane holds a state, the text the agent writes between tool calls ("Now the tests.") is
 // hidden in the chat view: the pane already shows the progress. Shown still: a block with a question, and each turn's
 // final message. The stored transcript is unchanged, so the hidden text stays in the session's record.
+// A headless run (claude -p, an SDK host, a helper job): no person sees a pane (metrics.tsx writes it at session start).
+const headless = atom({ plugin: 'mission-status', key: 'headless' } as const, false as boolean)
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 
 // Blocks hidden as narration, and blocks shown before the current turn began (the final messages of earlier turns, and
@@ -78,7 +80,7 @@ export function registerQuiet(on: On): void {
     const text = String(e.props.text ?? '')
     if (e.props.isSummary === true || asks(text)) return next(e)
     const s = await read($, summary).catch(() => null)
-    if (s === null) return next(e)
+    if (s === null || (await read($, headless).catch(() => false))) return next(e)
     await load($)
     const k = key(text)
     if (!narration.has(k)) {

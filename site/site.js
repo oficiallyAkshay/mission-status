@@ -169,7 +169,7 @@ function heroRender(force = false) {
   const key = `${state.mission.project}|${state.phase}|${state.done}`, full = `${key}|${state.item}`
   const itemOnly = !force && key === heroKey && full !== heroFull && roots0()
   heroFull = full
-  const roots = [$('pane'), $('vs-pane')].filter(Boolean)
+  const roots = [$('pane')]
   if (!itemOnly && !force && key === heroKey && roots[0].firstChild) return roots.forEach(r => paneTick(r, now, act))
   const glide = !force && key.split('|')[0] === heroKey.split('|')[0] && !REDUCED
   heroKey = key

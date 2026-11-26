@@ -17,7 +17,7 @@ A Claude Code mod: a live progress pane beside the chat in the Claude desktop ap
 
 ## Checks
 
-- Run `scripts/check.sh` before a pull request. Set `CC_TYPES` to the engine's `claude-code.d.ts` to type-check.
+- Run `scripts/check.sh` before a pull request; it is the only type-check, as CI cannot get the engine's types. It finds them beside a loaded dev copy, or set `CC_TYPES` to the engine's `claude-code.d.ts`. It fails on unused locals.
 - `ui.find` ignores `alt` and `href`: use `findAll` and filter in the test.
 - Tests that advance many minutes of virtual time set `timeoutMs`.
 
@@ -27,3 +27,5 @@ A Claude Code mod: a live progress pane beside the chat in the Claude desktop ap
 - One behaviour change, one named test that fails without it.
 - Keep `docs/telemetry.md` in step with every metrics field.
 - Write plain English. Put no secrets, personal names or local paths in the repository.
+- A change to how the pane draws is checked in the desktop app before the pull request, and the body says what was seen. A layout fix is measured from the rendered tree, not guessed.
+- A revert ships as its own pull request that gives its reason.

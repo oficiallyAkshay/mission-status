@@ -1,6 +1,6 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
-import type { Fresh, Live, MetricsSession, Summary, Task } from '../types'
+import type { Fresh, Live, MetricsSession, Summary, Task, PrRecord } from '../types'
 import { AUTO_PROJECT, STALE_STEPS } from './model'
 import { FRESH0, PANE } from './store'
 
@@ -176,7 +176,10 @@ const consentAtom = atom({ plugin: 'mission-status', key: 'consent' } as const, 
 const noticeAtom = atom({ plugin: 'mission-status', key: 'metricsNoticeShown' } as const, false as boolean)
 const tasksAtom = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 const summaryAtom = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
+const prRefsAtom = atom({ plugin: 'mission-status', key: 'prRefs' } as const, [] as string[])
 const liveAtom = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
+// A headless run: the other parts read it to stay quiet (marker, readers, register, store, quiet).
+const headlessAtom = atom({ plugin: 'mission-status', key: 'headless' } as const, false as boolean)
 const sessionAtom = atom({ plugin: 'mission-status', key: 'metricsSession' } as const, null as Stored | null)
 
 // $.store keys: the install id, and the consent choice kept across sessions by /pane-metrics.
@@ -191,15 +194,20 @@ export const SECRET_KEY = 'metricsSecret'
 // paneSent: pane_shown is sent once per session, also across a reload.
 type Stored = MetricsSession
 let session: Stored = { calls: 0, realWork: false }
+// The value last written to metricsSession: past real work, a tool call writes only when the session changed.
+let stored: Stored | null = null
 let paneSeen = false
 let asks: boolean[] = []
 let renders = 0
 let queue: Queued[] = []
 let lastSend = -Infinity
 let disabled = false
+// The flush timer; a new session.start cancels it before it registers again.
+let flushTimer: { cancel: () => void } | null = null
 
 function reset(): void {
   session = { calls: 0, realWork: false }
+  stored = null
   paneSeen = false
   asks = []
   renders = 0
@@ -210,6 +218,7 @@ function reset(): void {
 async function save($: EngineInterface): Promise<void> {
   const kept = session
   await update($, sessionAtom, () => kept)
+  stored = kept
 }
 
 // A stored "no" beats the session's own value: /pane-metrics off in one session stops every open session. Without a
@@ -282,6 +291,7 @@ const yn = (b: boolean): 'yes' | 'no' => (b ? 'yes' : 'no')
 async function startSession($: EngineInterface): Promise<void> {
   const kept = await read($, sessionAtom)
   session = kept !== null ? { calls: kept.calls, realWork: kept.realWork, paneSent: kept.paneSent, project: kept.project ?? null, prs: kept.prs ?? [] } : { calls: 0, realWork: false }
+  stored = kept !== null ? session : null
   if (kept === null) await save($)
 }
 
@@ -300,7 +310,9 @@ async function checkProject($: EngineInterface): Promise<void> {
 // Each pull request the pane reads for the first time in this session: one pr_tracked. Runs at each send.
 async function checkPrs($: EngineInterface): Promise<void> {
   if (!(await on_($))) return
-  const prs = (await read($, liveAtom))?.prs ?? []
+  // The session's own pull requests: its refs, read from the one record each.
+  const records = (await read($, liveAtom))?.prRecords ?? {}
+  const prs = ((await read($, prRefsAtom).catch(() => [] as string[])) ?? []).map(r => records[r]).filter((x): x is PrRecord => x !== undefined)
   const seen = new Set(session.prs ?? [])
   const fresh = prs.filter(p => typeof p.url === 'string' && p.url !== '' && !seen.has(p.number))
   if (fresh.length === 0) return
@@ -323,7 +335,8 @@ async function reachRealWork($: EngineInterface): Promise<void> {
 }
 
 async function countCall($: EngineInterface): Promise<void> {
-  session = { ...session, calls: session.calls + 1 }
+  if (session.realWork && session === stored) return
+  if (!session.realWork) session = { ...session, calls: session.calls + 1 }
   if (!session.realWork && session.calls >= REAL_WORK_CALLS) await reachRealWork($)
   await save($)
 }
@@ -371,9 +384,16 @@ export function registerMetrics(on: On): void {
       disabled = Boolean(await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'))
     })
     await quiet(() => startSession($))
+    // A headless run (claude -p, an SDK host, a helper job) has no person to see a pane: it runs as if the pane were not installed, with
+    // no pane, rule, reminders or marker, and sends no metrics, so it never counts as a session that hid the pane.
+    if ((e as { isInteractive?: boolean }).isInteractive === false) {
+      disabled = true
+      await quiet(() => update($, headlessAtom, () => true).then(() => undefined))
+    } else await quiet(() => update($, headlessAtom, () => false).then(() => undefined))
     await quiet(() => $.command.register({ name: 'pane-metrics', description: 'Anonymous metrics for the progress pane: on or off' }).then(() => undefined))
     await quiet(async () => {
-      $.clock.every(FLUSH_MS, () => void quiet(() => flush($)))
+      flushTimer?.cancel()
+      flushTimer = $.clock.every(FLUSH_MS, () => void quiet(() => flush($)))
     })
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)

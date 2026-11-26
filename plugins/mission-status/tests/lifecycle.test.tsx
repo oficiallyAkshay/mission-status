@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { accountHash } from '../hooks/onboarding'
 import { CONSENT_LINE, DEMO_MS, demoFrame, STILL_SVG, WELCOME_LINE } from '../hooks/onboarding-art'
-import { isNewer, RELEASES_URL, releaseVersion, RELOAD_LIMIT_MS } from '../hooks/update'
+import { CHECK_EVERY_MS, isNewer, RELEASES_URL, releaseVersion, RELOAD_LIMIT_MS } from '../hooks/update'
 import { MANUAL_COMMAND, updateText } from '../hooks/update-line'
 
 // Each block below was one test file. The blocks keep their own helpers and state; one file runs in one child.
@@ -559,5 +559,69 @@ test('a reload that does not take within the limit counts as a failure, and a sh
   const s = await state()
   expect(s?.phase).toBe('idle')
   expect(s?.failures).toBe(1)
+})
+
+test('a second session start leaves one 6 h check timer, not two', { timeoutMs: 20_000 }, async ($, on) => {
+  let ticks = 0
+  on('clock.every', { ms: CHECK_EVERY_MS }, (_: unknown, e: unknown, next: any) => {
+    ticks += 1
+    return next(e)
+  })
+  const { clock, start } = await setup($, on, { release: 'v1.1.0' })
+  await start()
+  ticks = 0
+  await clock.advance(3 * CHECK_EVERY_MS)
+  expect(ticks <= 4).toBe(true)
+})
+}
+
+// ---- headless session
+{
+test('a headless session gets no rule, no reminder, no model call and no metrics', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.env(on, { HOME: '/home/u' })
+  mock.store(on)
+  let model = 0
+  let fetched = 0
+  const stored: Record<string, unknown> = {}
+  on('state.set', (_: unknown, e: { plugin: string; key: string; value: unknown }, next: (e: unknown) => unknown) => {
+    const v = e.value as { shape?: unknown; value?: unknown } | null
+    if (e.plugin === 'mission-status') stored[e.key] = v !== null && typeof v === 'object' && 'shape' in v && 'value' in v ? v.value : v
+    return next(e)
+  })
+  on('tool.register', () => ({ value: {} }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('agent.list', () => ({ value: [] }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.id', () => ({ value: 's1' }))
+  on('session.messages', () => ({ value: [] }))
+  on('model.complete', () => {
+    model++
+    return { value: { isAnswered: false, reason: 'aborted' } }
+  })
+  on('http.fetch', () => {
+    fetched++
+    return { value: { status: 200, text: '' } }
+  })
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('prompt.compose', () => ({ sections: [] }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', () => ({ result: 'ok' }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: false })
+  expect(stored['headless']).toBe(true)
+  const composed = (await $.prompt.compose({} as never)) as { sections: { id: string }[] }
+  expect(composed.sections.some(s => s.id === 'mission-status:progress')).toBe(false)
+  const contexts: string[] = []
+  for (let k = 0; k < 8; k++) {
+    const r = (await $.tool.call({ tool: 'Bash', command: 'ls' } as never)) as { additionalContext?: string[] }
+    contexts.push(...(r.additionalContext ?? []))
+    await clock.advance(6_000)
+  }
+  await $.turn.complete({ text: '' } as never)
+  await clock.advance(600_000)
+  expect(contexts.some(x => x.includes('Mission status pane'))).toBe(false)
+  expect(model).toBe(0)
+  expect(fetched).toBe(0)
 })
 }
