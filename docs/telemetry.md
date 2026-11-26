@@ -22,19 +22,21 @@ A real-work session is a session with 5 or more tool calls.
 | Property | Value |
 |---|---|
 | `product` | `mission-status` |
-| `schema_version` | `1` |
+| `schema_version` | `2` |
 | `$process_person_profile` | `false`: PostHog builds no person profile |
 | `$geoip_disable` | `true`: PostHog looks up no location |
 
 ### Events
 
-Every other property is a word from the fixed list shown, or a whole number. The code drops any property or value not in this table.
+Every other property is a word from the fixed list shown, a whole number, or a scrambled id (16 hex characters, below). The code drops any property or value not in this table.
 
 | Event | When | Properties |
 |---|---|---|
-| `session_real_work` | Once per session, at the 5th tool call | `holdback`: `yes` or `no` |
-| `pane_shown` | Once per real-work session, the first time the pane is drawn | `holdback`: `yes` or `no` |
-| `progress_ask` | For each prompt you type in a real-work session (prompts before the 5th tool call are held, then sent). The prompt is sorted on your Mac by the word list below; only the answer leaves it | `progress`: `yes` or `no`; `holdback`: `yes` or `no` |
+| `session_real_work` | Once per session, at the 5th tool call | none |
+| `pane_shown` | Once per real-work session, the first time the pane is drawn | none |
+| `progress_ask` | For each prompt you type in a real-work session (prompts before the 5th tool call are held, then sent). The prompt is sorted on your Mac by the word list below; only the answer leaves it | `progress`: `yes` or `no` |
+| `project_tracked` | When the agent names the pane's project, and each time it changes to another name, in a session | `project_id`: the project name, scrambled |
+| `pr_tracked` | The first time the pane reads each pull request in a session (checked at each send) | `pr_id`: the pull request's link, scrambled |
 | `update_accuracy` | Each time the agent updates the pane while a task-list step is in progress | `accurate`: `yes` when the agent's current stage (or a stage it marks as running in parallel) holds the step in progress, `no` otherwise |
 | `stale_reminder` | When the pane would remind the agent to update: at the 5th tool call with no update yet, after 3 new task-list steps with no update, or after 10 minutes of tool calls with no update. Once per stale stretch | `trigger`: `no_state`, `steps` or `time` |
 | `update_after_reminder` | When the agent updates after a reminder, or when 3 tool calls pass after it with no update | `followed`: `yes` when the update came within 3 tool calls, `no` otherwise; `steps`: the tool calls between the reminder and this event |
@@ -45,9 +47,11 @@ Every other property is a word from the fixed list shown, or a whole number. The
 
 `distinct_id` is the install id (below). `timestamp` is the time of the event.
 
+A scrambled id is the first 16 hex characters of SHA-256 over a secret and the name. The secret is random, made on your Mac at the first scrambled id, kept in the mod's own store, and never sent. So the same project or pull request gives the same id on one install, and nothing gives back the name or links the id to another install's. `/pane-metrics off` deletes the secret with the install id.
+
 ### Never sent
 
-Prompt text, goal text, stage or item names, task-list steps, file names, paths, branch names, commands, pull request titles, links, session titles, session ids, repository names, account ids, email addresses, error messages. The metrics code never reads the session id or the account. The onboarding reads the signed-in account once, to show itself once for each account; it keeps only a one-way hash of it in the plugin's local store and sends nothing about it. The tests send these through a session and fail if any of them, or anything that looks like an id or a path other than `distinct_id`, reaches an event.
+Prompt text, goal text, project names (only their scrambled id), stage or item names, task-list steps, file names, paths, branch names, commands, pull request numbers, titles and links (only their scrambled id), other links, session titles, session ids, repository names, account ids, email addresses, error messages. The metrics code never reads the session id or the account. The onboarding reads the signed-in account once, to show itself once for each account; it keeps only a one-way hash of it in the plugin's local store and sends nothing about it. The tests send these through a session and fail if any of them, or anything that looks like an id or a path other than `distinct_id` and the scrambled ids, reaches an event.
 
 ## The progress word list
 
@@ -57,13 +61,9 @@ status, progress, eta, where are we, where are you, where do we stand, how far, 
 
 The list is `PROGRESS_WORDS` in `metrics.tsx`. A change to it changes the measure, so it changes `schema_version`.
 
-## The holdback
-
-For 30 days after the release date (`RELEASE_AT` in `metrics.tsx`), on installs with metrics on (the notice seen) only, a random 1 in 10 real-work sessions is a holdback: that session shows no pane and gets no standing rule, so the agent works as it would without the pane. The holdback sessions are the comparison group for the progress-question measure. The choice is made on your Mac when the session starts, before the first tool call, and kept for that session only. Installs that turned metrics off, that have not seen the notice, or that set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, never get a holdback. After the 30 days, nobody does.
-
 ## The id, honestly
 
-`distinct_id` is a random UUID v4 made on your Mac at the first send, and kept in the mod's own store. It is pseudonymous, not anonymous: it lets the events of one install be told apart from another's, and it identifies nobody by itself. `/pane-metrics off` deletes it; turning metrics on again makes a new one that nothing links to the old one. The request also reaches PostHog's servers over the network, so PostHog's servers see the connection's IP address while handling it. The project is set to discard client IP data, and `$geoip_disable` stops any location lookup, but that setting is the owner's and not something the mod can prove from your side.
+`distinct_id` is a random UUID v4 made on your Mac at the first send, and kept in the mod's own store. It stays the same across sessions on that install, so one install's events can be followed over time. It is pseudonymous, not anonymous: it lets the events of one install be told apart from another's, and it identifies nobody by itself. `/pane-metrics off` deletes it; turning metrics on again makes a new one that nothing links to the old one. The request also reaches PostHog's servers over the network, so PostHog's servers see the connection's IP address while handling it. The project is set to discard client IP data, and `$geoip_disable` stops any location lookup, but that setting is the owner's and not something the mod can prove from your side.
 
 ## Where it goes
 

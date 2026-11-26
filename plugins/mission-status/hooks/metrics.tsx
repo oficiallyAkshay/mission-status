@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
-import type { Fresh, MetricsSession, Summary, Task } from '../types'
-import { STALE_STEPS } from './model'
+import type { Fresh, Live, MetricsSession, Summary, Task } from '../types'
+import { AUTO_PROJECT, STALE_STEPS } from './model'
 import { FRESH0, PANE } from './store'
 
 // Anonymous metrics, sent only after consent. What is sent, field by field, is in docs/telemetry.md; keep the two in step.
@@ -13,12 +13,7 @@ import { FRESH0, PANE } from './store'
 export const ENDPOINT = 'https://us.i.posthog.com/i/v0/e/'
 export const KEY = 'phc_BGLN5bXDwYbwdzkzci7L2tNbyWXtUfwokDRhP6TG5w2Q'
 export const PRODUCT = 'mission-status'
-export const SCHEMA_VERSION = 1
-
-// The holdback runs for 30 days after the release date, on consenting installs only. Set the date at release.
-export const RELEASE_AT = Date.UTC(2026, 11, 15)
-export const HOLDBACK_DAYS = 30
-export const HOLDBACK_RATE = 0.1
+export const SCHEMA_VERSION = 2
 
 export const REAL_WORK_CALLS = 5 // a real-work session has 5 or more tool calls
 export const FLUSH_MS = 60_000 // at most one request a minute
@@ -73,11 +68,14 @@ const YES_NO = ['yes', 'no'] as const
 export const RENDER_ERROR_CODES = ['type', 'range', 'reference', 'syntax', 'error', 'other'] as const
 export const UPDATE_FAILED_CODES = ['install', 'reload', 'other'] as const
 export const STALE_TRIGGERS = ['time', 'steps', 'no_state'] as const
-type Field = readonly string[] | 'count'
+// 'hash': 16 hex characters, a name scrambled on the device with that install's own secret (hashOf).
+type Field = readonly string[] | 'count' | 'hash'
 export const EVENTS: Readonly<Record<string, Readonly<Record<string, Field>>>> = {
-  session_real_work: { holdback: YES_NO },
-  pane_shown: { holdback: YES_NO },
-  progress_ask: { progress: YES_NO, holdback: YES_NO },
+  session_real_work: {},
+  pane_shown: {},
+  progress_ask: { progress: YES_NO },
+  project_tracked: { project_id: 'hash' },
+  pr_tracked: { pr_id: 'hash' },
   update_accuracy: { accurate: YES_NO },
   stale_reminder: { trigger: STALE_TRIGGERS },
   update_after_reminder: { followed: YES_NO, steps: 'count' },
@@ -105,6 +103,8 @@ export function clean(event: string, props: Record<string, unknown>): Props | nu
     const v = props[name]
     if (field === 'count') {
       if (typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= 1_000_000) out[name] = v
+    } else if (field === 'hash') {
+      if (typeof v === 'string' && /^[0-9a-f]{16}$/.test(v)) out[name] = v
     } else if (typeof v === 'string' && field.includes(v)) out[name] = v
   }
   return out
@@ -116,11 +116,18 @@ export function isProgressAsk(text: string): boolean {
   return PROGRESS_WORDS.some(w => words.includes(` ${w} `))
 }
 
-// A random 1 in 10 real-work sessions in the 30 days after release, on consenting installs only.
-export function isHoldback(consent: unknown, now: number, rand: number): boolean {
-  if (consent !== 'yes') return false
-  if (now < RELEASE_AT || now >= RELEASE_AT + HOLDBACK_DAYS * 86_400_000) return false
-  return rand < HOLDBACK_RATE
+// A name scrambled with the install's own secret: the same name gives the same 16 hex characters on one install,
+// and nothing links it to the name or to another install's value.
+export async function hashOf(secret: string, name: string): Promise<string> {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${secret}\n${name}`))
+  return [...new Uint8Array(d)].slice(0, 8).map(n => n.toString(16).padStart(2, '0')).join('')
+}
+
+// The project an agent named, or null while the pane shows its own placeholder.
+export function projectOf(s: Summary): string | null {
+  if (s === null || s.waitingForAgent === true) return null
+  const p = s.project.trim()
+  return p === '' || p === AUTO_PROJECT ? null : p
 }
 
 // A random UUID v4, made on the device.
@@ -161,27 +168,29 @@ export function updateEvent(previous: unknown, value: unknown): { event: 'update
   return null
 }
 
-// The values this file reads, declared by plugin and key. Consent and the task list are written elsewhere; holdback
-// is written here and read by the pane and the standing rule.
+// The values this file reads, declared by plugin and key. Consent, the task list, the pane's state and the pull
+// requests are written elsewhere.
 const consentAtom = atom({ plugin: 'mission-status', key: 'consent' } as const, null as 'yes' | 'no' | null)
 // Written by onboarding once the metrics notice has been on screen; metrics are on by default, but nothing is sent
 // before the notice has shown once.
 const noticeAtom = atom({ plugin: 'mission-status', key: 'metricsNoticeShown' } as const, false as boolean)
-const holdbackAtom = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
 const tasksAtom = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 const summaryAtom = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
+const liveAtom = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
 const sessionAtom = atom({ plugin: 'mission-status', key: 'metricsSession' } as const, null as Stored | null)
 
 // $.store keys: the install id, and the consent choice kept across sessions by /pane-metrics.
 export const ID_KEY = 'metricsId'
 export const CONSENT_KEY = 'metricsConsent'
 export const NOTICE_KEY = 'metricsNoticeShown'
+// The install's own secret for hashOf; never sent, deleted with the install id.
+export const SECRET_KEY = 'metricsSecret'
 
 // What one session counts. The counts that must outlive a reload (an auto-update mid-session) sit in $.state, in
 // metricsSession; the queue and the render count start over with the module.
 // paneSent: pane_shown is sent once per session, also across a reload.
 type Stored = MetricsSession
-let session: Stored = { holdback: false, calls: 0, realWork: false }
+let session: Stored = { calls: 0, realWork: false }
 let paneSeen = false
 let asks: boolean[] = []
 let renders = 0
@@ -190,7 +199,7 @@ let lastSend = -Infinity
 let disabled = false
 
 function reset(): void {
-  session = { holdback: false, calls: 0, realWork: false }
+  session = { calls: 0, realWork: false }
   paneSeen = false
   asks = []
   renders = 0
@@ -231,6 +240,14 @@ async function track($: EngineInterface, event: string, props: Record<string, un
   queue.push({ event, timestamp: new Date(await $.clock.now()).toISOString(), properties })
 }
 
+async function secretOf($: EngineInterface): Promise<string> {
+  const kept = await $.store.get(SECRET_KEY)
+  if (typeof kept === 'string' && kept.length >= 32) return kept
+  const made = `${uuid4()}${uuid4()}`
+  await $.store.set(SECRET_KEY, made)
+  return made
+}
+
 async function installId($: EngineInterface): Promise<string> {
   const kept = await $.store.get(ID_KEY)
   if (typeof kept === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(kept)) return kept
@@ -242,6 +259,7 @@ async function installId($: EngineInterface): Promise<string> {
 // Sends the queue as one batch, at most once a minute. A failure drops the batch; nothing waits on it.
 export async function flush($: EngineInterface): Promise<void> {
   const now = await $.clock.now()
+  await quiet(() => checkPrs($))
   if (renders > 0) await track($, 'render', { count: renders })
   renders = 0
   if (queue.length === 0 || now - lastSend < FLUSH_MS) return
@@ -260,28 +278,47 @@ export async function flush($: EngineInterface): Promise<void> {
 
 const yn = (b: boolean): 'yes' | 'no' => (b ? 'yes' : 'no')
 
-// The holdback is drawn once per session, at its start, before the first standing rule is composed; a reload keeps
-// the draw (it sits in metricsSession).
+// A reload (an auto-update mid-session) keeps the session's counts: they sit in metricsSession.
 async function startSession($: EngineInterface): Promise<void> {
   const kept = await read($, sessionAtom)
-  if (kept !== null) {
-    session = kept
-    return
-  }
-  session = { holdback: (await on_($)) && isHoldback(await consentOf($), await $.clock.now(), Math.random()), calls: 0, realWork: false }
-  await update($, holdbackAtom, () => session.holdback)
+  session = kept !== null ? { calls: kept.calls, realWork: kept.realWork, paneSent: kept.paneSent, project: kept.project ?? null, prs: kept.prs ?? [] } : { calls: 0, realWork: false }
+  if (kept === null) await save($)
+}
+
+// The pane's project changed to a name not counted yet in this session: one project_tracked.
+async function checkProject($: EngineInterface): Promise<void> {
+  if (!(await on_($))) return
+  const name = projectOf(await read($, summaryAtom))
+  if (name === null) return
+  const id = await hashOf(await secretOf($), `project\n${name}`)
+  if (session.project === id) return
+  session = { ...session, project: id }
   await save($)
+  await track($, 'project_tracked', { project_id: id })
+}
+
+// Each pull request the pane reads for the first time in this session: one pr_tracked. Runs at each send.
+async function checkPrs($: EngineInterface): Promise<void> {
+  if (!(await on_($))) return
+  const prs = (await read($, liveAtom))?.prs ?? []
+  const seen = new Set(session.prs ?? [])
+  const fresh = prs.filter(p => typeof p.url === 'string' && p.url !== '' && !seen.has(p.number))
+  if (fresh.length === 0) return
+  session = { ...session, prs: [...seen, ...fresh.map(p => p.number)] }
+  await save($)
+  const secret = await secretOf($)
+  for (const p of fresh) await track($, 'pr_tracked', { pr_id: await hashOf(secret, `pr\n${p.url}`) })
 }
 
 // The session reaches real work: it is counted, with the prompts sorted before it and the pane if it showed.
 async function reachRealWork($: EngineInterface): Promise<void> {
   session = { ...session, realWork: true }
-  await track($, 'session_real_work', { holdback: yn(session.holdback) })
-  for (const a of asks) await track($, 'progress_ask', { progress: yn(a), holdback: yn(session.holdback) })
+  await track($, 'session_real_work')
+  for (const a of asks) await track($, 'progress_ask', { progress: yn(a) })
   asks = []
   if (paneSeen && session.paneSent !== true) {
     session = { ...session, paneSent: true }
-    await track($, 'pane_shown', { holdback: yn(session.holdback) })
+    await track($, 'pane_shown')
   }
 }
 
@@ -355,7 +392,7 @@ export function registerMetrics(on: On): void {
     await quiet(async () => {
       if (e.command !== undefined) return
       const ask = isProgressAsk(String(e.text ?? ''))
-      if (session.realWork) await track($, 'progress_ask', { progress: yn(ask), holdback: yn(session.holdback) })
+      if (session.realWork) await track($, 'progress_ask', { progress: yn(ask) })
       else if ((await on_($)) && asks.length < MAX_QUEUE) asks.push(ask)
     })
     return next(e)
@@ -369,7 +406,7 @@ export function registerMetrics(on: On): void {
       if (session.realWork && session.paneSent !== true) {
         session = { ...session, paneSent: true }
         // Drawing is pure and cannot write state: the flag is stored with the next tool call's save.
-        void quiet(() => track($, 'pane_shown', { holdback: yn(session.holdback) }))
+        void quiet(() => track($, 'pane_shown'))
       }
     }
     try {
@@ -381,7 +418,8 @@ export function registerMetrics(on: On): void {
   })
 
   // The auto-update part keeps its state in updateState: a new version is an update that worked, a higher failure
-  // count is one that failed. The freshness record (fresh) gives the stale reminders; a holdback session has none.
+  // count is one that failed. The freshness record (fresh) gives the stale reminders, and the pane's state the
+  // project. The pull requests are read at each send (flush): the poll's writes to live reach no state.set hook here.
   on('state.set', async ($, e, next) => {
     const w = e as unknown as { plugin?: string; key?: string; value?: unknown; previous?: unknown }
     const result = await next(e)
@@ -393,11 +431,12 @@ export function registerMetrics(on: On): void {
     }
     // A write another write beat changed nothing.
     const landed = (result as { isSet?: boolean } | undefined)?.isSet !== false
-    if (landed && w.plugin === 'mission-status' && w.key === 'fresh' && !session.holdback) {
+    if (landed && w.plugin === 'mission-status' && w.key === 'fresh') {
       await quiet(async () => {
         for (const ev of freshEvents(w.previous, w.value)) await track($, ev.event, ev.props)
       })
     }
+    if (landed && w.plugin === 'mission-status' && w.key === 'summary') await quiet(() => checkProject($))
     return result
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
@@ -427,6 +466,7 @@ export function registerMetrics(on: On): void {
         () => false,
       )
       await $.store.delete(ID_KEY).catch(() => undefined)
+      await $.store.delete(SECRET_KEY).catch(() => undefined)
       if (!isKept) return { text: 'Metrics are off in this session, but the choice could not be saved. Type /pane-metrics off again later.' }
       return { text: 'Metrics are off. The install id is deleted, and nothing more is sent.' }
     }

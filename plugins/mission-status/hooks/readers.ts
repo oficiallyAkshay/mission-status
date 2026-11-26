@@ -40,7 +40,6 @@ let repoDir: string | null = null
 const prRefsAtom = atom({ plugin: 'mission-status', key: 'prRefs' } as const, [] as string[])
 // The branches this session's own tool inputs name (git push, git checkout -b and the like); register.tsx keeps them.
 const prBranchesAtom = atom({ plugin: 'mission-status', key: 'prBranches' } as const, [] as string[])
-const holdbackAtom = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
 const summaryAtom = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 
 // One command; null when it exits with an error, 'missing' when it cannot start.
@@ -225,7 +224,7 @@ async function listMine($: EngineInterface): Promise<{ refs: string[]; fail?: 'l
 }
 
 // One pass of the PR reads, apart from the git poll: every pull request due is read at once, in parallel.
-// No gh call at all in a holdback session. A failed read keeps the last record.
+// A failed read keeps the last record.
 // force: a new pull request or an agent update came; the pass runs now, and still reads each one at most once a minute.
 export async function pollPrs($: EngineInterface, force = false): Promise<void> {
   if (prBusy) {
@@ -251,7 +250,6 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
   const t = await nowOf($)
   if (!force && t < prNextAt) return
   prNextAt = t + PR_MS
-  if (await read($, holdbackAtom).catch(() => true)) return
   const sum = await syncRepo($)
   const limited = t < holdUntil
   let made = await read($, prRefsAtom).catch(() => [] as string[])
@@ -331,13 +329,12 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
   }
 }
 
-// One summary from Haiku; null when traffic is off, in a holdback session, or when the call fails (the card then keeps
+// One summary from Haiku; null when traffic is off, or when the call fails (the card then keeps
 // the description's first sentences). A short call: 30 s at most, a small reply.
 const summaryTried = new Set<string>()
 async function summarize($: EngineInterface, title: string, body: string): Promise<string | null> {
   try {
     if (await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')) return null
-    if (await read($, holdbackAtom)) return null
     const r = await $.model.complete({
       model: 'haiku',
       system: 'You summarize a GitHub pull request for a progress pane. Answer with exactly two short plain sentences, present tense, no markdown, no lists, no file names unless essential: what the change does for the person who uses it, then the most important detail.',

@@ -5,14 +5,13 @@ import {
   ENDPOINT,
   EVENTS,
   FLUSH_MS,
-  HOLDBACK_DAYS,
   ID_KEY,
   KEY,
   NOTICE_KEY,
   PROGRESS_WORDS,
-  RELEASE_AT,
+  SECRET_KEY,
   clean,
-  isHoldback,
+  hashOf,
   isProgressAsk,
   renderErrorCode,
   updateEvent,
@@ -24,8 +23,8 @@ import {
 // PostHog is caught here, never sent.
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-const IN_WINDOW = RELEASE_AT + 86_400_000
-const AFTER_WINDOW = RELEASE_AT + (HOLDBACK_DAYS + 1) * 86_400_000
+const NOW = Date.UTC(2026, 11, 16)
+const HASH = /^[0-9a-f]{16}$/
 const SESSION_ID = '9f1c2d3e-4b5a-4c6d-8e7f-0a1b2c3d4e5f'
 const ACCOUNT_ID = 'acc-7d1e9a52-0c4b-4f3e-9a8d-6b5c4d3e2f1a'
 
@@ -43,7 +42,7 @@ type World = {
 async function start(
   $: any,
   on: any,
-  opts: { store?: Record<string, unknown>; env?: Record<string, string>; now?: number; fetch?: 'ok' | 'fail' } = {},
+  opts: { store?: Record<string, unknown>; env?: Record<string, string>; now?: number; fetch?: 'ok' | 'fail'; prs?: Record<string, Record<string, unknown>> } = {},
 ): Promise<World> {
   const bodies: Body[] = []
   const calls = { sessionId: 0, identity: 0 }
@@ -62,14 +61,28 @@ async function start(
     state.push({ key: e.key, value: e.value })
     return next(e)
   })
-  const clock = mock.clock(on, { now: opts.now ?? IN_WINDOW })
+  const clock = mock.clock(on, { now: opts.now ?? NOW })
   mock.store(on, opts.store ?? {})
   mock.env(on, opts.env ?? {})
   on('tool.register', () => ({ value: {} }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('agent.list', () => ({ value: [] }))
-  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  // With prs, a GitHub repository whose pull requests gh pr view answers, by number; without, no repository.
+  on('process.run', (_: unknown, e: { argv?: string[] }) => {
+    const a = e.argv ?? []
+    const ok = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
+    if (opts.prs === undefined) return ok('', 1)
+    if (a[0] === 'gh' && a[2] === 'list') return ok('[]')
+    if (a[0] === 'gh' && a[2] === 'view') {
+      const got = opts.prs[String(a[3])]
+      return got === undefined ? ok('', 1) : ok(JSON.stringify(got))
+    }
+    if (a[1] === 'rev-parse' && a[2] === '--show-toplevel') return ok('/Users/someone/private-repo\n')
+    if (a[1] === 'branch') return ok('feature/login-redesign\n')
+    if (a[1] === 'remote' && a[2] === 'get-url') return ok('git@github.com:someone/private-repo.git\n')
+    return ok('', 1)
+  })
   on('session.id', () => {
     calls.sessionId += 1
     return { value: SESSION_ID }
@@ -84,7 +97,8 @@ async function start(
     if (opts.fetch === 'fail') return { deny: 'offline' }
     return { value: { status: 200, ok: true, headers: {}, text: '{"status":1}' } }
   })
-  on('tool.call', () => ({ result: 'ok' }))
+  // A Bash call that creates a pull request answers with its link, as gh pr create prints it.
+  on('tool.call', (_: unknown, e: { command?: string; pr?: number }) => ({ result: e.pr === undefined ? 'ok' : `https://github.com/someone/private-repo/pull/${e.pr}\n` }))
   on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/Users/someone/private-repo', surface: 'desktop', isInteractive: true })
@@ -99,7 +113,7 @@ const work = async ($: any, n: number) => {
 const events = (w: World) => w.bodies.flatMap(b => b.batch)
 const named = (w: World, name: string) => events(w).filter(x => x.event === name)
 const minute = (w: World) => w.clock.advance(FLUSH_MS + 1)
-const holdbackOf = (w: World) => w.state.filter(x => x.key === 'holdback').at(-1)?.value
+const pr = (number: number) => ({ number, state: 'OPEN', url: `https://github.com/someone/private-repo/pull/${number}`, title: `Secret pull request ${number}`, isDraft: false, mergeStateStatus: 'CLEAN', statusCheckRollup: [], mergedAt: null, headRefName: 'feature/login-redesign' })
 const consented = { [CONSENT_KEY]: 'yes', [NOTICE_KEY]: true }
 
 // Consent and the off switch: on by default, but nothing is sent until the notice has shown once
@@ -111,7 +125,6 @@ test('notice: consent yes with no notice shown sends nothing and makes no id', a
   await minute(w)
   expect(w.bodies.length).toBe(0)
   expect(w.store.get(ID_KEY)).toBeUndefined()
-  expect(holdbackOf(w)).toBe(false)
 })
 
 test('notice: once the notice has shown, consent yes sends', async ($, on) => {
@@ -173,6 +186,7 @@ test('/pane-metrics on makes a random UUID v4 on the device; off deletes it and 
   const offText = await $.command.run({ command: 'pane-metrics', args: 'off' } as never)
   expect(offText.text).toMatch(/Metrics are off/)
   expect(w.store.get(ID_KEY)).toBeUndefined()
+  expect(w.store.get(SECRET_KEY)).toBeUndefined()
   expect(w.store.get(CONSENT_KEY)).toBe('no')
   await work($, 5)
   await prompt($, 'status?')
@@ -200,7 +214,7 @@ test('every event goes to PostHog Cloud US with the public key, product and priv
     expect(x.properties.product).toBe('mission-status')
     expect(x.properties.$process_person_profile).toBe(false)
     expect(x.properties.$geoip_disable).toBe(true)
-    expect(x.properties.schema_version).toBe(1)
+    expect(x.properties.schema_version).toBe(2)
     expect(Number.isNaN(Date.parse(x.timestamp))).toBe(false)
   }
 })
@@ -225,7 +239,7 @@ test('progress_ask: prompts are sorted on the device, held until real work, then
   await minute(w)
   const asks = named(w, 'progress_ask').map(x => x.properties.progress)
   expect(asks).toEqual(['no', 'yes', 'yes', 'no'])
-  for (const x of named(w, 'progress_ask')) expect(x.properties.holdback === 'yes' || x.properties.holdback === 'no').toBe(true)
+  for (const x of named(w, 'progress_ask')) expect(Object.keys(x.properties).includes('holdback')).toBe(false)
 })
 
 test('progress_ask: a session without real work sends no prompt sort', async ($, on) => {
@@ -257,8 +271,7 @@ test('update_accuracy: yes when the current stage holds the open task step, no w
 })
 
 test('stale_reminder: at the 5th tool call with no agent state, then update_after_reminder yes within 3 steps', async ($, on) => {
-  // Outside the holdback window: a holdback session sends no stale events.
-  const w = await start($, on, { store: consented, now: AFTER_WINDOW })
+  const w = await start($, on, { store: consented })
   await work($, 5)
   await work($, 2)
   await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
@@ -268,8 +281,7 @@ test('stale_reminder: at the 5th tool call with no agent state, then update_afte
 })
 
 test('stale_reminder: 3 new task steps with no update, then update_after_reminder no after 3 steps pass', async ($, on) => {
-  // Outside the holdback window: a holdback session sends no stale events.
-  const w = await start($, on, { store: consented, now: AFTER_WINDOW })
+  const w = await start($, on, { store: consented })
   await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
   // The pane's one freshness record counts steps started (store.ts), so the steps here start.
   const steps = (n: number) => Array.from({ length: n }, (_, k) => ({ content: `Step ${k}`, status: 'in_progress' }))
@@ -282,8 +294,7 @@ test('stale_reminder: 3 new task steps with no update, then update_after_reminde
 })
 
 test('stale_reminder: 10 minutes of tool calls with no update, once per stale stretch', { timeoutMs: 20_000 }, async ($, on) => {
-  // Outside the holdback window: a holdback session sends no stale events.
-  const w = await start($, on, { store: consented, now: AFTER_WINDOW })
+  const w = await start($, on, { store: consented })
   await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
   await work($, 1)
   await w.clock.advance(10 * 60_000)
@@ -333,42 +344,57 @@ test('update_ok and update_failed follow the auto-update phases, with a code onl
   expect(clean('update_failed', { code: 'EACCES /Users/x' })).toEqual({})
 })
 
-// The holdback
+// Projects and pull requests
 
-test('holdback: 1 in 10 consenting real-work sessions in the 30 days after release, never otherwise', () => {
-  expect(isHoldback('yes', IN_WINDOW, 0.05)).toBe(true)
-  expect(isHoldback('yes', IN_WINDOW, 0.1)).toBe(false)
-  expect(isHoldback('yes', IN_WINDOW, 0.5)).toBe(false)
-  expect(isHoldback('no', IN_WINDOW, 0)).toBe(false)
-  expect(isHoldback(null, IN_WINDOW, 0)).toBe(false)
-  expect(isHoldback('yes', AFTER_WINDOW, 0)).toBe(false)
-  expect(isHoldback('yes', RELEASE_AT - 1, 0)).toBe(false)
-  let n = 0
-  for (let k = 0; k < 10_000; k++) if (isHoldback('yes', IN_WINDOW, Math.random())) n += 1
-  expect(n > 800 && n < 1200).toBe(true)
-})
-
-test('holdback: the decision is written at the session start and sent with session_real_work', async ($, on) => {
+test('project_tracked: once per project name in a session, as a scrambled id, never for the placeholder', async ($, on) => {
   const w = await start($, on, { store: consented })
+  await tool($, 'mcp__ccd_turn__update_plan', { items: [{ content: 'Look around', status: 'in_progress' }] })
   await work($, 5)
-  const value = holdbackOf(w)
-  expect(typeof value).toBe('boolean')
+  await tool($, 'mcp__mission-status__update', { project: 'Checkout redesign', stage: 'build', phase: 0 })
+  await tool($, 'mcp__mission-status__update', { project: 'Checkout redesign', stage: 'build', phase: 1 })
+  await tool($, 'mcp__mission-status__update', { project: 'Search fix', stage: 'fix', phase: 0 })
+  await tool($, 'mcp__mission-status__update', { project: 'Checkout redesign', stage: 'build', phase: 2 })
   await minute(w)
-  expect(named(w, 'session_real_work')[0]?.properties.holdback).toBe(value ? 'yes' : 'no')
+  const ids = named(w, 'project_tracked').map(x => String(x.properties.project_id))
+  expect(ids.length).toBe(3)
+  for (const id of ids) expect(id).toMatch(HASH)
+  expect(ids[0]).toBe(ids[2])
+  expect(ids[0] === ids[1]).toBe(false)
+  // The secret is the install's own: the bare name does not give the id.
+  expect(ids[0] === (await hashOf('', 'project\nCheckout redesign'))).toBe(false)
+  expect(JSON.stringify(w.bodies).includes('Checkout')).toBe(false)
 })
 
-test('holdback: never on an install without consent', async ($, on) => {
-  const w = await start($, on, { now: IN_WINDOW })
-  await work($, 5)
-  expect(holdbackOf(w)).toBe(false)
+test('project_tracked: the same name gives the same id in the next session on the same install', async ($, on) => {
+  const w = await start($, on, { store: { ...consented, [SECRET_KEY]: 'a'.repeat(64) } })
+  await tool($, 'mcp__mission-status__update', { project: 'Checkout redesign', stage: 'build', phase: 0 })
+  await minute(w)
+  expect(named(w, 'project_tracked')[0]?.properties.project_id).toBe(await hashOf('a'.repeat(64), 'project\nCheckout redesign'))
 })
 
-test('holdback: never after the 30-day window', async ($, on) => {
-  const w = await start($, on, { store: consented, now: AFTER_WINDOW })
-  await work($, 5)
-  expect(holdbackOf(w)).toBe(false)
+test('project_tracked: nothing before consent', async ($, on) => {
+  const w = await start($, on)
+  await tool($, 'mcp__mission-status__update', { project: 'Checkout redesign', stage: 'build', phase: 0 })
   await minute(w)
-  expect(named(w, 'session_real_work')[0]?.properties.holdback).toBe('no')
+  expect(w.bodies.length).toBe(0)
+  expect(w.store.get(SECRET_KEY)).toBeUndefined()
+})
+
+test('pr_tracked: once per pull request the pane reads in a session, as a scrambled id', async ($, on) => {
+  const w = await start($, on, { store: consented, prs: { '41': pr(41), '42': pr(42) } })
+  await work($, 5)
+  await tool($, 'Bash', { command: 'gh pr create --fill', pr: 41 })
+  await w.clock.advance(2 * 60_000)
+  await tool($, 'Bash', { command: 'gh pr create --fill', pr: 41 })
+  await tool($, 'Bash', { command: 'gh pr create --fill', pr: 42 })
+  await w.clock.advance(2 * 60_000)
+  await minute(w)
+  const ids = named(w, 'pr_tracked').map(x => String(x.properties.pr_id))
+  expect(ids.length).toBe(2)
+  for (const id of ids) expect(id).toMatch(HASH)
+  expect(ids[0] === ids[1]).toBe(false)
+  const wire = JSON.stringify(w.bodies)
+  for (const secret of ['pull/4', 'Secret pull request', 'private-repo']) expect(wire.includes(secret)).toBe(false)
 })
 
 // Batching
@@ -403,7 +429,7 @@ test('batching: a failed send is dropped, never sent again, and never holds up a
 // Privacy
 
 // Fixed words every event may carry; anything else must be a whole number.
-const WORDS = new Set<string>(['mission-status', ...Object.values(EVENTS).flatMap(spec => Object.values(spec).flatMap(f => (f === 'count' ? [] : [...f])))])
+const WORDS = new Set<string>(['mission-status', ...Object.values(EVENTS).flatMap(spec => Object.values(spec).flatMap(f => (f === 'count' || f === 'hash' ? [] : [...f])))])
 const ID_OR_PATH = /[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}|[0-9a-f]{16,}|[A-Za-z0-9_-]{20,}|\/|\\|~|\.[a-z]{1,4}\b|@/i
 
 async function busySession($: any, on: any): Promise<World> {
@@ -440,7 +466,8 @@ test('privacy: no event field holds free text, an id or a path; only distinct_id
     const allowed = new Set([...Object.keys(COMMON), ...Object.keys(EVENTS[x.event] ?? {})])
     for (const [name, value] of Object.entries(x.properties)) {
       expect(allowed.has(name)).toBe(true)
-      if (typeof value === 'string') {
+      if (typeof value === 'string' && EVENTS[x.event]?.[name] === 'hash') expect(value).toMatch(HASH)
+      else if (typeof value === 'string') {
         expect(WORDS.has(value)).toBe(true)
         expect(ID_OR_PATH.test(value)).toBe(false)
       } else if (typeof value === 'number') expect(Number.isInteger(value) && value >= 0).toBe(true)
@@ -453,7 +480,9 @@ test('privacy: the free-text check itself catches text, ids and paths', () => {
   for (const bad of ['/Users/someone', SESSION_ID, ACCOUNT_ID, 'a.ts', 'person@example.com', 'C:\\repo', '~/x'])
     expect(ID_OR_PATH.test(bad) || !WORDS.has(bad)).toBe(true)
   for (const word of WORDS) expect(ID_OR_PATH.test(word)).toBe(false)
-  expect(clean('progress_ask', { progress: 'where are we', holdback: 'no', note: 'x' })).toEqual({ holdback: 'no' })
+  expect(clean('progress_ask', { progress: 'where are we', holdback: 'no', note: 'x' })).toEqual({})
+  expect(clean('project_tracked', { project_id: 'Checkout redesign' })).toEqual({})
+  expect(clean('pr_tracked', { pr_id: 'https://github.com/o/r/pull/1' })).toEqual({})
   expect(clean('made_up_event', { a: 1 })).toBeNull()
   expect(clean('render', { count: 1.5 })).toEqual({})
 })

@@ -5,9 +5,6 @@ import type { Activity, Count, Fresh, Git, Helper, Hypothesis, HypothesisState, 
 import { type Derived, type Facts, derive, itemKey, mergeItems, stageKey } from './machine'
 import { AUTO_OPEN_CALLS, CHECK_MS, checkLine, FIRST_REMINDER, TURN_TEXT, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, STALE_MS, STALE_STEPS, autoSummary, normalize } from './model'
 
-// The holdback (metrics.tsx decides it): a measurement session with no pane and no standing rule.
-const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
-
 export const PANE = 'progress'
 // The pane's one accent, the purple of the stage bar; the app's own accent is orange.
 export const ACCENT = '#8B7CF6'
@@ -127,12 +124,11 @@ export async function settle($: EngineInterface): Promise<boolean> {
   }
 }
 
-// The marker runs: traffic allowed, not a holdback session, and it has not stopped after failed calls. Where it does
+// The marker runs: traffic allowed, and it has not stopped after failed calls. Where it does
 // not run, the reminders and the held turn end stay, so the agent still keeps the pane current.
 export async function markerRuns($: EngineInterface): Promise<boolean> {
   try {
     if (await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')) return false
-    if (await read($, holdback)) return false
     return ((await read($, marks))?.fails ?? 0) < 3
   } catch {
     return false
@@ -244,8 +240,6 @@ export async function afterToolCall($: EngineInterface): Promise<string | null> 
     }
     return x
   })
-  // A holdback session gets no pane and no reminders.
-  if (await read($, holdback)) return null
   if (out.openAuto) {
     const steps = await read($, tasks)
     const built = autoSummary(steps, at)

@@ -9,7 +9,6 @@ const SECRET = 'SECRET-FILE-TEXT-42'
 
 type World = {
   env?: Record<string, string>
-  holdback?: boolean
   // The model's replies, one per call; 'timeout' answers aborted.
   replies: string[]
 }
@@ -35,10 +34,6 @@ async function boot($: any, on: any, w: World) {
     if (e.plugin === 'mission-status') stored[e.key] = v !== null && typeof v === 'object' && 'shape' in v && 'value' in v ? v.value : v
     return next(e)
   })
-  if (w.holdback === true)
-    on('state.get', async (_: unknown, e: { plugin: string; key: string }, next: (e: unknown) => unknown) =>
-      e.plugin === 'mission-status' && e.key === 'holdback' ? { value: { value: true, version: 1 } } : next(e),
-    )
   on('tool.register', () => ({ value: {} }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -128,12 +123,6 @@ test('a timeout changes no mark, and 3 failures in a row stop the marker and set
 test('no call with the traffic variable set', async ($, on) => {
   const w = await boot($, on, { env: { CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' }, replies: [DONE] })
   await w.check()
-  await w.check()
-  expect(w.asks.length).toBe(0)
-})
-
-test('no call in a holdback session', async ($, on) => {
-  const w = await boot($, on, { holdback: true, replies: [DONE] })
   await w.check()
   expect(w.asks.length).toBe(0)
 })

@@ -6,7 +6,6 @@ import type { Summary } from '../types'
 // hidden in the chat view: the pane already shows the progress. Shown still: a block with a question, and each turn's
 // final message. The stored transcript is unchanged, so the hidden text stays in the session's record.
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
-const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
 
 // Blocks hidden as narration, and blocks shown before the current turn began (the final messages of earlier turns, and
 // anything drawn between turns). A block in the second set is never hidden: drawn again in a later turn, it is not
@@ -79,7 +78,7 @@ export function registerQuiet(on: On): void {
     const text = String(e.props.text ?? '')
     if (e.props.isSummary === true || asks(text)) return next(e)
     const s = await read($, summary).catch(() => null)
-    if (s === null || (await read($, holdback).catch(() => false))) return next(e)
+    if (s === null) return next(e)
     await load($)
     const k = key(text)
     if (!narration.has(k)) {
