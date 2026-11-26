@@ -62,6 +62,8 @@ export type Fresh = {
   outstanding: number
   ignored: number
   turnEndAt?: number | null
+  // When the current turn began: the pane's stale line counts the agent's working time from here, never the person's.
+  turnStartAt?: number | null
   checkAt?: number
   // Tool calls in the current turn, and whether an agent update came in it.
   turnCalls?: number
@@ -105,7 +107,11 @@ declare module 'claude-code' {
       // Background jobs in flight (store.ts addJob, jobsAtTurnEnd, endJobs); the Watching strip shows them.
       jobs: Job[]
       // Ended watches the person opened again; every other ended watch shows folded to one line.
-      watchOpen: string[] }
+      watchOpen: string[]
+      // Ended watches the person removed from the Watches tab; they no longer show.
+      watchGone: string[]
+      // True once the person closed the progress pane; agent updates do not reopen it until /mission-status.
+      closedByPerson: boolean }
 
   }
 }

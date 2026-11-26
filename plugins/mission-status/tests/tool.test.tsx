@@ -2,7 +2,7 @@ import { expect, mock, test } from 'claude-code/testing'
 import { brokenRules, derive, type Facts, itemKey, itemRule, mergeItems, NO_FACTS, type NodeStatus, stageRule, timeOf } from '../hooks/machine'
 import { applyGoal, applyPlan, applyUpdate, goalOf, asTemplates, CAP_BYTES, CHECK_MS, FIRST_REMINDER, HOLD_TEXT, prRefsInTranscript, REMINDER, REMIND_MS, RULE, skillSteps, templatesLine, TURN_TEXT } from '../hooks/model'
 import { addJob, applyWakeup, jobsAtTurnEnd, settleRuns, stopJob } from '../hooks/store'
-import { applyNotifications, applyOutput, isWatchItem, spark, trendWord, watchRows } from '../hooks/watches'
+import { applyNotifications, applyOutput, isWatchItem, jobName, spark, trendWord, watchRows } from '../hooks/watches'
 import { type Item, type Summary, type Task } from '../types'
 
 // Each block below was one test file. The blocks keep their own helpers and state; one file runs in one child.
@@ -1216,3 +1216,11 @@ test('save: the first state the pane builds by itself and a skill runbook are sa
   expect((saved()?.runbooks ?? []).map(r => r.id)).toContain('skill-demo')
 })
 }
+
+test('a job with no description is named from what its command runs, not from its variable settings or paths', () => {
+  expect(jobName('S=/private/tmp/claude-501/-Users-x-worktrees-a; gh pr checks 53 --watch')).toBe('gh pr checks 53')
+  expect(jobName('W="/Users/x/Library/Application Support/N/wt"; S=/private/tm')).toBe('Background shell')
+  expect(jobName('cd "/Users/x/Application Support/wt" && S=/private/tmp/y && npm test 2>&1 | tee /tmp/l')).toBe('npm test')
+  expect(jobName('Watch CI checks')).toBe('Watch CI checks')
+  expect(jobName('S=/tmp/a; tail -f x', 'monitor')).toBe('tail x')
+})

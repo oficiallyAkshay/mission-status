@@ -49,6 +49,8 @@ export type Region = {
 export type HeaderState = {
   s: Derived['s']
   turnOpen: boolean
+  // The later of the agent's last update and the start of the running turn: stale time counts from here.
+  staleFrom: number
   t: number
   seen: number
   clock: number
@@ -62,7 +64,7 @@ export type HeaderState = {
 // The header: the title; the goal below.
 export function header($: EngineInterface, r: Region, h0: HeaderState) {
   const { Box, Text, Link, Button } = r
-  const { s, turnOpen, t, seen, clock, upd, auto, isDone, readFailed, askUpdate } = h0
+  const { s, turnOpen, staleFrom, t, seen, clock, upd, auto, isDone, readFailed, askUpdate } = h0
   return (
     <Box flexDirection="column" gap={1}>
       <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
@@ -71,8 +73,12 @@ export function header($: EngineInterface, r: Region, h0: HeaderState) {
         </Box>
         {/* How old the agent's last update is; it goes back to 0s with each update. */}
         <Box flexShrink={0}>
-          {/* Live while a turn runs; else how long ago the session last did anything the pane saw. */}
-          {turnOpen ? (
+          {/* One state in one place: out of date (the agent ignored two reminders) wins over Live, so the header never
+              says Live and out of date at once; else Live while a turn runs; else how long ago the session last did
+              anything the pane saw. */}
+          {s.mayBeOutOfDate === true ? (
+            <Text color="warning">May be out of date</Text>
+          ) : turnOpen ? (
             <Text color={ACCENT_TEXT}>Live</Text>
           ) : (
             <Text color={SUBTEXT}>{agoOf(t - Math.max(seen, s.at))}</Text>
@@ -87,7 +93,6 @@ export function header($: EngineInterface, r: Region, h0: HeaderState) {
       )}
       {s.goalLine !== null && <Text color={SUBTEXT}>{s.goalLine}</Text>}
       {/* Two notices, each only when it applies: the agent has not updated after two reminders; an update ran or failed. */}
-      {s.mayBeOutOfDate === true && <Text color="warning">May be out of date</Text>}
       {s.waitingForAgent === true && <Text color={SUBTEXT}>Waiting for the agent</Text>}
       {(() => {
         const line = updateText((upd ?? null) as never, clock)
@@ -102,10 +107,12 @@ export function header($: EngineInterface, r: Region, h0: HeaderState) {
           {auto === false && <Button key="auto-on" label="Turn on auto-update" onPress={() => void setAutoUpdate($, true)} />}
         </Box>
       )}
-      {/* No line when all is done: the folded cards already say it. Stale: amber is the only stale signal, with the age. */}
-      {!isDone && clock - s.at >= STALE_MS && (
+      {/* No line when all is done: the folded cards already say it. Stale means the agent worked STALE_MS with no
+          update: only while a turn runs, counted from the later of its last update and the turn's start. Between turns
+          the agent is idle and the time is the person's, so the state is not stale then. */}
+      {!isDone && turnOpen && clock - staleFrom >= STALE_MS && (
         <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
-          <Text color="warning" wrap="wrap">{`No update from the agent for ${age(s.at, clock)}.`}</Text>
+          <Text color="warning" wrap="wrap">{`No update from the agent for ${age(staleFrom, clock)} of work.`}</Text>
           <Button key="update-stale" label="Update" onPress={askUpdate} />
         </Box>
       )}
@@ -243,8 +250,8 @@ export type StageState = {
   watches: WatchRow[]
   watchOpen: string[]
   toggleWatch: (id: string) => Promise<unknown>
-  // Opens the Watches tab, where every watch shows.
-  seeAll: () => void
+  // Hides ended watches the person removed, on the Watches tab.
+  removeWatches: (ids: string[]) => Promise<unknown>
   hostKey: string | null
   stageState: (k: number) => 'done' | 'now' | 'next'
   stageTimeText: (k: number, st: NodeStatus) => string | null
@@ -334,12 +341,9 @@ export function foldedCard(r: Region, c: StageState, name: string, k: number, ga
   })
 }
 
-// The Progress tab: the tabs, the header, the stage bar, the symptom and cause, then the stage cards in order.
-// Watching: background work that waits for something, in a section of its own above Progress, so the stage
-// cards hold only the work. Each watch is its own card (the accent border while it runs): its badge, name, shape and
-// time, then what it found. A heavy line parts Watching from Progress. A watch that ends stays, marked complete or failed.
-// A divider: an empty bordered box, which the desktop draws as one hairline across the full width.
-const rule = (Box: Region['Box'], key: string) => <Box key={key} width="100%" borderStyle="single" borderColor="subtle" borderDimColor />
+// Watching: background work that waits for something, only on the Watches tab, so the Progress tab holds only the
+// work. Each watch is its own card (the accent border while it runs): its badge, name, shape and time, then what it
+// found. A watch that ends stays, marked complete or failed, until the person removes it.
 export const sectionHead = (r: Region, key: string, title: string, count: string | null, action?: { label: string; onPress: () => void }) => {
   const { Box, Text, B, Button } = r
   return (
@@ -352,8 +356,8 @@ export const sectionHead = (r: Region, key: string, title: string, count: string
   )
 }
 function watchBlock(r: Region, c: StageState, w: WatchRow, folded: boolean): RenderChildren {
-  const { Text, B, svg } = r
-  const { t, badgeFor, toggleWatch } = c
+  const { Text, B, svg, Button } = r
+  const { t, badgeFor, toggleWatch, removeWatches } = c
   const ended = w.endedAt !== null
   const st = ended ? (w.outcome === 'failed' ? 'failed' : 'done') : 'running'
   const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -378,12 +382,15 @@ function watchBlock(r: Region, c: StageState, w: WatchRow, folded: boolean): Ren
     control: ended ? B.Control({ id: `watch-${w.id}`, open: !folded, onPress: () => void toggleWatch(w.id) }) : undefined,
     badge: svg(badgeFor(st as NodeStatus), `${w.source === 'helper' ? 'Helper ' : ''}${w.name}: ${ended ? meta.toLowerCase() : 'running'}`, 16, `watch-badge-${w.id}`, undefined, 16) ?? <Text>{ended ? '✓' : '●'}</Text>,
     title: <Text weight="semibold" dimColor={ended} wrap="wrap">{cap(w.name)}</Text>,
-    meta: B.Time({ key: `watch-time-${w.id}`, color: w.outcome === 'failed' ? 'error' : undefined, children: meta }),
+    meta: [
+      B.Time({ key: `watch-time-${w.id}`, color: w.outcome === 'failed' ? 'error' : undefined, children: meta }),
+      // An ended watch can be removed; a running one cannot.
+      ended && <Button key={`watch-remove-${w.id}`} label="Remove" plain dimColor onPress={() => void removeWatches([w.id])} />,
+    ],
     body: folded ? undefined : lines.map((x, k) => B.Note({ key: `watch-${w.id}-l${k}`, children: x })),
   })
 }
-// The newest ended first after the running ones (watches.ts order); Progress shows the first few, the Watches tab all.
-export const PROGRESS_WATCHES = 3
+// The newest ended first after the running ones (watches.ts order). Watches show only on the Watches tab.
 const countOf = (rows: readonly WatchRow[]) => {
   const live = rows.filter(w => w.endedAt === null).length
   return live === rows.length ? `${live} running` : `${live} running · ${rows.length - live} ended`
@@ -396,38 +403,25 @@ function watchCards(r: Region, c: StageState, rows: readonly WatchRow[]): Render
     return B.Card({ id: `watch-card-${w.id}`, active: w.endedAt === null, flat: folded, children: watchBlock(r, c, w, folded) })
   })
 }
-// On Progress: at most PROGRESS_WATCHES cards, See all beside the heading, then a hairline and the Progress heading.
-export function watchSection(r: Region, c: StageState): RenderChildren {
-  const { Box } = r
-  const rows = c.watches
-  if (rows.length === 0) return null
-  return (
-    <Box key="watching" width="100%" flexDirection="column" gap={1}>
-      {sectionHead(r, 'watching', 'Watching (Beta)', countOf(rows), { label: rows.length > PROGRESS_WATCHES ? `See all ${rows.length}` : 'See all', onPress: c.seeAll })}
-      {watchCards(r, c, rows.slice(0, PROGRESS_WATCHES))}
-      {rule(Box, 'watch-end')}
-      {sectionHead(r, 'progress', 'Progress', null)}
-    </Box>
-  )
-}
 // The Watches tab: every watch, running first, then the ended ones newest first.
 export function watchesTab(r: Region, c: StageState) {
   const { Box, Text } = r
   const rows = c.watches
+  const endedIds = rows.filter(w => w.endedAt !== null).map(w => w.id)
   return (
     <Box flexDirection="column" alignItems="stretch" gap={2} paddingBottom={1}>
       {r.tabRow}
       <Box width="100%" flexDirection="column" gap={1}>
-        {sectionHead(r, 'watches-all', 'Watching (Beta)', rows.length === 0 ? null : countOf(rows))}
+        {sectionHead(r, 'watches-all', 'Watching (Beta)', rows.length === 0 ? null : countOf(rows), endedIds.length > 0 ? { label: 'Remove ended', onPress: () => void c.removeWatches(endedIds) } : undefined)}
         {rows.length === 0 ? <Text color="subtle">No watches in this session.</Text> : watchCards(r, c, rows)}
       </Box>
     </Box>
   )
 }
 
-export function progressTab(r: Region, c: StageState, head: RenderChildren) {
+export function progressTab(r: Region, c: StageState) {
   const { Box, Text, B, svg, hasSvg, tabRow } = r
-  const { s, allItems, opened, measures, isDone, machine, stageState } = c
+  const { s, allItems, opened, measures, machine, stageState } = c
   const isMet = (x: Count) => machine.gateMet(x)
   const small = (text: string, color?: string) => (
     <Text dimColor={color === undefined} color={color}>
@@ -440,29 +434,10 @@ export function progressTab(r: Region, c: StageState, head: RenderChildren) {
   const confirmed = s.hypotheses.find(x => x.state === 'confirmed')
   return (
     <Box flexDirection="column" alignItems="stretch" gap={2} paddingBottom={1}>
+      {/* The header and the tabs come first (view.tsx tabRow); the tabs stand where the stage bar was. */}
       {tabRow}
-      {head}
 
-      {watchSection(r, c)}
 
-      {/* The stage bar: one chip per stage in a row that wraps onto more lines when the pane is narrow. The layout
-          sizes it, so nothing is measured or guessed: every stage always shows, whole, in order. */}
-      {/* The stage bar: one line, always. When the pane is narrow, the chips other than the current one narrow and
-          cut their names; the bar never wraps onto a second line. */}
-      {B.ChipRow({
-        id: 'stage-bar',
-        oneLine: true,
-        children: s.phases.map((name, k) => {
-          const st = stageState(k)
-          const isCurrent = !isDone && k === s.phase
-          return B.Chip({
-            id: `stage-chip-${k}`,
-            label: st === 'done' && !isCurrent ? `✓ ${name}` : name,
-            tone: isCurrent ? 'on' : st === 'done' ? 'done' : 'quiet',
-            shrink: !isCurrent,
-          })
-        }),
-      })}
 
       {(s.stage === 'fix' || s.stage === 'cause') && s.symptom !== null && (
         <Box flexDirection="column" gap={1}>

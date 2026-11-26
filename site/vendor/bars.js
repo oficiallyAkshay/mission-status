@@ -33,9 +33,13 @@ function trackSvg(input) {
   const sum = weights.reduce((a, b) => a + b, 0);
   const at = (k) => weights.slice(0, k).reduce((a, b) => a + b, 0) / sum;
   const span = (k) => (weights[k] ?? 0) / sum;
-  const fill = isDone || done >= n ? 1 : done < 0 ? 0 : at(seg) + span(seg) / 2;
   const label = isDone ? doneLabel : isOut ? "" : current ?? "";
-  const color = isDone ? GREEN : ACCENT;
+  const isPastAt = (k) => isDone ? true : checks !== void 0 ? checks[k] === true : isOut ? done >= n : k < seg;
+  let fills = "";
+  for (let k = 0; k < n; k++) {
+    if (!isPastAt(k)) continue;
+    fills += `<svg x="${pct(at(k))}" width="${pct(span(k))}" height="${H}"><rect width="100%" height="${H}" fill="${GREEN}" fill-opacity=".22"/>${dither(`${id}d${k}`, "100%", H, GREEN)}</svg>`;
+  }
   let marks = "";
   for (let k = 0; k < n; k++) {
     if (!isDone && !isOut && k === seg) continue;
@@ -44,12 +48,12 @@ function trackSvg(input) {
     if (k > 0 && (isOut || k !== seg + 1)) marks += `<svg x="${pct(at(k))}" overflow="visible"><rect x="-.5" y="9" width="1" height="${H - 18}" class="dv"/></svg>`;
     if (name === "") continue;
     const isPast = checks !== void 0 ? checks[k] === true : k < seg || isDone;
-    marks += `<text x="${pct(at(k) + span(k) / 2)}" y="${H / 2 + 4}" text-anchor="middle" style="font:500 11px ${FONT}" class="${isPast ? "np" : "nf"}">${esc(isPast ? `\u2713 ${name}` : name)}</text>`;
+    marks += `<svg x="${pct(at(k))}" width="${pct(span(k))}" height="${H}"><text x="50%" y="${H / 2 + 4}" text-anchor="middle" style="font:500 11px ${FONT}" class="${isPast ? "np" : "nf"}">${esc(isPast ? `\u2713 ${name}` : name)}</text></svg>`;
   }
   const nameStyle = `<style>.np{fill:#fff;fill-opacity:.78}.nf{fill:#A8A69E;fill-opacity:.85}.dv{fill:#fff;fill-opacity:.12}@media (prefers-color-scheme:light){.np{fill:${LIGHT.ink};fill-opacity:.85}.nf{fill:${LIGHT.grey};fill-opacity:1}.dv{fill:#000;fill-opacity:.14}}</style>`;
-  const pill = `<svg x="${pct(at(seg))}" width="${pct(span(seg))}" height="${H}"><defs><clipPath id="${id}p"><rect width="100%" height="${H}" rx="6"/></clipPath></defs><g clip-path="url(#${id}p)"><rect width="100%" height="${H}" fill="${isDone ? "#3E8E57" : PILL}"/></g><text x="50%" y="${H / 2 + 4}" text-anchor="middle" style="font:600 12px ${FONT}" fill="#fff">${esc(label)}</text></svg>`;
+  const pill = `<svg x="${pct(at(seg))}" width="${pct(span(seg))}" height="${H}"><rect width="100%" height="${H}" fill="${isDone ? "#3E8E57" : PILL}"/><text x="50%" y="${H / 2 + 4}" text-anchor="middle" style="font:600 12px ${FONT}" fill="#fff">${esc(label)}</text></svg>`;
   const shimmer = `<defs><pattern id="${id}st" width="15" height="9" patternUnits="userSpaceOnUse"><rect x="3" width="2" height="2" fill="#fff"/><rect x="9" y="3" width="2" height="2" fill="#fff"/><rect y="6" width="2" height="2" fill="#fff"/><rect x="12" y="6" width="2" height="2" fill="#fff"/></pattern></defs>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">${shimmer}${nameStyle}<defs><clipPath id="${id}k"><rect width="100%" height="${H}" rx="6"/></clipPath></defs><g clip-path="url(#${id}k)"><rect width="100%" height="${H}" fill="#808080" fill-opacity=".16"/><rect width="${pct(fill)}" height="${H}" fill="${color}" fill-opacity=".22"/>${dither(`${id}d`, pct(fill), H, color)}${marks}</g>${label === "" ? "" : pill}` + tips.map((tip, k) => tip === "" ? "" : `<rect x="${pct(at(k))}" width="${pct(span(k))}" height="${H}" fill="#000" fill-opacity="0"><title>${esc(tip)}</title></rect>`).join("") + `</svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">${shimmer}${nameStyle}<defs><clipPath id="${id}k"><rect width="100%" height="${H}" rx="6"/></clipPath></defs><g clip-path="url(#${id}k)"><rect width="100%" height="${H}" fill="#808080" fill-opacity=".16"/>${fills}${marks}${label === "" ? "" : pill}</g>` + tips.map((tip, k) => tip === "" ? "" : `<rect x="${pct(at(k))}" width="${pct(span(k))}" height="${H}" fill="#000" fill-opacity="0"><title>${esc(tip)}</title></rect>`).join("") + `</svg>`;
 }
 function phaseBegin(now, durMs, offsetMs = 0) {
   const at = ((now - offsetMs) % durMs + durMs) % durMs;

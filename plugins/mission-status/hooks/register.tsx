@@ -1,4 +1,4 @@
-import { openPane } from './surface'
+import { openPane, openPaneAuto } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { Job, Summary, Task, Wakeup } from '../types'
@@ -16,6 +16,8 @@ import { registerMarker } from './marker'
 import { registerQuiet } from './quiet'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
+// True once the person closed the progress pane (surface.ts openPaneAuto); /mission-status clears it.
+const closedByPerson = atom({ plugin: 'mission-status', key: 'closedByPerson' } as const, false)
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 // Wakeups the session scheduled: the Watching strip shows each until it is due.
@@ -168,7 +170,7 @@ export const register: Register = on => {
     await restorePane($).catch(() => false)
     if ((await read($, summary)) !== null) {
       await paneSeen($).catch(() => undefined)
-      void openPane($, { id: PANE, title: TITLE })
+      void openPaneAuto($, { id: PANE, title: TITLE })
     }
     return next(e)
   })
@@ -227,6 +229,8 @@ export const register: Register = on => {
   on('turn.start', { turnId: /(?:)/ }, async ($, e, next) => {
     if (e.agentId === undefined) {
       await update($, turnOpen, () => true).catch(() => undefined)
+      // A turn with no prompt (a wakeup, a notification) starts the stale count too.
+      await noteTurnStart($).catch(() => undefined)
       void settle($)
     }
     return next(e)
@@ -357,7 +361,7 @@ export const register: Register = on => {
         })
         if (made !== null) await update($, tasks, () => made as Task[])
         await settle($)
-        void openPane($, { id: PANE, title: TITLE })
+        void openPaneAuto($, { id: PANE, title: TITLE })
       }
     } catch {}
     return next(e)
@@ -380,7 +384,14 @@ export const register: Register = on => {
     }
   })
 
+  // The person closes the progress pane: it stays closed until they open it again with /mission-status.
+  on('ui.close', { id: PANE }, async ($, e, next) => {
+    if (e.origin.kind === 'person') await update($, closedByPerson, () => true).catch(() => undefined)
+    return next(e)
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+
   on('command.run', { command: 'mission-status' }, async $ => {
+    await update($, closedByPerson, () => false).catch(() => undefined)
     if (!(await openPane($, { id: PANE, title: TITLE }))) return { text: 'The Mission status pane opens in the Claude desktop app; no app window is attached here.' }
     await paneSeen($).catch(() => undefined)
     void poll($)
@@ -424,7 +435,7 @@ export const register: Register = on => {
     await agentUpdated($)
     await tick($)
     // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
-    await openPane($, { id: PANE, title: TITLE })
+    await openPaneAuto($, { id: PANE, title: TITLE })
     await paneSeen($).catch(() => undefined)
     // Each agent update reads GitHub at once: pull requests, CI and merges.
     void poll($, true)

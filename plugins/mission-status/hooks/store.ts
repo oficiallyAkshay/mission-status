@@ -1,4 +1,4 @@
-import { openPane } from './surface'
+import { openPaneAuto } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { Fresh, Item, Job, Live, Marks, Runs, Summary, Task, Wakeup } from '../types'
@@ -318,7 +318,7 @@ export async function afterToolCall($: EngineInterface): Promise<string | null> 
     if (done.wrote) {
       await update($, tasks, () => built.steps)
       await settle($)
-      await openPane($, { id: PANE, title: TITLE })
+      await openPaneAuto($, { id: PANE, title: TITLE })
     }
   }
   await markOutOfDate($, f)
@@ -373,7 +373,7 @@ export async function noteTurnEnd($: EngineInterface): Promise<void> {
 export async function noteTurnStart($: EngineInterface): Promise<void> {
   const at = await nowOf($)
   await update($, fresh, raw => {
-    const x = { ...FRESH0, ...raw }
+    const x = { ...FRESH0, ...raw, turnStartAt: at }
     if (typeof x.turnEndAt !== 'number') return x
     return { ...x, windowFrom: x.windowFrom === 0 ? 0 : x.windowFrom + Math.max(0, at - x.turnEndAt), turnEndAt: null }
   })
