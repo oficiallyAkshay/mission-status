@@ -1,13 +1,13 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, RenderChildren, RenderInput, SvgProps } from 'claude-code'
-import type { Count, Item, ItemStatus, Live, PrRecord, Runs } from '../types'
+import type { Count, Item, ItemStatus, Live, PrRecord, Runs, Wakeup } from '../types'
 import { prIconSvg, badgeSvg, failedBadgeSvg, needsBadgeSvg, waitsLineSvg } from './bars'
-import { age, findRef, workOrder } from './model'
+import { findRef, workOrder } from './model'
 import { deriveNow } from './store'
 import { type NodeStatus, type Timing, itemKey, stageKey, timeOf } from './machine'
 import { openDoc } from './doc'
-import { blocks, durationOf, CHEV, SPACE, SUBTEXT, ACCENT_TEXT } from './blocks'
+import { blocks, durationOf, SPACE, SUBTEXT, ACCENT_TEXT } from './blocks'
 import { type Region, type StageState, agoOf, STALE_MS, isWebUrl, header, prsTab, progressTab, runbookTab } from './regions'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
@@ -16,6 +16,7 @@ const now = atom({ plugin: 'mission-status', key: 'now' } as const, 0)
 const open = atom({ plugin: 'mission-status', key: 'open' } as const, null as string[] | null)
 const runsAtom = atom({ plugin: 'mission-status', key: 'runs' } as const, {} as Runs)
 const seenAtom = atom({ plugin: 'mission-status', key: 'seenAt' } as const, 0)
+const wakeupsAtom = atom({ plugin: 'mission-status', key: 'wakeups' } as const, [] as Wakeup[])
 // The pane's open tab: null is Progress, else a runbook's id.
 const tabAtom = atom({ plugin: 'mission-status', key: 'tab' } as const, null as string | null)
 // The open tab inside each pull request card, by its reference.
@@ -147,6 +148,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     // What the pane reads itself.
     const helpersAll = l?.helpers ?? []
     const running = helpersAll.filter(x => x.status === 'running')
+    // Wakeups the session scheduled that are not yet due: they join the Watching strip.
+    const due = ((await safe(read($, wakeupsAtom), [])) ?? []).filter(w => w.due > t)
     // The session's pull requests: the newest 20 it made, each from its one record.
     const sessionPrs = ((await safe(read($, prRefsAtom), [])) ?? [])
       .slice(-20)
@@ -255,7 +258,6 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                 : null
           const word = state === 'done' ? 'done' : state === 'needs' ? 'needs you' : state === 'now' ? 'in progress' : state === 'failed' ? 'failed' : 'not started'
           const mine = s.links.filter(lk => lk.item !== null && findRef(allItems, lk.item, x.phase) === x)
-          const helpers = Svg !== undefined && hostKey !== null && itemKey(x) === hostKey ? running : []
           const prNo = x.pr != null ? `#${String(x.pr).split('#').pop()}` : null
           return {
             id: key,
@@ -298,9 +300,6 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                     j === x.step && state === 'now' ? <Text key={`${key}-step-${j}`} weight="bold" color="text">{name}</Text> : name,
                   ]),
                 }),
-              // The helpers the session runs now sit under the item in progress, as its children.
-              ...helpers.slice(0, 6).map(helper => B.Helper({ id: helper.id, description: helper.description, model: helper.model, time: age(helper.startTime, t), paddingRight: CHEV })),
-              helpers.length > 6 && B.Caption({ key: `${key}-more`, children: `${helpers.length - 6} more helpers run.` }),
               mine.length > 0 && linkRow(mine, `links-${key}`),
               // Children start one space below the item's last line, the same space as between siblings.
               isOpen && depth < 5 && <Box key={`${key}-kids`} width="100%" marginTop={SPACE}>{itemCards(kids, depth + 1)}</Box>,
@@ -313,7 +312,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const hostKey = facts.hostKey
     // A root is an item no item holds in the machine's tree, so an item in a parent loop still shows.
     const isRoot = (x: Item) => !allItems.some(y => machine.kids(y).includes(x))
-    const stage: StageState = { s, machine, allItems, opened, measures, isDone, t, running, hostKey, stageState, stageTimeText, badgeFor, needsWord, toggle, itemCards, isRoot }
+    const stage: StageState = { s, machine, allItems, opened, measures, isDone, t, running, due, hostKey, stageState, stageTimeText, badgeFor, needsWord, toggle, itemCards, isRoot }
 
     // Tabs: Progress, then one tab for each runbook the session follows. A press switches the view.
     const runbooks = s.runbooks ?? []

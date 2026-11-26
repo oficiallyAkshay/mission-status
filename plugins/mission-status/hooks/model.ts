@@ -39,7 +39,8 @@ export function applyPlan(list: Task[], args: Record<string, unknown>, phase: nu
         const doneAt = status === 'done' ? (was?.status === 'done' ? (was.doneAt ?? Date.now()) : Date.now()) : null
         // A step that starts now goes to the stage that runs now, as advance and start move it.
         const moved = status === 'now' && was !== undefined && was.status !== 'now'
-        return { name, status, phase: moved ? phase : (was?.phase ?? phase), since, doneAt }
+        // When the step first appeared: the pane places it among the agent's items by this time.
+        return { name, status, phase: moved ? phase : (was?.phase ?? phase), since, doneAt, seenAt: was?.seenAt ?? Date.now() }
       })
       .filter(x => x.name !== '')
   }
@@ -467,6 +468,9 @@ export const RULE =
   '# Mission status pane\nKeep the Mission status pane current with mcp__mission-status__update at every meaningful change. ' +
   'At each update, look again at the stages: keep a template only while it fits the work, and send new stages when the work changes. ' +
   'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those. ' +
+  'Each task-list step is already an item: never send an item that repeats one under another name; to add a note or a pull request to a step, send its item with taskStep set to the step\'s exact text. ' +
+  'When the person sets a goal with /goal, the pane shows it as the goal line by itself: send a project name and stages that fit it. ' +
+  'Background watches (a background shell, a Monitor, a scheduled wakeup, a helper) show in the pane\'s own Watching strip: never send an item for watching or waiting on them. ' +
   'The pane has four levels: a card is one stage (phases); a step is an item in a card; a sub-step is an item under a step (its parent); ' +
   'sub-sub-steps are one line under a sub-step (its steps; stepsParallel when they run at the same time). ' +
   'Give each step a stable id, and send small step changes as patch operations. Never name a step as its card: a step is work inside the card. ' +
@@ -854,6 +858,24 @@ export function autoSummary(steps: Task[], at: number, project = AUTO_PROJECT): 
   }
 }
 
+// The goal a /goal prompt sets: the text after the command, or null for none or for /goal clear.
+export function goalOf(text: string, command?: string): string | null {
+  const isGoal = String(command ?? '').replace(/^\//, '') === 'goal' || /^\s*\/goal(\s|$)/.test(text)
+  if (!isGoal) return null
+  const goal = text.replace(/^\s*\/goal\b/, '').trim()
+  return goal === '' || /^clear$/i.test(goal) ? null : clip(goal, 300)
+}
+
+// A /goal starts the pane with that goal, or sets the goal line of the pane that runs; stages and items stay.
+export function applyGoal(stored: Summary, goal: string, steps: Task[], at: number): { summary: NonNullable<Summary>; steps: Task[] | null } {
+  const old = normalize(stored)
+  if (old === null) {
+    const built = autoSummary(steps, at, cap(clip(goal, 60)))
+    return { summary: { ...built.summary, goalLine: goal }, steps: built.steps }
+  }
+  return { summary: { ...old, goalLine: goal, at, version: (old.version ?? 0) + 1 } as NonNullable<Summary>, steps: null }
+}
+
 // How many steps a task-list call started: steps that are now in progress and were not before.
 export function stepsStarted(before: Task[], after: Task[]): number {
   return after.filter(x => x.status === 'now' && before.find(y => y.name === x.name)?.status !== 'now').length
@@ -904,7 +926,9 @@ export function applyUpdate(old: Summary, args: Record<string, unknown>, at: num
       // changes. A merged pull request closes an item only when the agent has not named it since the merge.
       const named = Array.isArray(args.items) || patched.has(x.id ?? idOf(x.name))
       const touchedAt = named ? at : (was?.touchedAt ?? null)
-      return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null, doneAt, touchedAt }
+      // When the item first appeared: task-list steps are placed among the items by this time.
+      const seenAt = was?.seenAt ?? (was === undefined ? at : null)
+      return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null, doneAt, touchedAt, seenAt }
     })
   // An update that leaves waitingOn out keeps the wait; null clears it.
   const waitingRaw = args.waitingOn === undefined ? (old?.waitingOn ?? null) : str(args.waitingOn)

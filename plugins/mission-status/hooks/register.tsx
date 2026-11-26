@@ -1,10 +1,10 @@
 import { openPane } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { Summary, Task } from '../types'
-import { RULE, UPDATE_TOOL, CAP_BYTES, applyPlan, applyUpdate, argsOf, bytesOf, checkUpdate, idOf, normalize, parentLoops, refusalOf, stepsStarted, PR_MAKERS, prRefsIn, prRefsInLines, branchesIn, unionRefs, byteLength, skillSteps, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
+import type { Summary, Task, Wakeup } from '../types'
+import { RULE, UPDATE_TOOL, applyGoal, goalOf, CAP_BYTES, applyPlan, applyUpdate, argsOf, bytesOf, checkUpdate, idOf, normalize, parentLoops, refusalOf, stepsStarted, PR_MAKERS, prRefsIn, prRefsInLines, branchesIn, unionRefs, byteLength, skillSteps, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
 import { paneSeen, poll } from './readers'
-import { CLOCK_MS, PANE, savedKey, TICK_MS, TITLE, afterToolCall, agentUpdated, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, settle, heldReasons, noteEvent, tick, tickIfTimer } from './store'
+import { CLOCK_MS, PANE, savedKey, TICK_MS, TITLE, afterToolCall, agentUpdated, applyWakeup, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, settle, heldReasons, noteEvent, tick, tickIfTimer } from './store'
 import { renderPane } from './view'
 import { UPDATE_SCHEMA } from './update-schema'
 import { registerMetrics } from './metrics'
@@ -17,6 +17,8 @@ import { registerQuiet } from './quiet'
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
+// Wakeups the session scheduled: the Watching strip shows each until it is due.
+const wakeups = atom({ plugin: 'mission-status', key: 'wakeups' } as const, [] as Wakeup[])
 // The live facts the state machine reads (store.ts declares the same keys).
 const turnOpen = atom({ plugin: 'mission-status', key: 'turnOpen' } as const, false as boolean)
 // Background work (a shell job, a subagent, a workflow) still in flight when the last turn ended: the work goes on.
@@ -261,6 +263,16 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
+  // A wakeup the session schedules shows in the Watching strip until it is due.
+  on('tool.call', { tool: 'ScheduleWakeup' }, async ($, e, next) => {
+    try {
+      const args = e as unknown as Record<string, unknown>
+      await update($, wakeups, list => applyWakeup(list ?? [], args, Date.now()))
+      void noteEvent($)
+    } catch {}
+    return next(e)
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+
   // After each context compaction the standing rule goes back into the agent's context.
   on('classic.SessionStart', async ($, e, next) => {
     const result = await next(e)
@@ -291,6 +303,23 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     await noteTurnStart($).catch(() => undefined)
+    // A /goal starts the pane with that goal, or sets the goal line of the one that runs.
+    try {
+      const ev = e as unknown as { text?: unknown; command?: unknown }
+      const goal = goalOf(String(ev.text ?? ''), typeof ev.command === 'string' ? ev.command : undefined)
+      if (goal !== null && !(await read($, headless))) {
+        const steps = await read($, tasks)
+        let made: Task[] | null = null
+        await update($, summary, stored => {
+          const out = applyGoal(stored, goal, steps ?? [], Date.now())
+          made = out.steps
+          return out.summary
+        })
+        if (made !== null) await update($, tasks, () => made as Task[])
+        await settle($)
+        void openPane($, { id: PANE, title: TITLE })
+      }
+    } catch {}
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 

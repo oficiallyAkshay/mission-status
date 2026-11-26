@@ -558,12 +558,13 @@ test('PRs tab: a pull request whose checks run shows CI with its time so far on 
   await ui.unmount()
 })
 
-test('running helpers show under the item in progress, as its children', async ($, on) => {
+test('running helpers show in the Watching strip above the stage cards, not inside an item', async ($, on) => {
   await start($, on, [{ id: 'h1', description: 'reader taste', status: 'running', taskStatus: 'running', model: 'haiku', startTime: Date.now() }])
   await send($, { project: 'P', phases: ['Plan', 'Close out'], phase: 1, items: [{ phase: 1, name: 'Deep review', status: 'now' }, { phase: 1, name: 'Merge wait', status: 'next' }] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const order = (await ui.findAll({ type: 'Svg' })).map(x => String((x as any).props?.alt ?? '')).filter(a => /^(Deep review|Merge wait): |^Helper /.test(a))
-  expect(order).toEqual(['Deep review: in progress', 'Helper reader taste: running', 'Merge wait: not started'])
+  expect(order).toEqual(['Helper reader taste: running', 'Deep review: in progress', 'Merge wait: not started'])
+  expect(await text(ui, /^Watching · 1$/)).toBeTruthy()
   await ui.unmount()
 })
 
