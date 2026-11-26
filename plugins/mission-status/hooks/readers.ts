@@ -15,6 +15,8 @@ const nowAtom = atom({ plugin: 'mission-status', key: 'now' } as const, 0)
 // again. A rate-limited reply stops every GitHub read for a while:
 // 60 s after one, 120 s after two, and so on, up to 10 minutes.
 export const PR_MS = 60_000
+// A pull request whose CI runs is read this often, so its card shows the CI live.
+export const CI_MS = 15_000
 export const GH_MAX_MS = 10 * 60_000
 // The pane counts as open when it was drawn within this long.
 export const PANE_OPEN_MS = 30_000
@@ -99,7 +101,14 @@ async function syncRepo($: EngineInterface): Promise<Summary> {
 export const ciNamed = (ci: Record<string, ItemCi>, refs: string[]): Record<string, ItemCi> => Object.fromEntries(Object.entries(ci).filter(([ref]) => refs.includes(ref)))
 
 // The one read of a pull request: every field the item chip, the PRs tab and the Deploy count use.
-const PR_FIELDS = 'number,title,url,state,isDraft,mergeStateStatus,statusCheckRollup,mergedAt,headRefName,body,commits'
+const PR_FIELDS = 'number,title,url,state,isDraft,mergeStateStatus,statusCheckRollup,mergedAt,headRefName,body,commits,additions,deletions,changedFiles,reviewDecision,baseRefName,createdAt'
+
+// A number or a time from a gh reply; null when gh gave none (GitHub writes 0001-01-01 for a time not set).
+const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null)
+const when = (v: unknown): number | null => {
+  const t = typeof v === 'string' && !v.startsWith('0001') ? Date.parse(v) : NaN
+  return Number.isFinite(t) ? t : null
+}
 
 // One pull request's record from its gh reply: merged, closed, a conflict, a draft, or open.
 export function prRecordOf(ref: string, o: Record<string, unknown>, at: number): PrRecord {
@@ -123,14 +132,23 @@ export function prRecordOf(ref: string, o: Record<string, unknown>, at: number):
     // prompt's version is in the key, so a new prompt writes each summary again once.
     summaryKey: keyOf(`${SUMMARY_V}\n${String(o.title ?? '')}\n${typeof o.body === 'string' ? o.body : ''}`),
     v: REC_V,
+    additions: num(o.additions),
+    deletions: num(o.deletions),
+    files: num(o.changedFiles),
+    review: o.reviewDecision === 'APPROVED' ? 'approved' : o.reviewDecision === 'CHANGES_REQUESTED' ? 'changes' : o.reviewDecision === 'REVIEW_REQUIRED' ? 'required' : null,
+    base: typeof o.baseRefName === 'string' ? o.baseRefName : null,
+    openedAt: when(o.createdAt),
     // The newest 10 commits, newest first, and each check by name with its state, for the card's tabs.
     commits: (Array.isArray(o.commits) ? (o.commits as Record<string, unknown>[]) : [])
-      .map(x => ({ sha: String(x.oid ?? '').slice(0, 7), title: String(x.messageHeadline ?? '') }))
+      .map(x => ({ sha: String(x.oid ?? '').slice(0, 7), title: String(x.messageHeadline ?? ''), at: when(x.committedDate) }))
       .reverse()
       .slice(0, 10),
     checks: (Array.isArray(o.statusCheckRollup) ? (o.statusCheckRollup as Record<string, unknown>[]) : []).map(x => ({
       name: String(x.name ?? x.context ?? 'check'),
       state: ciOf([x]).state,
+      // How long the check ran, once it ended.
+      since: when(x.startedAt),
+      ms: when(x.startedAt) !== null && when(x.completedAt) !== null ? Math.max(0, (when(x.completedAt) as number) - (when(x.startedAt) as number)) : null,
     })),
   }
 }
@@ -166,7 +184,8 @@ export const itemCiOf = (r: PrRecord): ItemCi => ({ state: r.ci, start: r.ciStar
 // A merged or closed pull request does not change again: it is not read again.
 // The record's shape version: a record from an older version is read once more, even when merged or closed, so it gains
 // the fields added since (summary, commits, checks).
-export const REC_V = 2
+// 3: the card's facts (lines, files, review, base, opened time, commit times, check times).
+export const REC_V = 3
 export const prFinal = (r: PrRecord | undefined) => r !== undefined && (r.v ?? 0) >= REC_V && (r.state === 'merged' || r.state === 'closed' || r.mergedAt !== null)
 
 // The CI of one pull request: running while any check runs, else failing or passing, with the first start and the
@@ -279,7 +298,8 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
   const keys = [...new Set([...made, ...itemRefs.map(keyOf)])]
   const prev = await read($, live).catch(() => null)
   const before = prev?.prRecords ?? {}
-  const due = limited ? [] : keys.filter(k => !prFinal(before[k]) && t - (tried.get(k) ?? -Infinity) >= PR_MS)
+  const gap = (k: string) => (before[k]?.ci === 'running' ? CI_MS : PR_MS)
+  const due = limited ? [] : keys.filter(k => !prFinal(before[k]) && t - (tried.get(k) ?? -Infinity) >= gap(k))
   for (const k of due) tried.set(k, t)
   const got = await Promise.all(
     due.map(async k => {
@@ -339,7 +359,7 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
 async function writePrs($: EngineInterface, prev: Live | null, keys: string[], recs: Record<string, PrRecord>, itemRefs: string[], keyOf: (ref: string) => string, t: number, fails: string[], dueCount: number): Promise<void> {
   const kept = Object.fromEntries(keys.filter(k => recs[k] !== undefined).map(k => [k, recs[k] as PrRecord]))
   // The next pass: when the list or a pull request not yet merged or closed is due, and not inside a backoff.
-  prNextAt = Math.max(holdUntil, Math.min(listAt + PR_MS, ...keys.filter(k => !prFinal(kept[k])).map(k => (tried.get(k) ?? t) + PR_MS)))
+  prNextAt = Math.max(holdUntil, Math.min(listAt + PR_MS, ...keys.filter(k => !prFinal(kept[k])).map(k => (tried.get(k) ?? t) + (kept[k]?.ci === 'running' ? CI_MS : PR_MS))))
   const ci = Object.fromEntries(itemRefs.filter(r => kept[keyOf(r)] !== undefined).map(r => [r, itemCiOf(kept[keyOf(r)] as PrRecord)]))
   // The PRs tab and the Deploy count read the session's pull requests from these records, in the order of prRefs.
   // Unread: any GitHub read of this pass failed (auth, permission, rate limit, no gh) or a backoff holds the reads.

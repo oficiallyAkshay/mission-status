@@ -461,8 +461,8 @@ test('PRs tab: a pull request the session makes is listed with its state, and it
   // Each card says its own state: no count line such as "1 merged" above the cards.
   expect(await text(ui, /^\d+ (merged|open|draft|conflict|closed)/)).toBeUndefined()
   await ui.press({ key: 'open-pr-acme/app#9' })
-  // An open card shows two tabs, Commits first; no Details tab.
-  expect(((await ui.findAll({ type: 'Box' })) as any[]).some(x => /^tab:.*-b-commits$/.test(String(x.key)) && x.props?.backgroundColor === '#2A2A2A')).toBe(true)
+  // An open card shows two tabs, CI first and open by default; no Details tab.
+  expect(((await ui.findAll({ type: 'Box' })) as any[]).some(x => /^tab:.*-b-ci$/.test(String(x.key)) && x.props?.backgroundColor === '#2A2A2A')).toBe(true)
   expect((await ui.findAll({ type: 'Button' })).some(x => String(x.key).endsWith('-b-details'))).toBe(false)
   await ui.unmount()
 })
@@ -559,7 +559,8 @@ test('PRs tab: a pull request whose checks run shows CI with its time so far on 
   await new Promise(r => setTimeout(r, 50))
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'tab-prs' })
-  expect(await text(ui, /^CI 2m 0\ds$/)).toBeTruthy()
+  // Live on the first line: how many checks ended of all, and the time so far.
+  expect(await text(ui, /^CI 0\/1 · 2m 0\ds$/)).toBeTruthy()
   await ui.unmount()
 })
 

@@ -314,6 +314,34 @@ export function prIconSvg(state: 'merged' | 'open' | 'draft' | 'conflict' | 'clo
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${body}</svg>`
 }
 
+// A check's state on the PR card, 12 px: a green circle with a tick when it passed, a red circle with a cross when it
+// failed, an amber ring with a dot while it runs, a grey ring when it has no result.
+export function checkIconSvg(state: 'running' | 'passing' | 'failing' | 'none'): string {
+  const color = { passing: '#3FB950', failing: '#F85149', running: '#D29922', none: '#8B949E' }[state]
+  const ring = `<circle cx="6" cy="6" r="5" fill="none" stroke="${color}" stroke-width="1.3"/>`
+  const mark =
+    state === 'passing'
+      ? `<path d="M3.6 6.2l1.6 1.6 3.2-3.4" fill="none" stroke="${color}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>`
+      : state === 'failing'
+        ? `<path d="M4.2 4.2l3.6 3.6M7.8 4.2l-3.6 3.6" fill="none" stroke="${color}" stroke-width="1.4" stroke-linecap="round"/>`
+        : state === 'running'
+          ? `<circle cx="6" cy="6" r="1.8" fill="${color}"/>`
+          : ''
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12">${ring}${mark}</svg>`
+}
+
+// The branch mark on the PR card, 12 px, grey: two rings on a line, and a third ring that branches off.
+export function branchIconSvg(): string {
+  const s = 'fill="none" stroke="#8B949E" stroke-width="1.2" stroke-linecap="round"'
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><circle cx="3.5" cy="2.5" r="1.4" ${s}/><circle cx="3.5" cy="9.5" r="1.4" ${s}/><circle cx="8.5" cy="3.5" r="1.4" ${s}/><path d="M3.5 3.9v4.2M8.5 4.9c0 2-2.5 2.2-5 3.2" ${s}/></svg>`
+}
+
+// A commit on the PR card's Commits tab, 12 px, grey: a ring on a line through it.
+export function commitIconSvg(): string {
+  const s = 'fill="none" stroke="#8B949E" stroke-width="1.2" stroke-linecap="round"'
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><circle cx="6" cy="6" r="2.2" ${s}/><path d="M0.5 6h3.3M8.2 6h3.3" ${s}/></svg>`
+}
+
 // One sub-step's name, for an item's steps line. A running one shimmers: a light band sweeps across it from left to
 // right every 1.6 s. k delays the sweep by a quarter second a place, so names that run in parallel shimmer one after
 // another along the line. The sweep starts at the wall clock's place in its cycle, so a redraw never restarts it.
