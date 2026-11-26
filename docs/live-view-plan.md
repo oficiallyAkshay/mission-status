@@ -3,6 +3,8 @@
 ## Ask
 Nothing in `live/` is built yet. This plan fixes the architecture, the contracts and six workstreams. Each workstream runs in its own session, in its own folder, against the contracts in `live/protocol/`.
 
+Execution (owner, 2026-11-26): kept here for safekeeping and not started. It runs later as a conductor of conductors, once that system is built (after NIR-1183).
+
 ## Objective (what the owner sees)
 - In the Claude desktop app, every session with real work opens a live HTML view in the app's browser pane, beside the chat, by itself. It has the tabs Current, Timeline, PRs, Watches and Runbook.
 - The same view works for Codex, Gemini CLI, Cursor and Copilot CLI sessions, opened from their own hooks.
