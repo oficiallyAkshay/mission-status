@@ -1,5 +1,5 @@
 import { expect, test } from 'claude-code/testing'
-import { agoOf, timeOfDay, zoneOf } from '../hooks/view'
+import { agoOf, timeOfDay } from '../hooks/view'
 import { age, cap, clockOf } from '../hooks/model'
 import { trackSvg } from '../hooks/bars'
 
@@ -52,18 +52,16 @@ test('a state stored by an earlier version keeps its data and gains the new fiel
   expect(kept?.items[0]?.after).toBeNull()
 })
 
-import { asPr, prFacts } from '../hooks/readers'
+import { prOf, prRecordOf } from '../hooks/readers'
 import { badgeSvg } from '../hooks/bars'
 
 test('a small badge stays small', () => {
   expect(badgeSvg('done', 0, 16)).toContain('width="16"')
 })
 
-test('a pull request reads as state, CI, review and the branch facts', () => {
-  const pr = asPr({ number: 7, state: 'OPEN', url: 'u', title: 't', reviewDecision: 'REVIEW_REQUIRED', statusCheckRollup: [{ conclusion: 'SUCCESS' }, { status: 'IN_PROGRESS' }] })
+test('a pull request reads its CI as one word', () => {
+  const pr = prOf(prRecordOf('o/r#7', { number: 7, state: 'OPEN', url: 'u', title: 't', statusCheckRollup: [{ conclusion: 'SUCCESS' }, { status: 'IN_PROGRESS' }] }, 0))
   expect(pr.ci).toBe('running')
-  const facts = prFacts(pr, { branch: 'b', ahead: 2, behind: 3, files: 4, added: 10, removed: 2, dirty: 0 }).map(f => f.text)
-  expect(facts).toEqual(['Open', 'CI running', 'Review needed', '3 behind main', '+10 −2'])
 })
 
 test('the header age reads seconds, then minutes, then hours', () => {
@@ -75,11 +73,10 @@ test('the header age reads seconds, then minutes, then hours', () => {
 
 test('a done time reads as a clock time with AM or PM', () => {
   const at = new Date(2026, 10, 25, 21, 5).getTime()
-  expect(timeOfDay(at)).toMatch(/^9:05 PM( [A-Z]+)?$/)
-  expect(timeOfDay(new Date(2026, 10, 25, 0, 30).getTime())).toMatch(/^12:30 AM( [A-Z]+)?$/)
+  expect(timeOfDay(at)).toBe('9:05 PM')
+  expect(timeOfDay(new Date(2026, 10, 25, 0, 30).getTime())).toBe('12:30 AM')
 })
 
-test('a clock time names its time zone in short form', () => {
-  expect(zoneOf(new Date(2026, 10, 25, 21, 5)).length).toBeGreaterThan(0)
-  expect(timeOfDay(new Date(2026, 10, 25, 21, 5).getTime())).toMatch(/^9:05 PM [A-Z]{2,5}$/)
+test('a clock time is local time and names no time zone', () => {
+  expect(timeOfDay(new Date(2026, 10, 25, 21, 5).getTime())).toBe('9:05 PM')
 })

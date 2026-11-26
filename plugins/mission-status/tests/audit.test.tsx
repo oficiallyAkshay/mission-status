@@ -75,6 +75,8 @@ test('rename: a parent renamed by a patch keeps its children', async ($, on) => 
   ] })
   await send($, { patch: [{ op: 'change', id: 'review', name: 'Code review' }] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // A stage whose work is all done folds to one line: open it to read its rows.
+  if ((await ui.findAll({ type: 'Button' })).some((x: any) => x.key === 'open-1' && x.props?.label === '+')) await ui.press({ key: 'open-1' })
   expect(await rows(ui)).toEqual(['Code review'])
   await ui.unmount()
 })
@@ -110,6 +112,7 @@ test('binding: an item bound to a task-list step closes when the step is done', 
   await send($, { project: 'P', phases: ['Plan', 'Build'], phase: 1, items: [{ id: 'tests', phase: 1, name: 'Write tests', status: 'now', taskStep: 'Add the tests' }] })
   await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: [{ content: 'Add the tests', status: 'completed' }] } as never)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await ui.press({ key: 'open-1' })
   const alts = (await ui.findAll({ type: 'Svg' })).map((x: any) => String(x.props?.alt ?? ''))
   expect(alts).toContain('Write tests: done')
   // The step does not show again beside the item bound to it.
@@ -226,5 +229,22 @@ test('tree lines: a name that wraps gets a line as tall as its row, so the tree 
   const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 40 }, surface: 'desktop' })
   const lines = (await ui.findAll({ type: 'Svg' })).filter((x: any) => x.props?.alt === 'Wait line').map((x: any) => Number(x.props?.height ?? 0))
   expect(lines.some((hgt: number) => hgt >= 20)).toBe(true)
+  await ui.unmount()
+})
+
+test('spacing: items are blocks with one gap; no row draws a spacer or a line piece of a guessed height', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', phases: ['Plan', 'Build'], phase: 1, items: [
+    { id: 'a', phase: 1, name: 'First item with a long name that wraps onto a second line at this width', status: 'done', note: 'A note that also wraps onto a second line at this narrow width' },
+    { id: 'b', phase: 1, name: 'Second', status: 'now', note: 'Short note' },
+    { id: 'c', phase: 1, name: 'Child', status: 'next', parent: 'b' },
+    { id: 'd', phase: 1, name: 'Third', status: 'next' },
+  ] })
+  const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 40 }, surface: 'desktop' })
+  const svgs = await ui.findAll({ type: 'Svg' })
+  // No spacer drawings, and every line is the one stretched line (clipped by its cell), never a piece sized to a row.
+  expect(svgs.filter((x: any) => x.props?.alt === 'Space').length).toBe(0)
+  const lines = svgs.filter((x: any) => x.props?.alt === 'Wait line').map((x: any) => Number(x.props?.height ?? 0))
+  expect(lines.length > 0 && lines.every((hgt: number) => hgt >= 1000)).toBe(true)
   await ui.unmount()
 })

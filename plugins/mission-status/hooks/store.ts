@@ -1,6 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Activity, Count, Fresh, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
+import type { Activity, Count, Fresh, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Marks, Pr, Runs, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
+import { type Derived, type Facts, derive, itemKey, mergeItems, stageKey } from './machine'
 import { AUTO_OPEN_CALLS, CHECK_MS, checkLine, FIRST_REMINDER, TURN_TEXT, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, STALE_MS, STALE_STEPS, autoSummary, normalize } from './model'
 
 // The holdback (metrics.tsx decides it): a measurement session with no pane and no standing rule.
@@ -9,7 +10,7 @@ const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, fa
 export const PANE = 'progress'
 // The pane's one accent, the purple of the stage bar; the app's own accent is orange.
 export const ACCENT = '#8B7CF6'
-export const TITLE = 'Progress'
+export const TITLE = 'Mission status'
 export const TICK_MS = 5_000 // the pane reads helpers every 5 s
 export const CLOCK_MS = 1_000 // and redraws its timers every second
 
@@ -38,15 +39,127 @@ export async function tick($: EngineInterface): Promise<void> {
   } catch {}
 }
 
-// The 1 s clock: it writes only while a timer shows, that is while a stage, an item, a task step or a helper is in
-// progress in the stored state. Otherwise it returns at once.
+// ---- Live facts and the state machine (machine.ts) ----
+
+// A main-loop turn runs now: set at its turn.start, cleared at its turn.complete (any reason) and at session start and
+// end. Not saved, so a restore reads it closed.
+export const turnOpen = atom({ plugin: 'mission-status', key: 'turnOpen' } as const, false as boolean)
+// The turn waits on the person: a question to them is open.
+export const waiting = atom({ plugin: 'mission-status', key: 'waiting' } as const, false as boolean)
+// The newest thing the session did that the pane saw: a main-loop tool call, a turn's start or end, a task-list change,
+// wrap-up or the agent's update. The header's age reads this, not the agent's last write alone.
+export const seenAt = atom({ plugin: 'mission-status', key: 'seenAt' } as const, 0)
+export async function noteEvent($: EngineInterface): Promise<void> {
+  const t = await nowOf($)
+  await update($, seenAt, old => Math.max(old ?? 0, t)).catch(() => undefined)
+}
+
+// Running time per node: ms already counted, and when the node last became running (null while it is not running).
+export const runs = atom({ plugin: 'mission-status', key: 'runs' } as const, {} as Runs)
+// The marker's kept marks (marker.ts writes them).
+const marks = atom({ plugin: 'mission-status', key: 'marks' } as const, null as Marks | null)
+
+// The item that holds the running helpers: the last item in progress in the current stage, not one named as the stage.
+export function hostOf(s: NonNullable<Summary>, items: Item[]): string | null {
+  const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase()
+  const x = [...items].reverse().find(i => i.phase === s.phase && i.status === 'now' && !same(i.name, s.phases[s.phase] ?? ''))
+  return x === undefined ? null : itemKey(x)
+}
+
+// Everything the machine reads, from the stores, and its derive.
+export async function deriveNow($: EngineInterface): Promise<{ s: NonNullable<Summary>; items: Item[]; d: Derived; facts: Facts } | null> {
+  const s = normalize(await read($, summary))
+  if (s === null) return null
+  const steps = (await read($, tasks)) ?? []
+  const l = await read($, live)
+  const m = await read($, marks).catch(() => null)
+  const base: Facts = {
+    turnOpen: (await read($, turnOpen)) === true,
+    waiting: (await read($, waiting)) === true,
+    helpersRunning: (l?.helpers ?? []).some(h => h.status === 'running'),
+    hostKey: null,
+    ci: (l as { ci?: Facts['ci'] } | null)?.ci ?? {},
+    marks: m?.marks ?? {},
+  }
+  const items = mergeItems(s, steps, base)
+  const facts = { ...base, hostKey: hostOf(s, items) }
+  return { s, items, d: derive(s, items, facts), facts }
+}
+
+// The running time: a node that runs now has a start; a node that stopped adds its span. Idempotent: a second run at
+// the same time changes nothing, so racing calls cannot count a span twice.
+export function settleRuns(old: Runs, running: Set<string>, t: number): Runs {
+  const next: Runs = {}
+  let changed = false
+  for (const [key, r] of Object.entries(old)) {
+    if (r.from !== null && !running.has(key)) {
+      next[key] = { ms: r.ms + Math.max(0, t - r.from), from: null }
+      changed = true
+    } else next[key] = r
+  }
+  for (const key of running) {
+    const r = next[key]
+    if (r === undefined || r.from === null) {
+      next[key] = { ms: r?.ms ?? 0, from: t }
+      changed = true
+    }
+  }
+  return changed ? next : old
+}
+
+// After every fact that can change a status: settle the running times. Answers whether anything runs or counts.
+export async function settle($: EngineInterface): Promise<boolean> {
+  try {
+    const got = await deriveNow($)
+    const t = await nowOf($)
+    const running = new Set<string>()
+    if (got !== null) {
+      for (const x of got.items) if (got.d.item(x) === 'running') running.add(itemKey(x))
+      got.s.phases.forEach((_, k) => {
+        if (got.d.stage(k) === 'running') running.add(stageKey(k))
+      })
+    }
+    const after = await update($, runs, old => settleRuns(old ?? {}, running, t))
+    return running.size > 0 || Object.values(after ?? {}).some(r => r.from !== null)
+  } catch {
+    return false
+  }
+}
+
+// The marker runs: traffic allowed, not a holdback session, and it has not stopped after failed calls. Where it does
+// not run, the reminders and the held turn end stay, so the agent still keeps the pane current.
+export async function markerRuns($: EngineInterface): Promise<boolean> {
+  try {
+    if (await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')) return false
+    if (await read($, holdback)) return false
+    return ((await read($, marks))?.fails ?? 0) < 3
+  } catch {
+    return false
+  }
+}
+
+// For the update tool's reply: each item the agent called done that shows open, and why. Empty when none.
+export async function heldReasons($: EngineInterface): Promise<string> {
+  try {
+    const got = await deriveNow($)
+    if (got === null) return ''
+    const lines = got.items
+      .filter(x => x.status === 'done' && got.d.item(x) === 'open')
+      .map(x => got.d.reason(itemKey(x)))
+      .filter((r): r is string => r !== null)
+    return lines.length === 0 ? '' : ` Shown as open, not done: ${lines.slice(0, 5).join('; ')}.`
+  } catch {
+    return ''
+  }
+}
+
+// The 1 s clock: it writes only while something runs (the state machine's word, not a stored "now"), so an idle
+// session redraws nothing and costs nothing.
 export async function tickIfTimer($: EngineInterface): Promise<void> {
   try {
-    const s = normalize(await read($, summary))
-    let shows = s !== null && (s.phase < s.phases.length || s.active.length > 0 || s.items.some(i => i.status === 'now'))
-    if (!shows) shows = (await read($, tasks)).some(t => t.status === 'now')
-    if (!shows) shows = ((await read($, live))?.helpers ?? []).some(h => h.status === 'running')
-    if (shows) await tick($)
+    // A timer shows the counted time plus the span since its start, so the tick only redraws: it reads one value and
+    // writes the clock. Statuses change on events (turns, tool calls, updates) and on the 5 s read, which settle.
+    if (Object.values((await read($, runs)) ?? {}).some(r => r.from !== null)) await tick($)
   } catch {}
 }
 
@@ -146,6 +259,8 @@ export async function afterToolCall($: EngineInterface): Promise<string | null> 
     }
   }
   await markOutOfDate($, f)
+  // Where the marker keeps the steps current, the pane asks the agent for nothing more than its first state.
+  if (out.line !== null && out.line !== FIRST_REMINDER && (await markerRuns($))) return null
   return out.line
 }
 
@@ -178,6 +293,8 @@ export async function atTurnEnd($: EngineInterface, isHeldAlready: boolean): Pro
     return { ...x, turnCalls: 0, turnUpdated: false }
   })
   await markOutOfDate($, f)
+  // Where the marker keeps the steps current, a turn's end is never held for an update.
+  if (out.hold !== null && (await markerRuns($))) return null
   return out.hold
 }
 

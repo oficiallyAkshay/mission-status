@@ -19,7 +19,11 @@ const start = async ($: any, on: any, agents: unknown[] = [], skipProcess = fals
   on('clock.every', () => ({ value: () => {} }))
   if (!skipProcess) on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  // The agent sends its states inside a turn: a turn runs, so its work in progress runs too.
+  await $.turn.start({ text: 'go', turnId: 'turn-1' } as never)
 }
 const send = ($: any, args: Record<string, unknown>) => $.tool.call({ tool: 'mcp__mission-status__update', ...args } as never)
 const text = async (ui: any, re: RegExp) => (await ui.find({ type: 'Text', text: re }))?.text
@@ -46,7 +50,7 @@ test('build: each card ends with its exit clause, and its figure follows the cla
   await send($, { ...base, counts: counts(10) })
   await send($, { ...base, counts: counts(11) })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await text(ui, /^Project: Checkout redesign$/)).toBe('Project: Checkout redesign')
+  expect(await text(ui, /^Checkout redesign$/)).toBe('Checkout redesign')
   for (const stage of ['Plan', 'Build', 'Test', 'Deploy', 'Learn']) expect(await text(ui, new RegExp(`^${stage}$`))).toBe(stage)
   // exit clauses read as conditions, met ones checked
   // A done stage folds to one line that names its met gate.
@@ -54,29 +58,24 @@ test('build: each card ends with its exit clause, and its figure follows the cla
   expect(await svgAlt(ui, 'Gate: you approve the look')).toBeTruthy()
   expect(await svgAlt(ui, 'Gate: the pull request merges')).toBeTruthy()
   // cards show a live MM:SS timer, not a count or a status word
-  expect(await text(ui, /^00:0\d$/)).toBeTruthy()
+  expect(await text(ui, /^\d+s$/)).toBeTruthy()
   expect(await text(ui, /^Met$/)).toBeUndefined()
   expect(await text(ui, /^11 of 11$/)).toBeUndefined()
   expect(await svgAlt(ui, /Helper scan tests: running/)).toBeTruthy()
-  expect(await svgAlt(ui, /Stage 2 of 5: Build/)).toBeTruthy()
+  expect(await text(ui, /^✓ Plan$/)).toBeTruthy()
   await ui.unmount()
 })
 
-test('a pane too narrow for the stage bar shows a window of the stages, moved with left and right buttons', async ($, on) => {
+test('the stage bar shows every stage at any width, in order, with no window and no buttons to move it', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', phases: ['Plan', 'Repo setup', 'Build', 'Website', 'Review', 'Fix findings', 'Deploy'], phase: 5 })
-  const narrow = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 40 }, surface: 'desktop' })
-  expect(await svgAlt(narrow, /^Stage 6 of 7/)).toBeUndefined()
-  const first = await svgAlt(narrow, /^Stages \d+ to 7 of 7; current: Fix findings$/)
-  expect(first).toBeTruthy()
-  expect((await narrow.findAll({ type: 'Button' })).some(x => x.key === 'bar-left')).toBe(true)
-  await narrow.press({ key: 'bar-left' })
-  const moved = await svgAlt(narrow, /^Stages \d+ to \d+ of 7/)
-  expect(moved?.props?.alt).not.toBe(first?.props?.alt)
-  await narrow.unmount()
-  const wide = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 140 }, surface: 'desktop' })
-  expect(await svgAlt(wide, /^Stage 6 of 7: Fix findings$/)).toBeTruthy()
-  await wide.unmount()
+  for (const bodyColumns of [30, 40, 140]) {
+    const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns }, surface: 'desktop' })
+    // Done stages carry a check, the current one its plain name, the stages ahead their names: all seven, every time.
+    for (const name of ['✓ Plan', '✓ Repo setup', '✓ Build', '✓ Website', '✓ Review', 'Deploy']) expect(await text(ui, new RegExp(`^${name}$`))).toBeTruthy()
+    expect((await ui.findAll({ type: 'Button' })).some(x => x.key === 'bar-left' || x.key === 'bar-right')).toBe(false)
+    await ui.unmount()
+  }
 })
 
 test('a done stage folds to one line; its + opens the full card again', async ($, on) => {
@@ -109,7 +108,9 @@ test('a stage opens to its items; an item that waits is indented, parallel items
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   // the current stage opens by itself
   // an item in progress carries its runtime after its name
-  expect(await text(ui, /^Draw the columns  ·  \d\d:\d\d$/)).toBeTruthy()
+  expect(await text(ui, /^Draw the columns$/)).toBeTruthy()
+  // The run time sits on the right, in caption size, apart from the name.
+  expect(await text(ui, /^(\d+m )?\d+s$/)).toBeTruthy()
   // a wait draws a line in the badge column between the two badges
   expect(await svgAlt(ui, 'Wait line')).toBeTruthy()
   // The spinners show what runs in parallel; no sentence repeats it.
@@ -123,13 +124,16 @@ test('a stage opens to its items; an item that waits is indented, parallel items
   await ui.unmount()
 })
 
-test('one stage is in progress at a time, and the current stage shows its time', async ($, on) => {
+test('the current stage runs and shows its time; a stage with nothing started is not started; a running item runs its stage', async ($, on) => {
   await start($, on)
-  await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 2, name: 'your look review', status: 'now' }] })
+  await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'your look review', status: 'now' }] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await svgAlt(ui, /^Test: not started$/)).toBeTruthy()
   expect(await svgAlt(ui, /^Build: in progress$/)).toBeTruthy()
-  expect(await text(ui, /^00:0\d$/)).toBeTruthy()
+  expect(await text(ui, /^\d+s$/)).toBeTruthy()
+  // An item that runs in a later stage makes that stage run too: a running child always has a running parent.
+  await send($, { items: [{ phase: 2, name: 'Early test', status: 'now' }] })
+  expect(await svgAlt(ui, /^Test: in progress$/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -151,7 +155,6 @@ test('a ticket shows at the top, custom stages replace the preset, the git bar o
   expect((await ui.find({ type: 'Link' }))?.props?.href).toBe('https://example.com/ABC-1')
   expect(await text(ui, /Make it general/)).toBeTruthy()
   expect(await text(ui, /^Monitor$/)).toBe('Monitor')
-  expect(await svgAlt(ui, /Stage 5 of 6: Monitor/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -185,7 +188,8 @@ test('each item in progress shows its runtime', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'a', status: 'now' }, { phase: 1, name: 'b', status: 'next' }] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await text(ui, /^A  ·  00:0\d$/)).toBeTruthy()
+  expect(await text(ui, /^A$/)).toBeTruthy()
+  expect(await text(ui, /^\d+s$/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -264,7 +268,7 @@ test('fix: its own stages and the symptom', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'fix', phase: 1, symptom: 'The pane shows no data after a reload.' })
   const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 120 }, surface: 'desktop' })
-  expect(await svgAlt(ui, /Stage 2 of 5: Find cause/)).toBeTruthy()
+  expect(await text(ui, /^Find cause$/)).toBeTruthy()
   expect(await text(ui, /^The pane shows no data after a reload\.$/)).toBeTruthy()
   await ui.unmount()
 })
@@ -291,7 +295,8 @@ test('done: every stage passed', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'ship', phase: 5 })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await svgAlt(ui, /All stages are done/)).toBeTruthy()
+  expect(await text(ui, /cards are done/)).toBeUndefined()
+  expect(await text(ui, /^✓ /)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -344,17 +349,17 @@ test('runbooks: one runbook is a Runbook tab beside Progress; each step carries 
   const buttons = await ui.findAll({ type: 'Button' })
   // The open tab is a chip, not a button: Progress is open, so only the other tabs are buttons.
   expect(buttons.some(x => x.key === 'tab-progress')).toBe(false)
-  expect(buttons.some(x => x.key === 'tab-release' && x.props?.label === 'Runbook')).toBe(true)
-  expect(await text(ui, /^Project: P$/)).toBe('Project: P')
+  expect(buttons.some(x => x.key === 'tab-release' && x.props?.label === '☰  Runbook')).toBe(true)
+  expect(await text(ui, /^P$/)).toBe('P')
   await ui.press({ key: 'tab-release' })
   expect(await text(ui, /^1 of 3 done  ·  1 need you  ·  now: Rewrite the history$/)).toBeTruthy()
   // No separate Needs you card: each wait sits under its own step.
   expect(await text(ui, /^Needs you( |$)/)).toBeUndefined()
   expect(await text(ui, /^2  Rewrite the history$/)).toBe('2  Rewrite the history')
   expect(await text(ui, /^Needs your yes$/)).toBe('Needs your yes')
-  expect(await text(ui, /^Project: P$/)).toBeUndefined()
+  expect(await text(ui, /^P$/)).toBeUndefined()
   await ui.press({ key: 'tab-progress' })
-  expect(await text(ui, /^Project: P$/)).toBe('Project: P')
+  expect(await text(ui, /^P$/)).toBe('P')
   await ui.unmount()
   // A runbook with no steps is refused; remove drops one.
   expect(String((await send($, { runbooks: [{ id: 'x', title: 'X', steps: [] }] })).deny)).toContain('1 to 60 steps')
@@ -386,8 +391,9 @@ test('done items show the time they were done, at every level of nesting', async
   await send($, { patch: [{ op: 'change', id: 'child', status: 'done' }] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   // The parent is in progress, so it opens by itself.
-  const child = (await ui.findAll({ type: 'Text' })).map(x => String(x.text ?? '')).find(t => t.startsWith('Child'))
-  expect(child).toMatch(/^Child  ·  \d{1,2}:\d{2} (AM|PM) [A-Z]+$/)
+  expect(await text(ui, /^Child$/)).toBeTruthy()
+  // The time it was done sits on the right of its row, in caption size.
+  expect(await text(ui, /^\d{1,2}:\d{2} (AM|PM)$/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -401,8 +407,11 @@ test('an item whose pull request merged shows done at the merge time, with no ag
   await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'Ship it', status: 'now', pr: 7 }] })
   await new Promise(r => setTimeout(r, 50))
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // Its only item is done, so the stage is done and folds: open it.
+  await ui.press({ key: 'open-1' })
   expect(await svgAlt(ui, /^Ship it: done$/)).toBeTruthy()
-  expect(await text(ui, /^Ship it  ·  \d{1,2}:\d{2} (AM|PM) [A-Z]+$/)).toBeTruthy()
+  expect(await text(ui, /^Ship it$/)).toBeTruthy()
+  expect(await text(ui, /^\d{1,2}:\d{2} (AM|PM)$/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -433,10 +442,12 @@ test('PRs tab: a pull request the session makes is listed with its state, and it
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect((await ui.findAll({ type: 'Button' })).some(x => x.key === 'tab-prs')).toBe(true)
   await ui.press({ key: 'tab-prs' })
-  expect(await text(ui, /^#9  Add the tab$/)).toBe('#9  Add the tab')
+  expect(await text(ui, /^Add the tab$/)).toBe('Add the tab')
   expect(await svgAlt(ui, /^Merged$/)).toBeTruthy()
   await ui.press({ key: 'open-pr-acme/app#9' })
-  expect(await text(ui, /^acme\/app  ·  tabs$/)).toBe('acme/app  ·  tabs')
+  // An open card shows two tabs, Commits first; no Details tab.
+  expect(await text(ui, /^●  Commits \d+$/)).toBeTruthy()
+  expect((await ui.findAll({ type: 'Button' })).some(x => String(x.key).endsWith('-b-details'))).toBe(false)
   await ui.unmount()
 })
 
@@ -450,7 +461,11 @@ test('an item with a pull request shows its CI time on its own line, after the i
   await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'Ship it', status: 'now', pr: 7 }] })
   await new Promise(r => setTimeout(r, 50))
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  expect(await text(ui, /^Ship it  ·  \d\d:\d\d  ·  CI 01:0\d$/)).toBeTruthy()
+  expect(await text(ui, /^Ship it$/)).toBeTruthy()
+  expect(await text(ui, /^CI 1m 0\ds$/)).toBeTruthy()
+  // The item that made the pull request carries its chip: the state icon and the number.
+  expect(await svgAlt(ui, /^Pull request 7: /)).toBeTruthy()
+  expect(await text(ui, /^#7$/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -496,8 +511,8 @@ test('the PRs tab finds every pull request in the transcript, past the 4 MiB rea
   await new Promise(r => setTimeout(r, 100))
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'tab-prs' })
-  expect(await text(ui, /^#1  PR 1$/)).toBeTruthy()
-  expect(await text(ui, /^#2  PR 2$/)).toBeTruthy()
+  expect(await text(ui, /^PR 1$/)).toBeTruthy()
+  expect(await text(ui, /^PR 2$/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -528,7 +543,7 @@ test('PRs tab: a pull request whose checks run shows CI with its time so far on 
   await new Promise(r => setTimeout(r, 50))
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'tab-prs' })
-  expect(await text(ui, /^CI 02:0\d$/)).toBeTruthy()
+  expect(await text(ui, /^CI 2m 0\ds$/)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -561,5 +576,39 @@ test('only an item in progress marks its running sub-phase bold; a done item sho
   const bold = (await ui.findAll({ type: 'Text' })).filter((x: any) => x.props?.weight === 'bold').map((x: any) => x.text)
   expect(bold).toContain('Edit')
   expect(bold).not.toContain('Read')
+  await ui.unmount()
+})
+
+test('a running spinner keeps one drawing and one key through sibling adds, removes, reorders and other changes', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', phases: ['Plan', 'Build'], phase: 1, items: [{ id: 'run', phase: 1, name: 'Run', status: 'now' }] })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const seen = async () => {
+    const x = await svgAlt(ui, /^Run: in progress$/)
+    return `${String(x?.key)}|${String(x?.props?.source)}`
+  }
+  const first = await seen()
+  expect(first.includes('<animateTransform')).toBe(true)
+  const states = [
+    [{ id: 'a', phase: 1, name: 'Before', status: 'done' }, { id: 'run', phase: 1, name: 'Run', status: 'now' }],
+    [{ id: 'run', phase: 1, name: 'Run', status: 'now' }, { id: 'b', phase: 1, name: 'After', status: 'next' }, { id: 'c', phase: 1, name: 'Later', status: 'next' }],
+    [{ id: 'c', phase: 1, name: 'Later', status: 'done' }, { id: 'run', phase: 1, name: 'Run', status: 'now' }],
+    [{ id: 'run', phase: 1, name: 'Run', status: 'now', note: 'A note' }],
+  ]
+  for (const items of states) {
+    await send($, { items })
+    expect(await seen()).toBe(first)
+  }
+  await ui.unmount()
+})
+
+test('the header says Live while a turn runs, and after it ends the age of the newest event, not of the agent\'s last write', async ($, on) => {
+  await start($, on)
+  await send($, { project: 'P', stage: 'build', phase: 1 })
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await text(ui, /^Live$/)).toBe('Live')
+  await $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 'turn-1' } as never)
+  expect(await text(ui, /^Live$/)).toBeUndefined()
+  expect(await text(ui, /^\d+s ago$/)).toBeTruthy()
   await ui.unmount()
 })

@@ -57,13 +57,13 @@ export function demoFrame(ms: number): DemoFrame {
   return {
     track: {
       source: trackSvg({ total: DEMO_STAGES.length, done: at, current, isDone, clock: t, names: [...DEMO_STAGES] }),
-      alt: isDone ? 'All stages are done.' : `Stage ${at + 1} of ${DEMO_STAGES.length}: ${current ?? ''}`,
+      alt: isDone ? 'All cards are done.' : `Stage ${at + 1} of ${DEMO_STAGES.length}: ${current ?? ''}`,
     },
     helper: {
       source: stripSvg({ title: 'Scan tests', detail: 'helper', state: helper === 'done' ? 'done' : 'running', time: mmss(helper === 'waiting' ? 0 : Math.min(sec, 9) - 3) }),
       alt: `Helper Scan tests: ${helper === 'waiting' ? 'starting' : helper}`,
     },
-    action: isDone ? 'All stages are done' : (DEMO_ACTIONS[at] ?? ''),
+    action: isDone ? 'All cards are done' : (DEMO_ACTIONS[at] ?? ''),
     isDone,
   }
 }

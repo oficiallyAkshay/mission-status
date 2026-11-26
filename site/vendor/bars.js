@@ -17,20 +17,6 @@ const pct = (x) => `${(Math.max(0, Math.min(1, x)) * 100).toFixed(2)}%`;
 function dither(id, width, height, color, from = 0.15, to = 0.9) {
   return `<defs><linearGradient id="${id}g" x1="0" x2="1"><stop offset="0" stop-color="${color}" stop-opacity="${(from * 0.6).toFixed(2)}"/><stop offset="1" stop-color="${color}" stop-opacity="${(to * 0.6).toFixed(2)}"/></linearGradient></defs><rect width="${width}" height="${height}" fill="url(#${id}g)"/>`;
 }
-function trackFits(t) {
-  if (t.widthPx === void 0) return true;
-  const n = Math.max(1, t.total);
-  const seg = t.isDone ? n - 1 : Math.min(t.done, n - 1);
-  const names = t.names ?? [];
-  const label = (k) => {
-    if (k === seg) return textWidth(t.isDone ? t.doneLabel ?? "Done" : t.current ?? "", 12);
-    const isPast = t.checks !== void 0 ? t.checks[k] === true : k < seg || t.isDone;
-    return textWidth(isPast ? `\u2713 ${names[k] ?? ""}` : names[k] ?? "", 11);
-  };
-  let sum = 0;
-  for (let k = 0; k < n; k++) sum += Math.max(36, label(k) + 28);
-  return sum <= t.widthPx;
-}
 function trackSvg(input) {
   const { total, done, current, isDone, doneLabel = "Done", clock = 0, names = [], tips = [], checks } = input;
   const H = 30;
@@ -88,7 +74,7 @@ function badgeSvg(state, clock, size = 20, up, down) {
   const c = S / 2;
   const id = uid(state, clock, size);
   if (state === "done")
-    return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><defs><linearGradient id="${id}g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5BC07A"/><stop offset="1" stop-color="#2F8A4C"/></linearGradient></defs><circle cx="${c}" cy="${c}" r="${c - 1}" fill="url(#${id}g)"/><path d="M${c - 4} ${c + 0.4}l${S * 0.13} ${S * 0.13} ${S * 0.27}-${S * 0.28}" fill="none" stroke="#fff" stroke-width="${S / 10}" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><defs><linearGradient id="${id}g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#5BC07A"/><stop offset="1" stop-color="#2F8A4C"/></linearGradient></defs><circle cx="${c}" cy="${c}" r="${c - 1}" fill="url(#${id}g)"/><path d="M${c - S * 0.2125} ${c + S * 0.0125}l${S * 0.15} ${S * 0.15} ${S * 0.275}-${S * 0.3}" fill="none" stroke="#fff" stroke-width="${S / 10}" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   if (state === "now") {
     const r = c - 2;
     const arc = 2 * Math.PI * r;
@@ -106,6 +92,14 @@ function failedBadgeSvg(size = 16, up, down) {
   const pad = (20 - S) / 2;
   const stub = (y1, y2) => `<path class="wa" d="M8 ${y1} V${y2}" stroke-width="1.5"/>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="20">${WAITS_STYLE}` + (up === true ? stub(0, pad) : "") + (down === true ? stub(20 - pad, 20) : "") + `<g transform="translate(${(16 - S) / 2} ${pad})">${mark}</g></svg>`;
+}
+function needsBadgeSvg(size = 16) {
+  const S = size;
+  const c = S / 2;
+  const h = S * 0.11;
+  const w = S * 0.2;
+  const mark = `<style>.bn{stroke:#E5A23D}.bnf{fill:#E5A23D}@media (prefers-color-scheme:light){.bn{stroke:#A8650A}.bnf{fill:#A8650A}}</style><circle class="bn" cx="${c}" cy="${c}" r="${c - 1.5}" fill="none" stroke-width="1.6"/><circle class="bnf" cx="${c}" cy="${c - h * 0.9}" r="${h}"/><path class="bn" d="M${c - w} ${c + w * 1.05} Q${c} ${c + h * 0.6 - w * 0.15} ${c + w} ${c + w * 1.05}" fill="none" stroke-width="1.6" stroke-linecap="round"/>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}">${mark}</svg>`;
 }
 const WAITS_STYLE = `<style>.wa{stroke:${LINE}}@media (prefers-color-scheme:light){.wa{stroke:${LIGHT.grey}}}</style>`;
 function waitsLineSvg(height = 20) {
@@ -127,36 +121,8 @@ function exitSvg(text, isLast, isMet = false) {
   const chipLight = isMet ? `fill:${LIGHT.page};stroke:${LIGHT.green}` : `fill:${LIGHT.page};stroke:${LIGHT.grey}`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}"><style>.t${id}{font:500 11px ${FONT};fill:${isMet ? GREEN : "#B9B6C8"}}.c${id}{${chip}}.el{stroke:${LINE};stroke-opacity:.6}.i${id}{stroke:#B9B6C8}.g${id}{stroke:${GREEN}}@media (prefers-color-scheme:light){.t${id}{fill:${isMet ? LIGHT.green : "#55545C"}}.c${id}{${chipLight}}.el{stroke:${LIGHT.grey};stroke-opacity:.7}.i${id}{stroke:#55545C}.g${id}{stroke:${LIGHT.green}}}</style><line class="el" x1="${X}" y1="0" x2="${X}" y2="${isLast ? H / 2 : H}" stroke-width="1.4"/><rect class="c${id}" x="${left}" y="${H / 2 - 10}" width="${w}" height="20" rx="10" stroke-width="1"/>` + icon + `<text class="t${id}" x="${ix + ICON + 6}" y="${H / 2 + 4}">${esc(label)}</text></svg>`;
 }
-function spaceSvg(height) {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="${height}"></svg>`;
-}
 function flowLineSvg(height) {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}">${WAITS_STYLE}<line class="wa" x1="19" y1="0" x2="19" y2="${height}" stroke-width="1.4"/></svg>`;
-}
-function barWindow(t, start) {
-  const n = Math.max(1, t.total);
-  const fits = (from2, to2) => trackFits({
-    ...t,
-    total: to2 - from2 + 1,
-    done: t.done - from2,
-    names: (t.names ?? []).slice(from2, to2 + 1),
-    checks: t.checks?.slice(from2, to2 + 1)
-  });
-  if (start === null) {
-    const cur = t.isDone ? n - 1 : Math.max(0, Math.min(t.done, n - 1));
-    let from2 = cur;
-    let to2 = cur;
-    for (let grew = true; grew; ) {
-      grew = false;
-      if (to2 + 1 < n && fits(from2, to2 + 1)) to2 += 1, grew = true;
-      if (from2 - 1 >= 0 && fits(from2 - 1, to2)) from2 -= 1, grew = true;
-    }
-    return { from: from2, to: to2 };
-  }
-  const from = Math.max(0, Math.min(start, n - 1));
-  let to = from;
-  while (to + 1 < n && fits(from, to + 1)) to += 1;
-  return { from, to };
 }
 function stepsRailSvg(states) {
   const n = Math.max(1, states.length);
@@ -186,20 +152,24 @@ function prIconSvg(state) {
   );
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${body}</svg>`;
 }
+function stepPulseSvg(name, k, running) {
+  const w = textWidth(name, 12) + 2;
+  const pulse = running ? `<animate attributeName="opacity" values="1;.35;1" dur="1.6s" begin="${(k * 0.25).toFixed(2)}s" repeatCount="indefinite"/>` : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="16"><style>.sp{fill:rgba(128,128,128,.75)}@media (prefers-color-scheme:light){.sp{fill:${LIGHT.grey}}}</style><text class="sp" x="0" y="12" style="font:400 12px ${FONT}">${esc(name)}${pulse}</text></svg>`;
+}
 export {
   DARK_PAGE,
   LIGHT,
   badgeSvg,
-  barWindow,
   exitSvg,
   failedBadgeSvg,
   flowLineSvg,
+  needsBadgeSvg,
   prIconSvg,
-  spaceSvg,
+  stepPulseSvg,
   stepsRailSvg,
   stripSvg,
   textWidth,
-  trackFits,
   trackSvg,
   waitsLineSvg
 };

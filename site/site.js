@@ -10,14 +10,10 @@ if (FORCE_MOTION) for (const sheet of document.styleSheets) { try { const rules 
 const EASE = 'cubic-bezier(.22, 1, .36, 1)'
 const STEP_MS = 650
 const $ = id => document.getElementById(id)
+// The pane is always dark on this page: drop the light-scheme rules the drawings carry for the app.
 // The pane is dark on the site: drop each drawing's light-mode block, rules and all.
 const dark = svg => svg.replace(/@media \(prefers-color-scheme:light\)\{(?:[^{}]*\{[^{}]*\})*[^{}]*\}/g, '')
 const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
-// The clock time a step was done, as the pane writes it (hooks/view.tsx timeOfDay): 2:14 PM EST.
-const zone = d => { const n = (/\(([^)]+)\)/.exec(d.toString()) ?? [])[1] ?? ''; const z = n.split(/\s+/).filter(w => !/^(standard|daylight|summer)$/i.test(w)).map(w => w[0] ?? '').join('').toUpperCase(); return z ? ` ${z}` : '' }
-const timeOfDay = at => { const d = new Date(at), h = d.getHours(); return `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}${zone(d)}` }
-// The header's age of the agent's last update (hooks/view.tsx agoOf).
-const clockAgo = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return s < 60 ? `${s}s ago` : `${Math.floor(s / 60)}m ago` }
 const clock = ms => { const s = Math.max(0, Math.floor(ms / 1000)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}` }
 
 // Stage lists are the plugin's TEMPLATES (plugins/mission-status/hooks/model.ts).
@@ -98,7 +94,7 @@ const TOOK = [214, 388, 162, 301, 245, 190, 276]
 // Draws the pane the way the mod draws it (hooks/view.tsx): the title, the goal, the stage bar, then the flow. A done
 // stage folds to one line with its met gate and its time; the current stage is a card with the accent border, its
 // links, its items as a tree and a running helper; a later stage is a dim card; each open card has its gate under it.
-function paneHtml({ mission, phase, done, now, act, starts, extraStage = -1, itemStates = null, lastAt = null }) {
+function paneHtml({ mission, phase, done, now, act, starts, extraStage = -1, itemStates = null }) {
   const n = mission.stages.length
   const st = k => done || k < phase ? 'done' : k === phase ? 'now' : 'next'
   const tips = mission.stages.map((name, k) => `${name}: ${st(k) === 'done' ? 'Done' : st(k) === 'now' ? 'In progress' : 'Not started'}. Gate: ${mission.exits[k] ?? ''}`)
@@ -117,17 +113,12 @@ function paneHtml({ mission, phase, done, now, act, starts, extraStage = -1, ite
       // Each stage links what it made: a plan in the first, then a preview and a report in later stages.
       const links = k === 0 ? ['Plan'] : (mission.links ?? ['Preview', 'Report'])
       body += `<div class="card-links">${links.map(x => `<span class="lk">↗ ${esc(x)}</span>`).join('')}</div>`
-      // Items as the pane draws them: the one in progress with its timer, a done one with the time it was done, and
-      // the running helper under the item in progress, as its child.
       const list = mission.items
-      const states = list.map((_, i) => itemStates ? itemStates[i] : i === 0 ? 'done' : i === 1 ? 'now' : 'next')
-      const host = states.lastIndexOf('now')
       body += `<div class="items">${list.map((it, i) => {
-        const is = states[i]
-        const tail = is === 'now' ? `<em class="irt">  ·  ${clock(now - starts[k] + 25000)}</em>` : is === 'done' ? `<em class="itd">  ·  ${timeOfDay(now - (list.length - i) * 7 * 60000)}</em>` : ''
-        const row = `<div class="item ${is}">${dark(badgeSvg(is, 0, 16, i > 0, i < list.length - 1))}<span>${esc(it)}${tail}</span></div>`
-        const strip = act && i === host ? `<div class="strip">${dark(stripSvg({ title: mission.helper ?? 'Check the tests cover it', detail: 'Haiku', state: 'running', time: `${Math.floor(((now - starts[k]) / 1000) % 60)}s` }))}</div>` : ''
-        return row + strip }).join('')}</div>`
+        const is = itemStates ? itemStates[i] : i === 0 ? 'done' : i === 1 ? 'now' : 'next'
+        const tail = is === 'now' ? `<em class="irt">  ·  ${clock(now - starts[k] + 25000)}</em>` : ''
+        return `<div class="item ${is}">${dark(badgeSvg(is, 0, 16, i > 0, i < list.length - 1))}<span>${esc(it)}${tail}</span></div>` }).join('')}</div>`
+      if (act) body += `<div class="strip">${dark(stripSvg({ title: mission.helper ?? 'Check the tests cover it', detail: 'Haiku', state: 'running', time: `${Math.floor(((now - starts[k]) / 1000) % 60)}s` }))}</div>`
     }
     const chev = s === 'now' ? '−' : ''
     const card = `<div class="card ${s}${k === extraStage ? ' added enter' : ''}"><div class="card-row"><span class="badge">${dark(badgeSvg(s, now, 16))}</span>` +
@@ -136,15 +127,12 @@ function paneHtml({ mission, phase, done, now, act, starts, extraStage = -1, ite
     return `<div class="flow" data-k="${k}">${card}${exit}</div>`
   }).join('')
   const total = done ? `<div class="p-done">All ${n} stages are done.<span>  ·  took ${clock(TOOK.slice(0, n).reduce((a, b) => a + b, 0) * 1000)}</span></div>` : ''
-  return `<div class="p-tabs"><span class="p-tab on">Progress</span><span class="p-tab">PRs</span></div>` +
-    `<div class="p-head"><div class="p-title">Project: ${esc(mission.project)}</div><span class="p-age">${clockAgo(now - (lastAt ?? now - 4000))}</span></div><div class="p-goal">${esc(mission.goal)}</div>${total}` +
+  return `<div class="p-head"><div class="p-title">Project: ${esc(mission.project)}</div></div><div class="p-goal">${esc(mission.goal)}</div>${total}` +
     `<div class="p-track">${track}</div><div class="p-stages">${flow}</div>`
 }
 
 // Hero: the selected mission plays through its stages, one every few seconds, then starts again.
 const heroStarts = []
-// When the agent last sent a state: each step of the demo is one update, so the header's age goes back to 0s.
-let heroLast = Date.now()
 let heroKey = '', heroFull = ''
 const roots0 = () => !!$('pane').firstChild
 // Each second only the live text changes in place; a stage change glides the cards to their new places.
@@ -153,7 +141,6 @@ function paneTick(root, now, act) {
   const set = (el, v) => { if (el && el.textContent !== v) el.textContent = v }
   set(q('.card.now .card-time'), clock(now - heroStarts[k] + 37000))
   set(q('.card.now .irt'), `  \u00b7  ${clock(now - heroStarts[k] + 25000)}`)
-  set(q('.p-age'), clockAgo(now - heroLast))
 }
 // A stage change: each stage row keeps its place in the flow, so the old and new rows pair by stage. Each row glides
 // from its old top and height to its new ones, and its new content fades in, so a card folds and the next one opens.
@@ -182,12 +169,12 @@ function heroRender(force = false) {
   const key = `${state.mission.project}|${state.phase}|${state.done}`, full = `${key}|${state.item}`
   const itemOnly = !force && key === heroKey && full !== heroFull && roots0()
   heroFull = full
-  const roots = [$('pane')]
+  const roots = [$('pane'), $('vs-pane')].filter(Boolean)
   if (!itemOnly && !force && key === heroKey && roots[0].firstChild) return roots.forEach(r => paneTick(r, now, act))
   const glide = !force && key.split('|')[0] === heroKey.split('|')[0] && !REDUCED
   heroKey = key
   const itemStates = state.mission.items.map((_, i) => i < state.item ? 'done' : i === state.item ? 'now' : 'next')
-  const html = paneHtml({ mission: state.mission, phase: state.phase, done: state.done, now, act, starts: heroStarts, itemStates, lastAt: heroLast })
+  const html = paneHtml({ mission: state.mission, phase: state.phase, done: state.done, now, act, starts: heroStarts, itemStates })
   // Only an item finished: swap that stage's item list in place, so nothing else moves.
   if (itemOnly) {
     const t = document.createElement('div'); t.innerHTML = html
@@ -216,7 +203,6 @@ function heroStep() {
   const n = state.mission.stages.length
   if (state.done) { if (++heroRest < 4) return; heroRest = 0; return heroReset() }
   if (heroCalm > 0) { heroCalm--; return }
-  heroLast = Date.now()
   if (state.item < state.mission.items.length - 1) { state.item++; return heroRender() }
   state.item = 0; heroCalm = 2
   if (state.phase >= n - 1) { state.done = true; heroStarts[n] = Date.now() } else { state.phase++; heroStarts[state.phase] = Date.now() }
@@ -227,7 +213,7 @@ function pick(m) {
   building++
   $('pane').className = 'pane'
   state.mission = m
-  for (const b of $('missions').children) { const on = b.dataset.key === m.key; b.setAttribute('aria-checked', String(on)); b.tabIndex = on ? 0 : -1 }
+  for (const b of $('missions').children) b.setAttribute('aria-checked', String(b.dataset.key === m.key))
   if (m.key === 'agent') {
     const t = document.querySelector('[data-key="agent"]')
     t.classList.remove('burst'); void t.offsetWidth; t.classList.add('burst')
@@ -278,15 +264,6 @@ for (const m of HERO_TABS) {
   b.addEventListener('click', () => pick(m))
   $('missions').append(b)
 }
-// The missions are one radio group: Tab reaches the chosen one, and the arrow keys move the choice, as a radio group does.
-$('missions').addEventListener('keydown', e => {
-  const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key]
-  if (step === undefined) return
-  e.preventDefault()
-  const all = [...$('missions').children], at = all.indexOf(document.activeElement)
-  const next = all[(at + step + all.length) % all.length]
-  next.focus(); next.click()
-})
 
 // The chat beside the pane: the agent's wall of text. Each line that scrolls past adds its words to the counter.
 const roll = $('chat-roll')
@@ -355,16 +332,11 @@ const big = (inner, cls = '') => `<div class="gs ${cls}"><div class="gs-inner">$
 function glanceSlides() {
   const exits = ['the plan is approved', 'the code is on a branch', 'all tests pass']
   const card = (st, name, extra = '') => `<div class="card ${st}"><div class="card-row"><span class="badge">${dark(badgeSvg(st, 0))}</span><span class="card-name">${name}</span><span class="card-time">${st === 'now' ? '<b class="gs-clock">00:00</b>' : st === 'done' ? '04:20' : ''}</span></div>${extra}</div>`
-  // Items as the pane writes them: a done one with the time it was done, the one in progress with its timer.
-  const tail = st => st === 'done' ? `<em class="itd">  ·  ${timeOfDay(Date.now() - 9 * 60000)}</em>` : st === 'now' ? '<em class="irt">  ·  <b class="gs-clock">00:00</b></em>' : ''
-  const items = `<div class="items">${[['done', 'Save button'], ['now', 'Saved list'], ['next', 'Sync across devices']].map(([st, x], i) => `<div class="item ${st}">${dark(badgeSvg(st, 0, 16, i > 0, i < 2))}<span>${x}${tail(st)}</span></div>`).join('')}</div>`
-  // The helpers the agent runs now, under the item in progress, as the pane draws them.
-  const helpers = `<div class="items"><div class="item now">${dark(badgeSvg('now', 0, 16))}<span>Saved list tests</span></div>` +
-    ['Run the test suite', 'Check the tests cover it'].map((t, i) => `<div class="strip">${dark(stripSvg({ title: t, detail: i ? 'Haiku' : 'Sonnet', state: 'running', time: `${12 + i * 9}s` }))}</div>`).join('') + '</div>'
+  const items = `<div class="items">${[['done', 'Save button'], ['now', 'Saved list'], ['next', 'Sync across devices']].map(([st, x]) => `<div class="item ${st}">${dark(badgeSvg(st, 0, 14))}<span>${x}</span></div>`).join('')}</div>`
   return [
     big(`<div class="p-track">${dark(trackSvg({ total: 5, done: 2, current: 'Test', isDone: false, names: GS_NAMES }))}</div>`, 'gs-wide'),
     big(exits.map((e, i) => `<div class="p-exit">${dark(exitSvg(e, i === 2))}</div>`).join('')),
-    big(card('now', 'Test', helpers)),
+    big(card('now', 'Test', '<div class="card-act">Running tests 12s</div>')),
     big(card('now', 'Build', items)),
     big(card('now', 'Build', `<div class="card-links">${['Plan', 'Spec', 'Preview', 'Test report'].map(x => `<span class="lk">↗ ${x}</span>`).join('')}</div>`)),
     big(`<div class="gs-adapt" id="gs-adapt"></div>`),
@@ -376,12 +348,7 @@ let feat = -1, adaptTimer = 0
 // segment; then another note, a stage shrinks away, the track loses it. It loops while this step is on screen.
 const ADAPT_BASE = ['Plan', 'Build', 'Test', 'Deploy', 'Learn']
 function adaptTrack(names) { return `<div class="p-track">${dark(trackSvg({ total: names.length, done: 1, current: 'Build', isDone: false, names }))}</div>` }
-// A done stage folds to one line, as in the pane; the stage in progress and the later ones are cards.
-function adaptCard(n, k) {
-  const st = k < 1 ? 'done' : k === 1 ? 'now' : 'next'
-  if (st === 'done') return `<div class="flow fold" data-n="${n}"><div class="fold-row">${dark(badgeSvg('done', 0, 14))}<span class="f-name">${n}</span><span class="f-gate">✓ the plan is approved</span></div></div>`
-  return `<div class="card ${st}" data-n="${n}"><div class="card-row"><span class="badge">${dark(badgeSvg(st, 0))}</span><span class="card-name">${n}</span></div></div>`
-}
+function adaptCard(n, k) { const st = k < 1 ? 'done' : k === 1 ? 'now' : 'next'; return `<div class="card ${st}" data-n="${n}"><div class="card-row"><span class="badge">${dark(badgeSvg(st, 0))}</span><span class="card-name">${n}</span></div></div>` }
 function adaptRender() {
   $('gs-adapt').innerHTML = `<div class="a-track">${adaptTrack(ADAPT_BASE)}</div><div class="a-cards">${ADAPT_BASE.map(adaptCard).join('')}</div>`
 }
@@ -498,15 +465,12 @@ async function ownLoop() {
 }
 $('own-next').addEventListener('click', () => { ownIdx++; ownLoop() })
 ownLoop()
-// Install: copy the two commands to paste into Claude Code. One copy for both install buttons: a clipboard that does
-// not answer in 800 ms counts as blocked, so a press always gets an answer.
-const INSTALL = ['/plugin marketplace add oficiallyAkshay/mission-status', '/plugin install mission-status@mission-status']
-async function copyInstall() {
-  try { return await Promise.race([navigator.clipboard.writeText(INSTALL.join('\n')).then(() => true), sleep(800).then(() => false)]) } catch { return false }
-}
+// Install: copy the two commands to paste into Claude Code.
 $('install').addEventListener('click', async () => {
-  const ok = await copyInstall()
-  $('install-note').textContent = ok ? 'Copied both commands. Paste them into Claude Code in the desktop app.' : `In Claude Code, run: ${INSTALL[0]}, then ${INSTALL[1]}`
+  const cmd = '/plugin marketplace add oficiallyAkshay/mission-status\n/plugin install mission-status@mission-status'
+  let ok = false
+  try { await navigator.clipboard.writeText(cmd); ok = true } catch {}
+  $('install-note').textContent = ok ? 'Copied. Paste it into Claude Code in the desktop app.' : 'In Claude Code, run: /plugin marketplace add oficiallyAkshay/mission-status'
 })
 pick(HERO_TABS[0])
 texture()
@@ -547,9 +511,20 @@ async function repoNumbers() {
 }
 repoNumbers()
 
-// The end: fit the wordmark to the page width, and ease the closing parts in.
+// The end: copy both install commands, fit the wordmark to the page width, and ease the closing parts in.
 function theEnd() {
-  const end = document.querySelector('.tex-end')
+  const copy = $('end-copy'), note = $('end-note'), end = document.querySelector('.tex-end')
+  const text = '/plugin marketplace add oficiallyAkshay/mission-status\n/plugin install mission-status@mission-status'
+  let tm = 0
+  if (copy) copy.addEventListener('click', async () => {
+    let ok = false
+    try { await navigator.clipboard.writeText(text); ok = true } catch {}
+    if (!ok) { const r = document.createRange(); r.selectNodeContents($('end-cmd')); const s = getSelection(); s.removeAllRanges(); s.addRange(r) }
+    copy.textContent = ok ? 'Copied' : 'Select and copy'
+    copy.classList.toggle('done', ok)
+    note.textContent = ok ? 'Copied. Paste it into Claude Code.' : 'The text is selected. Copy it with the keyboard.'
+    clearTimeout(tm); tm = setTimeout(() => { copy.textContent = 'Copy'; copy.classList.remove('done') }, 2400)
+  })
   const word = document.querySelector('.foot-word span'), fit = () => {
     word.style.fontSize = '100px'
     const box = word.parentElement, cs = getComputedStyle(box), room = box.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight)
@@ -594,12 +569,14 @@ for (const d of document.querySelectorAll('.qa')) {
 // The site installs nothing; the reader pastes the commands into Claude Code.
 {
   const btn = $('end-install'), label = $('end-install-l'), code = $('end-cmd'), note = $('end-note')
-  const CMDS = INSTALL
+  const CMDS = ['/plugin marketplace add oficiallyAkshay/mission-status', '/plugin install mission-status@mission-status']
   const SAYS = ['Marketplace added', 'mission-status installed']
   let run = 0
   btn.addEventListener('click', async () => {
     const id = ++run, live = () => id === run
-    const ok = await copyInstall()
+    let ok = false
+    // The copy never holds up the play: a clipboard that does not answer in 800 ms counts as blocked.
+    try { ok = await Promise.race([navigator.clipboard.writeText(CMDS.join('\n')).then(() => true), sleep(800).then(() => false)]) } catch {}
     btn.classList.add('going'); label.textContent = ok ? 'Copied. Watch it install' : 'Select the commands and copy them'
     code.innerHTML = ''
     const line = (cls, text) => { const s = document.createElement('span'); s.className = cls; s.textContent = text; code.append(s); return s }

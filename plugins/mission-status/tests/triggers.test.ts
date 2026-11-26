@@ -175,3 +175,20 @@ test('a turn that ran tool calls and sent no update is held once at its end; a t
   await send($, { phase: 1 })
   expect((await $.classic.Stop({ stop_hook_active: false })).block).toBeUndefined()
 })
+
+test('where the marker runs, no stale reminder and no held turn end; where traffic is off, both stay', { timeoutMs: 20_000 }, async ($, on) => {
+  on('env.get', () => ({ value: undefined }))
+  const { clock } = await start($, on)
+  await send($, BASE)
+  await clock.advance(STALE_MS + 1000)
+  expect(ctx(await bash($))).toEqual([])
+  expect(((await $.classic.Stop({ stop_hook_active: false } as never)) as { block?: string }).block).toBeUndefined()
+})
+
+test('with nonessential traffic off the marker is off, so the stale reminder still rides on the next step', { timeoutMs: 20_000 }, async ($, on) => {
+  on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC' ? '1' : undefined }))
+  const { clock } = await start($, on)
+  await send($, BASE)
+  await clock.advance(STALE_MS + 1000)
+  expect(ctx(await bash($))).toEqual([REMINDER])
+})

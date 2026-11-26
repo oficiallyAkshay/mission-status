@@ -38,21 +38,6 @@ function dither(id: string, width: string, height: number, color: string, from =
 
 export type TrackInput = { total: number; done: number; current: string | null; isDone: boolean; doneLabel?: string; clock?: number; names?: string[]; tips?: string[]; checks?: boolean[]; widthPx?: number }
 
-// Does every stage label fit the pane's width? The pane draws the bar when it does, and wrapped stage chips when not.
-export function trackFits(t: TrackInput): boolean {
-  if (t.widthPx === undefined) return true
-  const n = Math.max(1, t.total)
-  const seg = t.isDone ? n - 1 : Math.min(t.done, n - 1)
-  const names = t.names ?? []
-  const label = (k: number) => {
-    if (k === seg) return textWidth(t.isDone ? (t.doneLabel ?? 'Done') : (t.current ?? ''), 12)
-    const isPast = t.checks !== undefined ? t.checks[k] === true : k < seg || t.isDone
-    return textWidth(isPast ? `✓ ${names[k] ?? ''}` : (names[k] ?? ''), 11)
-  }
-  let sum = 0
-  for (let k = 0; k < n; k++) sum += Math.max(36, label(k) + 28)
-  return sum <= t.widthPx
-}
 
 export function trackSvg(input: TrackInput): string {
   const { total, done, current, isDone, doneLabel = 'Done', clock = 0, names = [], tips = [], checks } = input
@@ -160,11 +145,12 @@ export function badgeSvg(state: 'done' | 'now' | 'next' | 'dot', clock: number, 
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><circle cx="${S / 2}" cy="${S / 2}" r="${S * 0.3}" fill="${ACCENT}"/></svg>`
   const c = S / 2
   const id = uid(state, clock, size)
+  // The check is centred in the circle at every size: its points scale with the badge, none is a fixed offset.
   if (state === 'done')
     return (
       `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><defs><linearGradient id="${id}g" x1="0" y1="0" x2="1" y2="1">` +
       `<stop offset="0" stop-color="#5BC07A"/><stop offset="1" stop-color="#2F8A4C"/></linearGradient></defs>` +
-      `<circle cx="${c}" cy="${c}" r="${c - 1}" fill="url(#${id}g)"/><path d="M${c - 4} ${c + 0.4}l${S * 0.13} ${S * 0.13} ${S * 0.27}-${S * 0.28}" fill="none" stroke="#fff" stroke-width="${S / 10}" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+      `<circle cx="${c}" cy="${c}" r="${c - 1}" fill="url(#${id}g)"/><path d="M${c - S * 0.2125} ${c + S * 0.0125}l${S * 0.15} ${S * 0.15} ${S * 0.275}-${S * 0.3}" fill="none" stroke="#fff" stroke-width="${S / 10}" stroke-linecap="round" stroke-linejoin="round"/></svg>`
     )
   if (state === 'now') {
     // A circle spinner: a faint ring with a bright arc that turns once a second. Its source never changes, so the app
@@ -209,6 +195,20 @@ export function failedBadgeSvg(size = 16, up?: boolean, down?: boolean): string 
   )
 }
 
+// The badge of an item that waits on the person: an amber ring with a small person inside (a head and shoulders).
+export function needsBadgeSvg(size = 16): string {
+  const S = size
+  const c = S / 2
+  const h = S * 0.11
+  const w = S * 0.2
+  const mark =
+    `<style>.bn{stroke:#E5A23D}.bnf{fill:#E5A23D}@media (prefers-color-scheme:light){.bn{stroke:#A8650A}.bnf{fill:#A8650A}}</style>` +
+    `<circle class="bn" cx="${c}" cy="${c}" r="${c - 1.5}" fill="none" stroke-width="1.6"/>` +
+    `<circle class="bnf" cx="${c}" cy="${c - h * 0.9}" r="${h}"/>` +
+    `<path class="bn" d="M${c - w} ${c + w * 1.05} Q${c} ${c + h * 0.6 - w * 0.15} ${c + w} ${c + w * 1.05}" fill="none" stroke-width="1.6" stroke-linecap="round"/>`
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}">${mark}</svg>`
+}
+
 // The line that runs on beside an item's note, from its badge down to the items that wait for it.
 // The wait line, in the theme's grey (light theme too); the colour argument is kept for callers and not used.
 const WAITS_STYLE = `<style>.wa{stroke:${LINE}}@media (prefers-color-scheme:light){.wa{stroke:${LIGHT.grey}}}</style>`
@@ -249,45 +249,12 @@ export function exitSvg(text: string, isLast: boolean, isMet = false): string {
   )
 }
 
-// An empty drawing of a set height: it holds a row's space where no line runs through.
-export function spaceSvg(height: number): string {
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="${height}"></svg>`
-}
-
 
 // A plain line in the flow column, from one card to the next, with no gate on it.
 export function flowLineSvg(height: number): string {
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${height}">${WAITS_STYLE}<line class="wa" x1="19" y1="0" x2="19" y2="${height}" stroke-width="1.4"/></svg>`
 }
 
-// The window of stages a narrow bar shows: as many as fit, from start. With no start, the window that holds the
-// current stage, grown to the right first.
-export function barWindow(t: TrackInput, start: number | null): { from: number; to: number } {
-  const n = Math.max(1, t.total)
-  const fits = (from: number, to: number) =>
-    trackFits({
-      ...t,
-      total: to - from + 1,
-      done: t.done - from,
-      names: (t.names ?? []).slice(from, to + 1),
-      checks: t.checks?.slice(from, to + 1),
-    })
-  if (start === null) {
-    const cur = t.isDone ? n - 1 : Math.max(0, Math.min(t.done, n - 1))
-    let from = cur
-    let to = cur
-    for (let grew = true; grew; ) {
-      grew = false
-      if (to + 1 < n && fits(from, to + 1)) (to += 1), (grew = true)
-      if (from - 1 >= 0 && fits(from - 1, to)) (from -= 1), (grew = true)
-    }
-    return { from, to }
-  }
-  const from = Math.max(0, Math.min(start, n - 1))
-  let to = from
-  while (to + 1 < n && fits(from, to + 1)) to += 1
-  return { from, to }
-}
 
 // A runbook's rail: one short segment for each step, in its state's colour. It shows how far the runbook is, at a
 // glance, with no labels; the steps below carry the words.
@@ -323,4 +290,16 @@ export function prIconSvg(state: 'merged' | 'open' | 'draft' | 'conflict' | 'clo
           : // git-pull-request (open, or a conflict in amber): the base ring and line, and an arrow back to the head ring.
             `${ring(4.5, 3.5)}${ring(4.5, 12.5)}<path d="M4.5 5.25v5.5M11.5 10.75V6a2 2 0 0 0-2-2H7.5M8.75 2.6L7.3 4l1.45 1.4" ${stroke}/>${ring(11.5, 12.5)}`
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${body}</svg>`
+}
+
+// One sub-step's name, for an item's steps line. A running one pulses its opacity; k delays the pulse by a quarter second
+// a place, so sub-steps that run in parallel pulse together with an offset, never one after another.
+export function stepPulseSvg(name: string, k: number, running: boolean): string {
+  const w = textWidth(name, 12) + 2
+  const pulse = running ? `<animate attributeName="opacity" values="1;.35;1" dur="1.6s" begin="${(k * 0.25).toFixed(2)}s" repeatCount="indefinite"/>` : ''
+  return (
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="16">` +
+    `<style>.sp{fill:rgba(128,128,128,.75)}@media (prefers-color-scheme:light){.sp{fill:${LIGHT.grey}}}</style>` +
+    `<text class="sp" x="0" y="12" style="font:400 12px ${FONT}">${esc(name)}${pulse}</text></svg>`
+  )
 }
