@@ -1,5 +1,7 @@
 import type { ElementConstructor, RenderChildren } from 'claude-code'
 import { ACCENT } from './store'
+import { pulseWidth, stepPulseSvg, stripSvg } from './bars'
+import { cap } from './model'
 
 // The pane's building blocks. Every region of the pane is drawn from these, so every row lines up by construction:
 // one badge column, one title column that grows, one meta column on the right (times, CI, the PR chip) and one
@@ -72,6 +74,26 @@ export function blocks(els: Els, draw: Draw) {
   )
   // A time in the meta column: always the quiet caption style, running or done.
   const Time = (p: { children: string; color?: string; key?: string }) => <Caption key={p.key} color={p.color}>{p.children}</Caption>
+
+  // Helper: one running helper as a strip with its spinner, and its timer as text beside the strip. The timer stays
+  // out of the picture, so the picture's source never changes while the helper runs and its spinner never restarts;
+  // the spinner starts at the wall clock's place in its turn, so a rebuild lands on the same angle.
+  const Helper = (p: { id: string; description: string; model: string | null; time: string; paddingRight?: number }) => (
+    <Box key={`helper-${p.id}`} flexDirection="row" alignItems="center" gap={GAP} paddingRight={p.paddingRight} minWidth={0}>
+      <Box flexGrow={1} flexShrink={1} minWidth={0}>
+        {draw(stripSvg({ title: cap(p.description), detail: p.model, state: 'running', now: Date.now() }), `Helper ${p.description}: running`, 22, `strip-${p.id}`)}
+      </Box>
+      <Time key={`helper-time-${p.id}`}>{p.time}</Time>
+    </Box>
+  )
+
+  // Shimmer: names that run at the same time, side by side; while they run, a light band sweeps each from left to
+  // right, a quarter second later for each name. Each name is sized to its letters, so the gaps match.
+  const Shimmer = (p: { id: string; names: readonly string[]; running: boolean }) =>
+    ChipRow({
+      id: p.id,
+      children: p.names.map((name, j) => draw(stepPulseSvg(name, j, p.running, Date.now()), name, 16, `${p.id}-${j}`, pulseWidth(name))),
+    })
 
   // The + or − that opens and closes a card or an item; an empty cell where nothing opens.
   const Control = (p: { id: string; open: boolean; onPress?: () => void }) =>
@@ -221,5 +243,5 @@ export function blocks(els: Els, draw: Draw) {
     </Box>
   )
 
-  return { Row, Card, Chip, ChipRow, Tabs, Tree, Trunk, Control, Caption, Note, Time }
+  return { Row, Card, Chip, ChipRow, Tabs, Tree, Trunk, Control, Caption, Note, Time, Helper, Shimmer }
 }
