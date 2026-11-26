@@ -127,7 +127,7 @@ function paneHtml({ mission, phase, done, now, act, starts, extraStage = -1, ite
     return `<div class="flow" data-k="${k}">${card}${exit}</div>`
   }).join('')
   const total = done ? `<div class="p-done">All ${n} stages are done.<span>  ·  took ${clock(TOOK.slice(0, n).reduce((a, b) => a + b, 0) * 1000)}</span></div>` : ''
-  return `<div class="p-head"><div class="p-title">Project: ${esc(mission.project)}</div></div><div class="p-goal">${esc(mission.goal)}</div>${total}` +
+  return `<div class="p-head"><div class="p-title">${esc(mission.project)}</div></div><div class="p-goal">${esc(mission.goal)}</div>${total}` +
     `<div class="p-track">${track}</div><div class="p-stages">${flow}</div>`
 }
 
