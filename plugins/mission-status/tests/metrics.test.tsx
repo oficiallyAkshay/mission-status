@@ -30,7 +30,7 @@ type World = {
 async function start(
   $: any,
   on: any,
-  opts: { store?: Record<string, unknown>; env?: Record<string, string>; now?: number; fetch?: 'ok' | 'fail'; prs?: Record<string, Record<string, unknown>> } = {},
+  opts: { store?: Record<string, unknown>; env?: Record<string, string>; now?: number; fetch?: 'ok' | 'fail'; prs?: Record<string, Record<string, unknown>>; app?: boolean } = {},
 ): Promise<World> {
   const bodies: Body[] = []
   const calls = { sessionId: 0, identity: 0 }
@@ -89,7 +89,12 @@ async function start(
   on('tool.call', (_: unknown, e: { command?: string; pr?: number }) => ({ result: e.pr === undefined ? 'ok' : `https://github.com/someone/private-repo/pull/${e.pr}\n` }))
   on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  await $.session.start({ cwd: '/Users/someone/private-repo', surface: 'desktop', isInteractive: true })
+  on('session.attach', (_: unknown, e: { clientId: string }) => ({ clientId: e.clientId }))
+  // app: the desktop app starts the session as an SDK host does (not interactive, no surface), then attaches.
+  if (opts.app === true) {
+    await $.session.start({ cwd: '/Users/someone/private-repo', surface: null, isInteractive: false })
+    await $.session.attach({ surface: 'desktop', clientId: 'desktop:default' })
+  } else await $.session.start({ cwd: '/Users/someone/private-repo', surface: 'desktop', isInteractive: true })
   return { bodies, clock, calls, store, state }
 }
 
@@ -121,6 +126,14 @@ test('notice: once the notice has shown, consent yes sends', async ($, on) => {
   await minute(w)
   expect(w.bodies.length).toBe(1)
   expect(named(w, 'session_real_work').length).toBe(1)
+})
+
+test('the desktop app: a session it starts as not interactive and then attaches to sends', async ($, on) => {
+  const w = await start($, on, { store: consented, app: true })
+  await work($, 5)
+  await minute(w)
+  expect(named(w, 'session_real_work').length).toBe(1)
+  expect(w.state.filter(x => x.key === 'headless').at(-1)?.value).toBe(false)
 })
 
 test('notice: after the notice, consent no sends nothing', async ($, on) => {

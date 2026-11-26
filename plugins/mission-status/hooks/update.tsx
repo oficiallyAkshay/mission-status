@@ -254,21 +254,34 @@ export async function settle($: EngineInterface): Promise<void> {
   else if (s.phase === 'updated' && now - s.at >= UPDATED_SHOWN_MS) await set($, x => ({ ...base(x), phase: 'idle' }))
 }
 
+// Starts the release checks of a session a person sees.
+async function startChecks($: EngineInterface): Promise<void> {
+  // Read the install again: a reload or a new start may run another version.
+  install = null
+  await settle($).catch(() => {})
+  void autoCheck($).catch(() => {})
+  checkTimer?.cancel()
+  checkTimer = $.clock.every(CHECK_EVERY_MS, () => void autoCheck($).catch(() => {}))
+}
+
 export function registerUpdate(on: On): void {
   install = null
   isInTurn = false
   isRunning = false
   isDue = false
-  // Interactive sessions only: a headless run (claude -p, an SDK host) never installs anything. The matcher also keeps
-  // this hook apart from register.tsx's own session.start hook.
+  checkTimer?.cancel()
+  checkTimer = null
+  // Sessions a person sees only: a headless run (claude -p, an SDK host) never installs anything. The matcher also keeps
+  // the start hook apart from register.tsx's own session.start hook.
   on('session.start', { isInteractive: true }, async ($, e, next) => {
     const r = await next(e)
-    // Read the install again: a reload or a new start may run another version.
-    install = null
-    await settle($).catch(() => {})
-    void autoCheck($).catch(() => {})
-    checkTimer?.cancel()
-    checkTimer = $.clock.every(CHECK_EVERY_MS, () => void autoCheck($).catch(() => {}))
+    await startChecks($)
+    return r
+  })
+  // The desktop app starts its sessions as an SDK host does (not interactive), then attaches: start the checks then.
+  on('session.attach', { surface: 'desktop', clientId: /(?:)/ }, async ($, e, next) => {
+    const r = await next(e)
+    if (checkTimer === null) await startChecks($)
     return r
   })
   on('turn.start', async ($, e, next) => {

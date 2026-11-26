@@ -398,6 +398,18 @@ export function registerMetrics(on: On): void {
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
+  // The desktop app starts its sessions as an SDK host does (not interactive, no surface), then attaches: a surface that
+  // attaches means a person sees the session, so it is not headless.
+  on('session.attach', { clientId: ANY }, async ($, e, next) => {
+    const result = await next(e)
+    await quiet(async () => {
+      if (!(await read($, headlessAtom))) return
+      await update($, headlessAtom, () => false)
+      disabled = Boolean(await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'))
+    })
+    return result
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+
   // Counted after the call: an update the pane refused is not an update.
   on('tool.call', { tool: ANY }, async ($, e, next) => {
     const result = await next(e)
