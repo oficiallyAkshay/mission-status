@@ -66,6 +66,27 @@ export const UPDATE_SCHEMA: Parameters<EngineInterface['tool']['register']>[0] =
           required: ['id'],
         },
       },
+      watches: {
+        type: 'array',
+        description:
+          "Watches: background work that waits for something (CI, a deploy, an alert feed, a trend). They show in the pane's Watching section, never on the stage cards. Send one by id to add or change it; {id, remove: true} drops it. A background shell or Monitor already shows by itself: send job (its task id) only to name or shape it. Its script can also print WATCH: <shape> <name>, HIT: <text>, VALUE: <number>, PROGRESS: <text> or DONE: <text> lines.",
+        items: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'A stable id' },
+            name: { type: 'string', description: 'What it watches, two to six words' },
+            shape: { type: 'string', enum: ['until', 'stream', 'trend'], description: 'until: ends at its first hit. stream: reports every hit. trend: tracks a number.' },
+            status: { type: 'string', enum: ['running', 'hit', 'ended'] },
+            hits: { type: 'number' },
+            last: { type: 'string', description: 'The last hit, a few words' },
+            value: { type: 'number', description: 'The newest reading of a trend' },
+            progress: { type: 'string', description: 'How far it is, for example: 4 of 6 checks' },
+            job: { type: 'string', description: 'The background task id it names' },
+            remove: { type: 'boolean' },
+          },
+          required: ['id'],
+        },
+      },
       saveTemplate: {
         type: 'string',
         description: "Saves this update's stages as the person's own template under this name (lower-case letters, digits and dashes), for any later session. Send it when the person asks to keep a set of stages.",

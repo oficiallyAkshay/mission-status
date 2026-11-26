@@ -1,4 +1,5 @@
 import type { Count, Item, ItemCi, Summary, Task } from '../types'
+import { isWatchItem } from './watches'
 import { cap, findRef, idOf } from './model'
 
 // The state machine: one pure function from the facts to the status of every stage card and every item, and the one
@@ -53,7 +54,9 @@ export function mergeItems(s: NonNullable<Summary>, steps: Task[], facts: Facts)
   const fromSteps = steps
     .filter(t => !bindings.has(t))
     .map(t => ({ id: `task:${idOf(t.name)}`, phase: t.phase, name: cap(t.name), status: t.status, after: null, parent: null, when: null, since: t.since ?? null, doneAt: t.doneAt ?? null, seenAt: t.seenAt ?? null }) as Item)
-  return interleave(items, fromSteps)
+  // A watch item (watching or waiting, not work) leaves the cards: the Watching section shows it (watches.ts).
+  const merged = interleave(items, fromSteps)
+  return merged.filter(x => !isWatchItem(x, merged))
 }
 
 // One list in the work's order: the agent's items keep the order it sent; each task-list step goes among them by time.

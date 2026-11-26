@@ -1,6 +1,7 @@
 import { atom, update } from 'claude-code'
 import type { EngineInterface, RenderChildren } from 'claude-code'
-import type { Count, HypothesisState, Helper, Item, Job, PrRecord, Runbook, RunbookStep, Wakeup } from '../types'
+import type { Count, HypothesisState, Helper, Item, PrRecord, Runbook, RunbookStep } from '../types'
+import { type WatchRow, spark, trendWord } from './watches'
 import { stepsRailSvg, prIconSvg, badgeSvg, exitSvg, flowLineSvg, waitsLineSvg } from './bars'
 import { age, cap } from './model'
 import type { deriveNow } from './store'
@@ -239,8 +240,11 @@ export type StageState = {
   isDone: boolean
   t: number
   running: Helper[]
-  due: Wakeup[]
-  jobs: Job[]
+  watches: WatchRow[]
+  watchOpen: string[]
+  toggleWatch: (id: string) => Promise<unknown>
+  // Opens the Watches tab, where every watch shows.
+  seeAll: () => void
   hostKey: string | null
   stageState: (k: number) => 'done' | 'now' | 'next'
   stageTimeText: (k: number, st: NodeStatus) => string | null
@@ -331,24 +335,92 @@ export function foldedCard(r: Region, c: StageState, name: string, k: number, ga
 }
 
 // The Progress tab: the tabs, the header, the stage bar, the symptom and cause, then the stage cards in order.
-// Background watches in one strip of their own, under the stage bar: each helper the session runs (a background
-// shell, a Monitor, a subagent) with how long it has run, and each scheduled wakeup with when it is due. The cards
-// hold the work; the strip holds what waits in the background. Nothing shows when nothing watches.
-export function watchStrip(r: Region, c: StageState): RenderChildren {
-  const { Box, Text, B, hasSvg } = r
-  const { running, due, jobs, t } = c
-  if (running.length === 0 && due.length === 0 && jobs.length === 0) return null
-  const MAX = 6
-  const rows = [
-    ...running.map(x => ({ id: x.id, description: x.description, model: x.model, time: age(x.startTime, t) })),
-    ...jobs.map(j => ({ id: j.id, description: j.description, model: j.kind, time: age(j.at, t) })),
-    ...due.map(w => ({ id: `wake-${w.at}`, description: w.reason, model: 'wakeup', time: `in ${durationOf(Math.max(0, w.due - t))}` })),
-  ]
+// Watching: background work that waits for something, in a section of its own above Progress, so the stage
+// cards hold only the work. Each watch is its own card (the accent border while it runs): its badge, name, shape and
+// time, then what it found. A heavy line parts Watching from Progress. A watch that ends stays, marked complete or failed.
+// A divider: an empty bordered box, which the desktop draws as one hairline across the full width.
+const rule = (Box: Region['Box'], key: string) => <Box key={key} width="100%" borderStyle="single" borderColor="subtle" borderDimColor />
+export const sectionHead = (r: Region, key: string, title: string, count: string | null, action?: { label: string; onPress: () => void }) => {
+  const { Box, Text, B, Button } = r
   return (
-    <Box key="watching" flexDirection="column" gap={0}>
-      {B.Caption({ children: `Watching · ${rows.length}` })}
-      {rows.slice(0, MAX).map(x => (hasSvg ? B.Helper(x) : <Text key={x.id} wrap="truncate">{`● ${cap(x.description)}  ${x.time}`}</Text>))}
-      {rows.length > MAX && B.Caption({ children: `${rows.length - MAX} more watches run.` })}
+    <Box key={`head-${key}`} width="100%" flexDirection="row" alignItems="center" gap={1}>
+      <Text weight="bold">{title}</Text>
+      <Box flexGrow={1}><Text>{''}</Text></Box>
+      {count !== null && B.Caption({ children: count })}
+      {action !== undefined && <Button key={`act-${key}`} label={action.label} plain onPress={action.onPress} />}
+    </Box>
+  )
+}
+function watchBlock(r: Region, c: StageState, w: WatchRow, folded: boolean): RenderChildren {
+  const { Text, B, svg } = r
+  const { t, badgeFor, toggleWatch } = c
+  const ended = w.endedAt !== null
+  const st = ended ? (w.outcome === 'failed' ? 'failed' : 'done') : 'running'
+  const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+  const shape = w.shape ?? (w.source === 'helper' ? 'helper' : w.kind ?? 'watch')
+  const meta = ended
+    ? `${w.outcome === 'failed' ? 'Failed' : w.outcome === 'hit' ? 'Hit' : 'Complete'} ${clock(w.endedAt ?? t)}`
+    : `${shape} · ${durationOf(Math.max(0, t - w.since)) || '0s'}`
+  const lines: string[] = []
+  if (w.shape === 'trend' && w.values.length > 0) {
+    lines.push([String(w.values[w.values.length - 1]), spark(w.values), trendWord(w.values)].filter(x => x !== '').join('  '))
+  } else if (w.hits > 0) {
+    lines.push(`${w.hits} ${w.hits === 1 ? 'hit' : 'hits'}${w.lastAt !== null ? ` · last ${age(w.lastAt, t)}` : ''}`)
+  }
+  if (w.last !== null && w.last !== '') lines.push(`“${w.last}”`)
+  if (w.progress !== null && w.progress !== '') lines.push(w.progress)
+  if (!ended && w.due !== null) lines.push(`Next check in ${durationOf(Math.max(0, w.due - t))}`)
+  if (!ended && lines.length === 0 && w.shape === 'until') lines.push('Ends at its first hit')
+  if (!ended && lines.length === 0 && w.shape === 'stream') lines.push('No hits yet')
+  return B.Row({
+    id: `watch-${w.id}`,
+    align: folded ? 'center' : undefined,
+    control: ended ? B.Control({ id: `watch-${w.id}`, open: !folded, onPress: () => void toggleWatch(w.id) }) : undefined,
+    badge: svg(badgeFor(st as NodeStatus), `${w.source === 'helper' ? 'Helper ' : ''}${w.name}: ${ended ? meta.toLowerCase() : 'running'}`, 16, `watch-badge-${w.id}`, undefined, 16) ?? <Text>{ended ? '✓' : '●'}</Text>,
+    title: <Text weight="semibold" dimColor={ended} wrap="wrap">{cap(w.name)}</Text>,
+    meta: B.Time({ key: `watch-time-${w.id}`, color: w.outcome === 'failed' ? 'error' : undefined, children: meta }),
+    body: folded ? undefined : lines.map((x, k) => B.Note({ key: `watch-${w.id}-l${k}`, children: x })),
+  })
+}
+// The newest ended first after the running ones (watches.ts order); Progress shows the first few, the Watches tab all.
+export const PROGRESS_WATCHES = 3
+const countOf = (rows: readonly WatchRow[]) => {
+  const live = rows.filter(w => w.endedAt === null).length
+  return live === rows.length ? `${live} running` : `${live} running · ${rows.length - live} ended`
+}
+function watchCards(r: Region, c: StageState, rows: readonly WatchRow[]): RenderChildren {
+  const { B } = r
+  return rows.map(w => {
+    // An ended watch folds to one line (its badge, name and end), as a done stage does; + opens it again.
+    const folded = w.endedAt !== null && !c.watchOpen.includes(w.id)
+    return B.Card({ id: `watch-card-${w.id}`, active: w.endedAt === null, flat: folded, children: watchBlock(r, c, w, folded) })
+  })
+}
+// On Progress: at most PROGRESS_WATCHES cards, See all beside the heading, then a hairline and the Progress heading.
+export function watchSection(r: Region, c: StageState): RenderChildren {
+  const { Box } = r
+  const rows = c.watches
+  if (rows.length === 0) return null
+  return (
+    <Box key="watching" width="100%" flexDirection="column" gap={1}>
+      {sectionHead(r, 'watching', 'Watching (Beta)', countOf(rows), { label: rows.length > PROGRESS_WATCHES ? `See all ${rows.length}` : 'See all', onPress: c.seeAll })}
+      {watchCards(r, c, rows.slice(0, PROGRESS_WATCHES))}
+      {rule(Box, 'watch-end')}
+      {sectionHead(r, 'progress', 'Progress', null)}
+    </Box>
+  )
+}
+// The Watches tab: every watch, running first, then the ended ones newest first.
+export function watchesTab(r: Region, c: StageState) {
+  const { Box, Text } = r
+  const rows = c.watches
+  return (
+    <Box flexDirection="column" alignItems="stretch" gap={2} paddingBottom={1}>
+      {r.tabRow}
+      <Box width="100%" flexDirection="column" gap={1}>
+        {sectionHead(r, 'watches-all', 'Watching (Beta)', rows.length === 0 ? null : countOf(rows))}
+        {rows.length === 0 ? <Text color="subtle">No watches in this session.</Text> : watchCards(r, c, rows)}
+      </Box>
     </Box>
   )
 }
@@ -371,6 +443,8 @@ export function progressTab(r: Region, c: StageState, head: RenderChildren) {
       {tabRow}
       {head}
 
+      {watchSection(r, c)}
+
       {/* The stage bar: one chip per stage in a row that wraps onto more lines when the pane is narrow. The layout
           sizes it, so nothing is measured or guessed: every stage always shows, whole, in order. */}
       {/* The stage bar: one line, always. When the pane is narrow, the chips other than the current one narrow and
@@ -389,8 +463,6 @@ export function progressTab(r: Region, c: StageState, head: RenderChildren) {
           })
         }),
       })}
-
-      {watchStrip(r, c)}
 
       {(s.stage === 'fix' || s.stage === 'cause') && s.symptom !== null && (
         <Box flexDirection="column" gap={1}>

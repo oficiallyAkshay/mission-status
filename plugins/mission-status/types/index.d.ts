@@ -22,6 +22,8 @@ export type Summary = {
   // The repository the work is in, when it is not the session's folder; the PR reads run there.
   repo?: string | null
   runbooks?: Runbook[]
+  // Watches the agent reports: they show in the Watching section, not on the stage cards.
+  watches?: AgentWatch[]
   ticket: Ticket | null
   links: CardLink[]
   goalLine: string | null
@@ -75,7 +77,11 @@ export type Runs = Record<string, { ms: number; from: number | null }>
 // A wakeup the session scheduled: why, and when it is due.
 export type Wakeup = { reason: string; due: number; at: number }
 // A background job the session runs (a shell, a Monitor, a workflow): the app's helper list holds only subagents.
-export type Job = { id: string; kind: string; description: string; at: number }
+export type WatchShape = 'until' | 'stream' | 'trend'
+export type Job = { id: string; kind: string; description: string; at: number; path?: string | null; read?: number; shape?: WatchShape | null; hits?: number; last?: string | null; lastAt?: number | null; values?: number[]; progress?: string | null; endedAt?: number | null; outcome?: 'hit' | 'done' | 'failed' | null }
+// A watch the agent reports through the update tool. job: the background job it names, so that job's row takes
+// this name and shape. status: running, hit (an until watch found what it waited for) or ended.
+export type AgentWatch = { id: string; name: string; shape?: WatchShape | null; status?: 'running' | 'hit' | 'ended'; hits?: number; last?: string | null; lastAt?: number | null; value?: number | null; values?: number[]; progress?: string | null; job?: string | null; at?: number; endedAt?: number | null }
 export type Helper = { id: string; description: string; status: string; model: string | null; startTime: number }
 // One pull request's record, keyed owner/name#number: the one read the item chip, the PRs tab and the Deploy count use.
 export type PrRecord = { ref: string; number: number; title: string; url: string; state: 'open' | 'draft' | 'merged' | 'closed' | 'conflict'; ci: 'running' | 'passing' | 'failing' | 'none'; ciStart?: number | null; ciEnd?: number | null; branch: string | null; mergedAt: number | null; at: number; summary?: string; summaryBy?: 'model' | 'text'; summaryKey?: string; v?: number; commits?: { sha: string; title: string }[]; checks?: { name: string; state: 'running' | 'passing' | 'failing' | 'none' }[] }
@@ -97,7 +103,9 @@ declare module 'claude-code' {
       // Wakeups the session scheduled (ScheduleWakeup); the Watching strip shows the ones still due.
       wakeups: Wakeup[]
       // Background jobs in flight (store.ts addJob, jobsAtTurnEnd, endJobs); the Watching strip shows them.
-      jobs: Job[] }
+      jobs: Job[]
+      // Ended watches the person opened again; every other ended watch shows folded to one line.
+      watchOpen: string[] }
 
   }
 }
