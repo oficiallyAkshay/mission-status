@@ -1,14 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
-import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, linkRefs, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, prRefsIn, prRefsInLines, byteLength, skillSteps, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
+import { asLink, HYPOTHESIS_STATES, ITEM_STATES, PATCH_OPS, PHASES, RULE, STAGE_KEYS, TEMPLATES, UPDATE_TOOL, CAP_BYTES, actionOf, applyPatch, applyPlan, linkRefs, argsOf, asCount, asHypothesis, asItem, bytesOf, cap, checkUpdate, figureOf, idOf, normalize, num, parentLoops, refusalOf, stepsStarted, str, prRefsIn, prRefsInLines, branchesIn, unionRefs, byteLength, skillSteps, mergeRunbooks, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
 import { paneSeen, poll } from './readers'
-import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, tick, tickIfTimer } from './store'
+import { CLOCK_MS, PANE, TICK_MS, TITLE, afterToolCall, agentUpdated, agentVersionOf, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, say, settle, heldReasons, noteEvent, tick, tickIfTimer } from './store'
 import { renderPane } from './view'
 import { registerMetrics } from './metrics'
 import { registerOnboarding } from './onboarding'
 import { registerUpdate } from './update'
 import { registerDoc } from './doc'
+import { registerMarker } from './marker'
 import { registerQuiet } from './quiet'
 
 // The holdback (metrics.tsx decides it): a measurement session with no pane and no standing rule.
@@ -17,29 +18,37 @@ const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, fa
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
-// The pull requests this session made, read from its gh pr create calls; the PRs tab lists them.
+// The live facts the state machine reads (store.ts declares the same keys).
+const turnOpen = atom({ plugin: 'mission-status', key: 'turnOpen' } as const, false as boolean)
+const waiting = atom({ plugin: 'mission-status', key: 'waiting' } as const, false as boolean)
+// The pull requests this session made, read from its gh pr create and Marga calls; the PRs tab lists them.
 const prRefs = atom({ plugin: 'mission-status', key: 'prRefs' } as const, [] as string[])
-// The narrow bar's window: a new current stage brings it back to follow the current stage.
-const barStart = atom({ plugin: 'mission-status', key: 'barStart' } as const, null as number | null)
+// The branches this session's own tool inputs name: readers.ts keeps a listed pull request whose head is one of them.
+const prBranches = atom({ plugin: 'mission-status', key: 'prBranches' } as const, [] as string[])
+async function addBranches($: EngineInterface, found: Iterable<string>): Promise<void> {
+  const have = await read($, prBranches)
+  const add = [...found].filter(b => !have.includes(b))
+  if (add.length > 0) await update($, prBranches, list => [...list, ...add.filter(b => !list.includes(b))].slice(-50))
+}
 
-// The transcript scan: the byte where it stopped (always a line start), and the gh pr create calls seen.
+// The transcript scan: the byte where it stopped (always a line start), and the calls seen that may make a pull request.
 let scanAt = 0
 let scanBusy = false
 // The agent's own version kept in the stored summary (normalize leaves it out, so it is read from the raw value).
 const seenVersion = (stored: Summary): number => (stored as { agentVersion?: number } | null)?.agentVersion ?? 0
 const scanCreates = new Set<string>()
+const scanBranches = new Set<string>()
 // The transcript the scan position and the calls seen belong to; another path starts the scan again.
 let scanPath: string | null = null
 const SCAN_PART = 4 * 1024 * 1024
 
-// The newest 30 pull requests: the earlier ones first in the order first seen, the new ones after.
-export const unionRefs = (list: string[], added: string[]) => [...list, ...added.filter(r => !list.includes(r))].slice(-30)
+export { unionRefs }
 
 // The 1 s and 5 s clocks the session registered; a new session.start cancels them before it registers again.
 let cancels: { cancel: () => void }[] = []
 
 // Reads the session's transcript from where the last scan stopped, in parts of at most 4 MiB (the read limit), and
-// adds each pull request a gh pr create call made to the PRs tab. Deterministic: no model, and nothing is missed
+// adds each pull request a gh pr create or Marga call made to the PRs tab. Deterministic: no model, and nothing is missed
 // from before the pane loaded.
 async function scanTranscript($: EngineInterface): Promise<void> {
   if (scanBusy) return
@@ -50,6 +59,7 @@ async function scanTranscript($: EngineInterface): Promise<void> {
       scanPath = path
       scanAt = 0
       scanCreates.clear()
+      scanBranches.clear()
     }
     const size = (await $.fs.stat(path)).size
     if (size < scanAt) scanAt = 0
@@ -67,11 +77,13 @@ async function scanTranscript($: EngineInterface): Promise<void> {
       }
       const whole = text.slice(0, end + 1)
       scanAt += byteLength(whole)
-      for (const ref of prRefsInLines(whole.split('\n'), scanCreates)) if (!found.includes(ref)) found.push(ref)
+      for (const ref of prRefsInLines(whole.split('\n'), scanCreates, scanBranches)) if (!found.includes(ref)) found.push(ref)
     }
+    await addBranches($, scanBranches)
     if (found.length > 0) {
       await update($, prRefs, list => unionRefs(list, found))
-      void poll($)
+      await savePane($).catch(() => undefined)
+      void poll($, true)
     }
   } catch {
     // A transcript that cannot be read leaves the PRs the tool calls showed.
@@ -93,7 +105,7 @@ async function savedKey($: EngineInterface): Promise<string | null> {
 export async function savePane($: EngineInterface): Promise<void> {
   const key = await savedKey($)
   if (key === null) return
-  const value = { summary: await read($, summary), tasks: await read($, tasks), at: Date.now() }
+  const value = { summary: await read($, summary), tasks: await read($, tasks), prRefs: await read($, prRefs), prBranches: await read($, prBranches), at: Date.now() }
   if (value.summary === null) return
   await $.store.set(key, value)
   const index = ((await $.store.get(SAVED_INDEX).catch(() => undefined)) as string[] | undefined) ?? []
@@ -106,11 +118,19 @@ export async function restorePane($: EngineInterface): Promise<boolean> {
   if ((await read($, summary)) !== null) return false
   const key = await savedKey($)
   if (key === null) return false
-  const kept = (await $.store.get(key).catch(() => undefined)) as { summary?: Summary; tasks?: Task[] } | undefined
+  const kept = (await $.store.get(key).catch(() => undefined)) as { summary?: Summary; tasks?: Task[]; prRefs?: unknown; prBranches?: unknown } | undefined
   const back = normalize(kept?.summary ?? null)
   if (back === null) return false
   await update($, summary, now => (now === null ? back : now))
   if (Array.isArray(kept?.tasks)) await update($, tasks, now => (now.length === 0 ? (kept?.tasks ?? []) : now))
+  // The PRs tab keeps the pull requests the session made before the restart.
+  const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+  const refs = strings(kept?.prRefs)
+  await addBranches($, strings(kept?.prBranches))
+  if (refs.length > 0) {
+    await update($, prRefs, now => unionRefs(refs, now))
+    void poll($, true)
+  }
   return true
 }
 
@@ -120,13 +140,17 @@ export const register: Register = on => {
   registerMetrics(on)
   registerUpdate(on)
   registerDoc(on)
+  registerMarker(on)
   registerQuiet(on)
 
   on('session.start', async ($, e, next) => {
+    // A new or resumed session starts with no turn running and no question open.
+    await update($, turnOpen, () => false).catch(() => undefined)
+    await update($, waiting, () => false).catch(() => undefined)
     await $.tool.register({
       name: 'update',
       description:
-        'Progress pane: send the whole state; the pane redraws it in place. Call it at every meaningful change, in ' +
+        'Mission status pane: send the whole state; the pane redraws it in place. Call it at every meaningful change, in ' +
         'place of a count line in the chat. Write all text in ASD-STE100 Simplified Technical English: each sentence has a ' +
         'subject and a verb, in the active voice and the present tense, about 20 words at most. Labels are one to four words. ' +
         'Every count has a denominator m where one exists. The pane itself reads the task list, git, pull requests and helpers. ' +
@@ -228,24 +252,40 @@ export const register: Register = on => {
           items: {
             type: 'array',
             description:
-              'The work inside each stage, drawn as nested cards. parent names the item that holds this one, by its id or name (cards nest to any depth). after names the sibling this one waits for, by its id or name. Siblings with no after run in parallel. Items show in the order sent.',
+              'The steps inside each card (stage). parent names the step that holds this one, by its id or name: this one is then a sub-step. after names the sibling this one waits for, by its id or name. Siblings run one after another in the order sent unless an item sets parallel. Items show in the order sent.',
             items: {
               type: 'object',
               properties: {
                 id: { type: 'string', description: 'A stable id, kept for the life of the item; absent, the name in lower case with dashes for spaces' },
                 phase: { type: 'number' },
                 name: { type: 'string', description: 'One to four words' },
-                status: { type: 'string', enum: ITEM_STATES },
+                status: { type: 'string', enum: ITEM_STATES, description: 'needs = the item waits on the person (an approval, a sign-off, an answer).' },
                 after: { type: 'string' },
                 parent: { type: 'string' },
                 note: { type: 'string', description: 'The rough scope, cut or area, in a few words, shown under the name' },
                 steps: {
                   type: ['array', 'null'],
-                  items: { type: 'string' },
-                  description: "The item's own sub-phases, one to three words each, at most 8: one dot-separated line under the name, in place of child cards. Use it for the phases inside one step, for example the passes of a review inside one step of the work. null clears it.",
+                  items: {
+                    anyOf: [
+                      { type: 'string' },
+                      {
+                        type: 'object',
+                        properties: {
+                          name: { type: 'string' },
+                          steps: { type: 'array', items: { anyOf: [{ type: 'string' }, { type: 'object' }] } },
+                          status: { type: 'string', enum: ITEM_STATES },
+                          note: { type: 'string' },
+                        },
+                        required: ['name'],
+                      },
+                    ],
+                  },
+                  description: "The sub-sub-steps: one to three words each, at most 8, on one line under the name, in place of nested rows. Use it for the phases inside one sub-step, for example the passes of a review. null clears it. An entry that has its own steps is sent as { name, steps } and becomes its own nested row, one level down.",
                 },
-                step: { type: ['number', 'null'], description: 'Index of the sub-phase that runs now, from 0. The pane shows it bold and the others faint.' },
+                stepsParallel: { type: 'boolean', description: 'True when the sub-sub-steps run at the same time, not one after another: each pulses while its sub-step runs.' },
+                step: { type: ['number', 'null'], description: 'Index of the sub-sub-step that runs now, from 0. The pane shows it bold and the others faint.' },
                 taskStep: { type: 'string', description: "The task-list step this item stands for, by its text. The item is done when that step is marked done." },
+                parallel: { type: 'boolean', description: 'Siblings run one after another in the order sent: an item runs only once the one before it is done. true lets this item run beside the one before it.' },
                 pr: { type: ['string', 'number'], description: "The item's pull request: a number in the work's repository, or owner/name#number. The pane shows its CI state and run time under the item." },
               },
               required: ['phase', 'name', 'status'],
@@ -257,7 +297,12 @@ export const register: Register = on => {
               'Item changes in place of the whole items list: {op:"add", id, phase, name, status, ...}, {op:"remove", id}, or {op:"change", id, and only the fields that change}.',
             items: {
               type: 'object',
-              properties: { op: { type: 'string', enum: PATCH_OPS }, id: { type: 'string' } },
+              properties: {
+                op: { type: 'string', enum: PATCH_OPS },
+                id: { type: 'string' },
+                status: { type: 'string', enum: ITEM_STATES, description: 'needs = the item waits on the person (an approval, a sign-off, an answer).' },
+                stepsParallel: { type: 'boolean', description: 'True when the sub-sub-steps run at the same time, not one after another: each pulses while its sub-step runs.' },
+              },
               required: ['op'],
             },
           },
@@ -288,12 +333,13 @@ export const register: Register = on => {
       },
       isDeferred: false,
     })
-    await $.command.register({ name: 'mission-status', description: 'Open the progress pane' })
+    await $.command.register({ name: 'mission-status', description: 'Open the Mission status pane' })
     for (const handle of cancels) handle.cancel()
     cancels = [
       $.clock.every(CLOCK_MS, () => void tickIfTimer($)),
       $.clock.every(TICK_MS, () => {
-        void poll($)
+        // The reads, then a settle: a helper that ended or a CI read that went old changes a status with no event.
+        void poll($).then(() => settle($))
         void scanTranscript($)
       }),
     ]
@@ -310,6 +356,14 @@ export const register: Register = on => {
   })
 
   on('tool.call', async ($, e, next) => {
+    // A tool call on the main loop proves a turn runs, even when this module loaded after the turn's start (a reload,
+    // an update, a restore), so the state machine never mistakes a working session for an idle one.
+    if (e.agentId === undefined && !(await read($, turnOpen).catch(() => true))) {
+      await update($, turnOpen, () => true).catch(() => undefined)
+      void noteEvent($)
+      void settle($)
+    }
+    if (e.agentId === undefined) void noteEvent($)
     const words = (() => {
       try {
         return actionOf(e as unknown as Record<string, unknown>)
@@ -320,13 +374,16 @@ export const register: Register = on => {
     // The action line is a nicety: a failed write never holds up the call.
     if (words !== null) await say($, words).catch(() => undefined)
     const result = await next(e)
-    // A pull request the session made joins the PRs tab.
+    // A pull request the session made joins the PRs tab; a branch its input names lets the PR list find one.
     try {
       const args = e as unknown as { command?: unknown }
-      const made = prRefsIn(typeof args.command === 'string' ? args.command : '', JSON.stringify(result ?? ''))
+      const command = String(e.tool) === 'Bash' && typeof args.command === 'string' ? args.command : ''
+      await addBranches($, branchesIn(command))
+      const made = prRefsIn(command, JSON.stringify(result ?? ''))
       if (made.length > 0) {
         await update($, prRefs, list => unionRefs(list, made))
-        void poll($)
+        await savePane($).catch(() => undefined)
+        void poll($, true)
       }
     } catch {}
     // A skill the session runs, with numbered steps, joins the tabs as a runbook; the agent marks its steps as it goes.
@@ -356,6 +413,48 @@ export const register: Register = on => {
     return line === null ? result : { ...result, context: [...(result.context ?? []), line] }
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
+  // The live facts the state machine reads: a main-loop turn runs from its start to its end, whatever ends it.
+  // A matcher of its own (any turn id), so it stands beside the other modules' turn.start hooks.
+  on('turn.start', { turnId: /(?:)/ }, async ($, e, next) => {
+    if (e.agentId === undefined) {
+      await update($, turnOpen, () => true).catch(() => undefined)
+      void settle($)
+    }
+    return next(e)
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+
+  on('session.end', { reason: /(?:)/ }, async ($, e, next) => {
+    await update($, turnOpen, () => false).catch(() => undefined)
+    await update($, waiting, () => false).catch(() => undefined)
+    await settle($)
+    return next(e)
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+
+  // A question to the person: the turn waits on them, so nothing the agent does runs meanwhile.
+  on('tool.call', { tool: 'AskUserQuestion' }, async ($, e, next) => {
+    await update($, waiting, () => true).catch(() => undefined)
+    void settle($)
+    try {
+      return await next(e)
+    } finally {
+      await update($, waiting, () => false).catch(() => undefined)
+      void settle($)
+    }
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+
+  // Wrap-up checks off the app's task list, so the pane's copy closes every step too (a denied call changes nothing).
+  on('tool.call', { tool: 'mcp__ccd_turn__wrap_up' }, async ($, e, next) => {
+    const result = await next(e)
+    if (result.deny === undefined) {
+      const at = Date.now()
+      await update($, tasks, list => (list ?? []).map(t => (t.status === 'done' ? t : { ...t, status: 'done' as const, since: null, doneAt: at }))).catch(() => undefined)
+      await savePane($).catch(() => undefined)
+      void noteEvent($)
+      void settle($)
+    }
+    return result
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+
   // Slotting: the pane reads the session's task list itself. A step goes into the stage that is in progress when the
   // step first appears; it stays there.
   on('tool.call', { tool: 'mcp__ccd_turn__update_plan' }, async ($, e, next) => {
@@ -367,6 +466,8 @@ export const register: Register = on => {
       const after = await update($, tasks, list => applyPlan(list, args, at))
       await noteSteps($, stepsStarted(before, after))
       await savePane($).catch(() => undefined)
+      void noteEvent($)
+      void settle($)
     } catch {
       // The task list is a nicety: a failed read never holds up the call.
     }
@@ -389,6 +490,12 @@ export const register: Register = on => {
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      await update($, turnOpen, () => false).catch(() => undefined)
+      await update($, waiting, () => false).catch(() => undefined)
+      void noteEvent($)
+      void settle($)
+    }
     await say($, 'Waiting for you').catch(() => undefined)
     await noteTurnEnd($).catch(() => undefined)
     return next(e)
@@ -421,7 +528,7 @@ export const register: Register = on => {
     await $.ui.open({ id: PANE, title: TITLE })
     await paneSeen($).catch(() => undefined)
     void poll($)
-    return { text: 'The progress pane is open.' }
+    return { text: 'The Mission status pane is open.' }
   })
 
   on('tool.call', { tool: 'mcp__mission-status__update' }, async ($, e) => {
@@ -462,7 +569,6 @@ export const register: Register = on => {
         }),
       )
     }
-    if (written !== null && before?.phase !== written.phase) await update($, barStart, () => null)
     await savePane($).catch(() => undefined)
     await agentUpdated($, num(args.version))
     await tick($)
@@ -479,7 +585,11 @@ export const register: Register = on => {
       await $.store.set(TEMPLATES_KEY, { ...personal, [args.saveTemplate]: written.phases }).catch(() => undefined)
       saved = ` Saved the stages as template ${args.saveTemplate}.`
     }
-    return { result: `The pane shows the new state (version ${written?.version ?? 0}).${saved}` }
+    void noteEvent($)
+    void settle($)
+    // A parent the agent called done shows open while a child or a dependency is open: say which, so it can close it.
+    const held = await heldReasons($)
+    return { result: `The pane shows the new state (version ${written?.version ?? 0}).${saved}${held}` }
 
     function build(old: Summary, seen: number): NonNullable<Summary> {
       const stage = STAGE_KEYS.find(k => k === args.stage) ?? old?.stage ?? 'build'

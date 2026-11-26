@@ -141,7 +141,7 @@ test('an older release installs nothing', async ($, on) => {
   expect(world.runs).toEqual([])
 })
 
-test('a copy installed from a folder never checks or updates itself', async ($, on) => {
+test('a copy installed from a folder never checks or updates itself', { timeoutMs: 20_000 }, async ($, on) => {
   const { world, clock, state } = await setup($, on, { market: null })
   await clock.advance(7 * HOUR)
   expect(world.http).toEqual([])

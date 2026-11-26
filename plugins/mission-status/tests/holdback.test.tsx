@@ -28,7 +28,7 @@ test('a holdback session opens no pane and adds no standing rule', async ($, on)
   expect(composed.sections.some(s => s.id === 'mission-status:progress')).toBe(false)
   // No rule after a compaction, and no held turn end, however stale.
   const after = (await $.classic.SessionStart({ source: 'compact' } as never)) as { additionalContext?: string[] }
-  expect((after.additionalContext ?? []).some(x => x.includes('Progress pane'))).toBe(false)
+  expect((after.additionalContext ?? []).some(x => x.includes('Mission status pane'))).toBe(false)
   for (let k = 0; k < 8; k++) await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
   expect(((await $.classic.Stop({ stop_hook_active: false } as never)) as { block?: string }).block).toBeUndefined()
 })

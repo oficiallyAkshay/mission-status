@@ -1,15 +1,16 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, ProgressProps, RenderChildren, RenderInput, SvgProps } from 'claude-code'
-import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket, RunbookStep } from '../types'
-import { barWindow, trackFits, stepsRailSvg, prIconSvg, badgeSvg, failedBadgeSvg, exitSvg, flowLineSvg, spaceSvg, waitsLineSvg, stripSvg, trackSvg } from './bars'
-import { age, cap, clockOf, findRef, idOf, normalize, workOrder } from './model'
-import { prFacts } from './readers'
+import type { Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Marks, Pr, Runs, StageKey, StepStatus, Summary, Task, Ticket, RunbookStep } from '../types'
+import { stepsRailSvg, prIconSvg, badgeSvg, failedBadgeSvg, needsBadgeSvg, stepPulseSvg, textWidth, exitSvg, flowLineSvg, waitsLineSvg, stripSvg } from './bars'
+import { age, cap, findRef, idOf, normalize, workOrder } from './model'
 import type { MergeLive } from './readers'
-import { ACCENT } from './store'
+import { ACCENT, hostOf } from './store'
+import { type Facts, type NodeStatus, type Timing, derive, mergeItems, timeOf } from './machine'
 import { updateText } from './update-line'
 import { setAutoUpdate, updateNow } from './update'
 import { openDoc } from './doc'
+import { blocks, durationOf, CHEV, INDENT, NOTE, SPACE, SUBTEXT, ACCENT_TEXT } from './blocks'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const live = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
@@ -17,43 +18,32 @@ const now = atom({ plugin: 'mission-status', key: 'now' } as const, 0)
 const open = atom({ plugin: 'mission-status', key: 'open' } as const, null as string[] | null)
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
-// The first stage a narrow bar shows, after the person moves it; null follows the current stage.
-const barStartAtom = atom({ plugin: 'mission-status', key: 'barStart' } as const, null as number | null)
+// The live facts the state machine reads (store.ts writes them).
+const turnOpenAtom = atom({ plugin: 'mission-status', key: 'turnOpen' } as const, false as boolean)
+const waitingAtom = atom({ plugin: 'mission-status', key: 'waiting' } as const, false as boolean)
+const runsAtom = atom({ plugin: 'mission-status', key: 'runs' } as const, {} as Runs)
+const seenAtom = atom({ plugin: 'mission-status', key: 'seenAt' } as const, 0)
+const marksAtom = atom({ plugin: 'mission-status', key: 'marks' } as const, null as Marks | null)
 // The pane's open tab: null is Progress, else a runbook's id.
 const tabAtom = atom({ plugin: 'mission-status', key: 'tab' } as const, null as string | null)
+// The open tab inside each pull request card, by its reference.
+const prTabAtom = atom({ plugin: 'mission-status', key: 'prTab' } as const, {} as Record<string, string>)
 const autoUpdate = atom({ plugin: 'mission-status', key: 'autoUpdate' } as const, null as boolean | null)
 const updateState = atom({ plugin: 'mission-status', key: 'updateState' } as const, null as { phase: string; version: string | null; failures: number; at: number } | null)
 
-// Subtext (notes, the status line, the goal): the app's secondary text colour, a theme key, so it reads on dark and
-// light pages. A fixed grey cannot: the earlier rgba grey was about 2.4:1 on the light page.
-const SUBTEXT = 'inactive'
-// Notes under item names: one step smaller, at 75% opacity; a mid grey that reads on dark and light.
-const NOTE = 'rgba(128, 128, 128, 0.75)'
-// Accent text uses the app's own purple theme key, so it reads on dark and light pages. Borders and drawings keep ACCENT.
-const ACCENT_TEXT = 'merged'
+// An empty 2 px drawing that holds the place of a stub where no line runs.
+const STUB_NONE = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="2"></svg>'
 // With no update from the agent for this long, the header shows the age in amber.
 // Only web addresses open as links; a file:, javascript: or app-scheme address shows as text.
 const isWebUrl = (href: string) => /^https?:\/\/[^\s]+$/i.test(href)
 
 
 // The header's age of the last update: seconds, then minutes, then hours.
-// The clock time a step was done, in the machine's own time zone: 9:05 PM.
+// The clock time a step was done, in the machine's own local time, with no zone name: 9:05 PM.
 export function timeOfDay(at: number): string {
   const d = new Date(at)
   const h = d.getHours()
-  return `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}${zoneOf(d)}`
-}
-
-// The machine's time zone as a short name: Eastern Standard Time reads ET, Central European Time reads CET.
-export function zoneOf(d: Date): string {
-  const name = /\(([^)]+)\)/.exec(d.toString())?.[1] ?? ''
-  const short = name
-    .split(/\s+/)
-    .filter(w => !/^(standard|daylight|summer)$/i.test(w))
-    .map(w => w[0] ?? '')
-    .join('')
-    .toUpperCase()
-  return short === '' ? '' : ` ${short}`
+  return `${h % 12 === 0 ? 12 : h % 12}:${String(d.getMinutes()).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`
 }
 
 // A Claude artifact's address.
@@ -120,45 +110,61 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const steps = (await safe(read($, tasks), [] as Task[])) ?? []
     const upd = await safe(read($, updateState), null)
     const auto = await safe(read($, autoUpdate), null)
-    // The model's items plus the task list's steps, each in its stage. A step the model also names shows once.
-    // An item whose pull request merged is done, at the merge time, whatever the agent last sent: no agent call needed.
-    const prMergedAt = (x: Item) => (x.pr != null ? (l?.ci?.[x.pr]?.mergedAt ?? null) : null)
-    const allItems: Item[] = [
-      ...s.items.map(x => {
-        if (x.status === 'done') return x
-        // A merged pull request closes the item, unless the agent named the item after the merge: the work went on.
-        const mergedAt = prMergedAt(x)
-        if (mergedAt !== null && mergedAt >= (x.touchedAt ?? 0)) return { ...x, status: 'done' as const, doneAt: mergedAt, since: null }
-        // An item bound to a task-list step closes when the step is marked done.
-        const bound = (x.taskStep ?? null) === null ? undefined : steps.find(t => t.name.trim().toLowerCase() === (x.taskStep ?? '').trim().toLowerCase())
-        return bound?.status === 'done' ? { ...x, status: 'done' as const, doneAt: bound.doneAt ?? null, since: null } : x
-      }),
-      ...steps
-        // A stage the model fills with its own items shows those; the task list fills only stages it leaves empty. A
-        // step in progress shows in any stage, so the pane never says nothing runs while a step runs.
-        .filter(x => x.status === 'now' || !s.items.some(y => y.phase === x.phase))
-        .filter(x => !s.items.some(y => y.name.toLowerCase() === x.name.toLowerCase() || (y.taskStep ?? '').toLowerCase() === x.name.toLowerCase()))
-        .map(x => ({ id: `task:${idOf(x.name)}`, phase: x.phase, name: cap(x.name), status: x.status, after: null, parent: null, when: null, since: x.since ?? null, doneAt: x.doneAt ?? null }) as Item),
-    ]
-    // A stage's state. Done only when its phase is past AND every item in it is done: a passed stage with an
-    // unfinished item stays in progress, beside the current stage. The current and the active stages are in progress.
-    const stageState = (k: number): 'done' | 'now' | 'next' => {
-      const unfinished = allItems.some(x => x.phase === k && x.status !== 'done')
-      if (k === s.phase || s.active.includes(k)) return 'now'
-      if (k < s.phase) return unfinished ? 'now' : 'done'
-      return 'next'
+    // The state machine decides every status (machine.ts): the view only draws it, so no two parts can disagree.
+    const baseFacts: Facts = {
+      turnOpen: (await safe(read($, turnOpenAtom), false)) === true,
+      waiting: (await safe(read($, waitingAtom), false)) === true,
+      helpersRunning: (l?.helpers ?? []).some(h => h.status === 'running'),
+      hostKey: null,
+      ci: (l?.ci ?? {}) as Facts['ci'],
+      marks: (await safe(read($, marksAtom), null))?.marks ?? {},
     }
+    const allItems: Item[] = mergeItems(s, steps, baseFacts)
+    const facts: Facts = { ...baseFacts, hostKey: hostOf(s, allItems) }
+    const machine = derive(s, allItems, facts)
+    const runs = (await safe(read($, runsAtom), {} as Runs)) ?? {}
+    const seen = (await safe(read($, seenAtom), 0)) ?? 0
+    // A node's running time: what it counted before, plus the span it runs now.
+    const runTime = (key: string): number | null => {
+      const r = runs[key]
+      if (r === undefined) return null
+      return r.ms + (r.from !== null ? Math.max(0, t - r.from) : 0)
+    }
+    // A stage's time: its counted running time; for work from before running time was counted, its recorded start and
+    // end. Never blank where a time is known.
+    // A stage's time (machine.timeOf): its own running time, else its items' running time, else their span, else the
+    // recorded start and end, else when its last item finished. A stage the stage number jumped past still has one.
+    const stageTiming = (k: number, st: NodeStatus): Timing => {
+      const mine = allItems.filter(x => machine.stageOf(x) === k)
+      const tm = timeOf(runTime(`stage-${k}`), mine.map(x => ({ ran: runTime(itemKey(x)), since: x.since, doneAt: x.doneAt })))
+      if (tm !== null) return tm
+      const from = s.starts?.[k] ?? null
+      const to = st === 'done' ? (s.ends?.[k] ?? null) : st === 'running' ? t : null
+      return from !== null && to !== null && to >= from ? { ms: to - from } : null
+    }
+    // What a stage shows: a duration where one is known, else the clock time it finished.
+    const stageTimeText = (k: number, st: NodeStatus): string | null => {
+      const tm = stageTiming(k, st)
+      return tm === null ? null : 'ms' in tm ? (tm.ms > 0 ? durationOf(tm.ms) : null) : timeOfDay(tm.at)
+    }
+    // For the open state and the chips: a running or open stage counts as in progress, so it stays open to read.
+    const stageState = (k: number): 'done' | 'now' | 'next' => {
+      const st = machine.stage(k)
+      return st === 'done' ? 'done' : st === 'next' ? 'next' : 'now'
+    }
+    // The badge: a spinner only while it runs; open work shows a still dot.
+    const badgeOf = (st: NodeStatus): 'done' | 'now' | 'next' | 'dot' => (st === 'running' ? 'now' : st === 'open' || st === 'failed' || st === 'needs' ? 'dot' : st)
+    // A node's badge drawing: a failure and a wait on the person each have their own mark.
+    const badgeFor = (st: NodeStatus, size = 16) => (st === 'failed' ? failedBadgeSvg(size) : st === 'needs' ? needsBadgeSvg(size) : badgeSvg(badgeOf(st), 0, size))
+    // The status word for a wait on the person, in the meta column of its row.
+    const needsWord = (st: NodeStatus, key: string) => st === 'needs' && B.Caption({ key: `${key}-needs`, color: 'warning', children: 'Needs you' })
 
     // isInteractive draws the picture in a sandboxed frame, where its <title> tooltips show on hover.
     // width: a fixed pixel width. A drawing in a column box is stretched to the column's width without it.
     const svg = (source: string, alt: string, height: number, key?: string, isInteractive?: boolean, width?: number) =>
       Svg === undefined ? null : <Svg key={key} source={source} alt={alt} height={height > 0 ? height : undefined} width={width} isInteractive={isInteractive === true ? true : undefined} />
-    const row = (left: RenderChildren, right: RenderChildren, key?: string) => (
-      <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2} key={key}>
-        {left}
-        {right}
-      </Box>
-    )
+    // The building blocks every region is drawn from (blocks.tsx).
+    const B = blocks({ Box, Text, Button, Link }, (source, alt, height, key, width) => svg(source, alt, height, key, undefined, width))
     const small = (text: string, color?: string) => (
       <Text dimColor={color === undefined} color={color}>
         {text}
@@ -166,7 +172,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     )
 
     const total = s.phases.length
-    const isDone = s.phase >= total
+    const isDone = machine.allDone
     const current = isDone ? null : (s.phases[s.phase] ?? null)
 
     // What the pane reads itself.
@@ -181,13 +187,6 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     if (deploy >= 0 && prs.length > 0 && !measures.some(c => c.phase === deploy))
       measures.push({ label: 'Pull requests merged', when: 'every pull request merges', n: merged, m: prs.length, phase: deploy })
 
-    // Columns: open control, mark, stage, measure label, figure. The figure column has one width, right-aligned.
-    const CHEV = 3
-    // The badge column and the gap beside it: names start this far in, and a child indents by the same amount.
-    const BADGE = 2
-    const INDENT = BADGE + 1
-    const MARK = 2
-    const FIG = 12
     // What is open follows state: a card or an item in progress opens by itself, and a completed one closes. A press
     // overrides that, but only while the card stays in the state it had at the press; a change of state restores the rule.
     // An item's key: its stage and id, so two items with one name never share a row key or an open state.
@@ -211,297 +210,223 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     }
     const toggle = (k: number) => toggleKey(`stage-${k}`)
 
-    // A gate is met by a status word (met, yes, done) or by x of y reached.
-    const isMet = (c: Count) =>
-      c.text !== undefined ? /^(met|yes|done|approved|merged|passed)$/i.test(c.text) : c.m !== undefined && c.n !== undefined && c.n >= c.m
-    const itemMark: Record<ItemStatus, string> = { done: '✓', now: '●', next: '○', failed: '✕' }
-    const itemColor: Record<ItemStatus, string> = { done: 'success', now: ACCENT_TEXT, next: 'subtle', failed: 'error' }
+    // A gate shows met only as the state machine says: the agent claims it and every item of its stage is done.
+    const isMet = (c: Count) => machine.gateMet(c)
+    const itemMark: Record<ItemStatus, string> = { done: '✓', now: '●', next: '○', failed: '✕', needs: '!' }
+    const itemColor: Record<ItemStatus, string> = { done: 'success', now: ACCENT_TEXT, next: 'subtle', failed: 'error', needs: 'warning' }
     // The items of a stage as a tree: an item that waits for another sits indented under it; items side by side run in parallel.
     // Items are cards, nested to any depth by parent. Siblings in order: an item that waits for another follows it
     // after the other's gate; siblings with no wait between them run in parallel.
-    const itemState = (x: Item): ItemStatus => x.status
+    // An item's status for its row: the machine's word, as the row's state names it.
+    const itemState = (x: Item): ItemStatus => {
+      const st = machine.item(x)
+      return st === 'running' ? 'now' : st === 'open' ? 'now' : st
+    }
     // The item tree, drawn the way tree views draw it. Siblings share one column. A wait is a vertical line in the
     // badge column that joins the two badges, past any note and any child rows between them. Children indent by one
     // step (the badge column plus its gap). Every row carries the rail columns of its ancestors, so lines never break.
-    // Link chips on a card. The app opens web links only; a file path shows as its label and path.
-    // Link chips on a card: a tinted purple pill with ↗ and the label. Web links open in the browser; a local Markdown
-    // file opens in the document pane; any other path shows as plain text.
-    const CHIP_BG = 'rgba(139, 124, 246, 0.18)'
-    const CHIP_INK = '#B7ADFF'
-    const chip = (inner: RenderChildren, key: string) => (
-      // One text row tall: a tinted background with side padding; a border would add a row above and below.
-      <Box key={key} backgroundColor={CHIP_BG} paddingX={1} flexShrink={0}>
-        {inner}
-      </Box>
-    )
+    // Links on a card. A web link is a link chip; a Claude artifact and a local Markdown file are the app's own grey
+    // buttons (they open inside Claude); any other path shows as its label and path.
     const linkRow = (links: { label: string; href: string }[], key: string) =>
-      links.length === 0 ? null : (
-        <Box flexDirection="row" gap={1} flexWrap="wrap" key={key}>
-          {links.map((l, k) =>
-            isArtifact(l.href)
-              ? // A Claude artifact opens inside the desktop app: the press calls the session's Artifact tool, open action.
-                // A real button, so the press always reaches the pane; a Markdown link drew the address and opened nothing.
-                <Button key={`art-${key}-${k}`} label={`↗ ${l.label}`} onPress={() => void openArtifact($, l.href)} />
-              : isWebUrl(l.href)
-              ? chip(
-                  <Text color={CHIP_INK} weight="semibold">
-                    <Link href={l.href}>{`↗ ${l.label}`}</Link>
-                  </Text>,
-                  `${key}-${k}`,
-                )
-              : /\.(md|markdown)$/i.test(l.href) && (l.href.startsWith('/') || l.href.startsWith('~'))
-                ? // A local Markdown file opens in the document pane. A plain button, as the tabs and artifact chips are: a
-                  // Markdown link drew in the link colour, underlined.
-                  <Button key={`doc-${key}-${k}`} label={`↗ ${l.label}`} onPress={() => void openDoc($, l.label, l.href).catch(() => undefined)} />
-                : <Text color={SUBTEXT} key={`${key}-${k}`}>{`${l.label}: ${l.href}`}</Text>,
-          )}
-        </Box>
-      )
-    const STEP = BADGE + 1
-    // A rail cell: the wait line when on. A space row keeps its height with an empty drawing when no line runs through.
-    const railBox = (on: boolean, height: number, key: string, keepHeight = false) => (
-      <Box width={STEP} flexShrink={0} key={key}>
-        {on && Svg !== undefined
-          ? svg(waitsLineSvg(height), 'Wait line', height, undefined, undefined, 16)
-          : keepHeight && Svg !== undefined
-            ? svg(spaceSvg(height), 'Space', height, undefined, undefined, 16)
-            : <Text>{''}</Text>}
-      </Box>
-    )
-    const prefix = (rails: boolean[], height: number, key: string) => rails.map((on, i) => railBox(on, height, `${key}-r${i}`))
+      links.length === 0
+        ? null
+        : B.ChipRow({
+            id: key,
+            children: links.map((l, k) =>
+              isArtifact(l.href)
+                ? // A real button, so the press always reaches the pane; the press calls the session's Artifact tool.
+                  <Button key={`art-${key}-${k}`} label={`↗ ${l.label}`} onPress={() => void openArtifact($, l.href)} />
+                : isWebUrl(l.href)
+                  ? B.Chip({ id: `${key}-${k}`, label: `↗ ${l.label}`, tone: 'link', href: l.href })
+                  : /\.(md|markdown)$/i.test(l.href) && (l.href.startsWith('/') || l.href.startsWith('~'))
+                    ? <Button key={`doc-${key}-${k}`} label={`↗ ${l.label}`} onPress={() => void openDoc($, l.label, l.href).catch(() => undefined)} />
+                    : <Text color={SUBTEXT} key={`${key}-${k}`}>{`${l.label}: ${l.href}`}</Text>,
+            ),
+          })
     // Siblings in the work's own order: as the agent sent them, an item after the one it waits for. No sort by status,
     // so a row never jumps when its status changes.
     const ordered = (list: Item[]) => workOrder(list, allItems)
     const kidsOf = (x: Item) => allItems.filter(y => y.phase === x.phase && y !== x && findRef(allItems, y.parent, y.phase, y) === x)
-    // The text rows a line of text takes at this width, so the tree lines are drawn as tall as the row (no gaps).
-    const linesOf = (text: string, depth: number, rails: number) => {
-      const cols = Math.max(10, Math.floor(((e.props.bodyColumns || 50) * 8 - 64 - (rails + 1) * STEP * 8 - CHEV * 8 - depth * 0) / 7))
-      return Math.max(1, Math.ceil(text.length / cols))
-    }
-    const itemCards = (list: Item[], depth: number, rails: boolean[] = []): RenderChildren => {
-      const rows: RenderChildren[] = []
+    // The items of a stage as a tree (blocks.tsx Tree): each item one Row, its badge column carrying the trunk to the
+    // next sibling; the note, sub-sub-steps, helpers, links and open children sit in its body, under its name.
+    const itemCards = (list: Item[], depth: number): RenderChildren => {
       const order = ordered(list)
-      order.forEach((x, i) => {
-        const kids = kidsOf(x)
-        const key = itemKey(x)
-        const isOpen = kids.length > 0 && isOpenKey(key)
-        const state = itemState(x)
-        // The item's pull request CI rides on the item's own line, after the item's time: a part of that time.
-        const ci = x.pr != null ? (l?.ci?.[x.pr] ?? null) : null
-        const ciTook = ci === null || ci.start === null ? null : (ci.end ?? Date.now()) - ci.start
-        // A done item with passed checks says nothing more; a failure always shows.
-        const ciPart =
-          ci === null || ci.state === 'none' || (ci.state === 'passing' && state === 'done')
-            ? null
-            : `  ·  ${ci.state === 'running' ? 'CI' : ci.state === 'failing' ? 'CI failed' : 'CI passed'}${ciTook === null ? '' : ` ${clockOf(ciTook)}`}`
-        // Siblings share one trunk, as in a tree view: the line joins every badge of the list, top to bottom.
-        const down = i < order.length - 1
-        const up = i > 0
-        const label = state === 'now' && (x.since ?? null) !== null ? `${x.name}  ·  00:00` : state === 'done' && (x.doneAt ?? null) !== null ? `${x.name}  ·  12:00 PM EST` : x.name
-        // A text line draws about 24 px high, not 20: the badge column fills the rest with the trunk, so no gap opens below.
-        const rowH = 24 * linesOf(label + (ciPart ?? ''), depth, rails.length)
-        const word = state === 'done' ? 'done' : state === 'now' ? 'in progress' : state === 'failed' ? 'failed' : 'not started'
-        rows.push(
-          <Box flexDirection="row" alignItems="flex-start" gap={0} key={`${key}-row`}>
-            {prefix(rails, rowH, `${key}-row`)}
-            <Box width={STEP} flexShrink={0} flexDirection="column">
-              {Svg !== undefined
-                ? svg(state === 'failed' ? failedBadgeSvg(16, up, down) : badgeSvg(state, 0, 16, up, down), `${x.name}: ${word}`, 20, undefined, undefined, 16)
-                : <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>}
-              {Svg !== undefined && rowH > 20 && down && svg(waitsLineSvg(rowH - 20), 'Wait line', rowH - 20, undefined, undefined, 16)}
-            </Box>
-            <Box flexGrow={1} flexShrink={1}>
-              {/* Body style for every item; the badge carries the state, the colour only steps back for done and later items. */}
-              <Text color={state === 'now' ? undefined : SUBTEXT} wrap="wrap">
-                {state === 'now' && (x.since ?? null) !== null
-                  ? `${x.name}  ·  ${clockOf(Date.now() - (x.since ?? Date.now()))}`
-                  : state === 'done' && (x.doneAt ?? null) !== null
-                    ? `${x.name}  ·  ${timeOfDay(x.doneAt ?? 0)}`
-                    : x.name}
-                {ciPart !== null && <Text color={ci?.state === 'failing' ? 'error' : ci?.state === 'running' ? ACCENT_TEXT : NOTE}>{ciPart}</Text>}
+      return B.Tree({
+        // A list is keyed by its stage and its parent, never by an item's name, so a rename or a new first item keeps
+        // every drawing in it mounted.
+        id: `list-${depth}-${order[0]?.phase ?? 0}-${order[0]?.parent ?? 'root'}`,
+        line: waitsLineSvg,
+        none: STUB_NONE,
+        nodes: order.map(x => {
+          const kids = kidsOf(x)
+          const key = itemKey(x)
+          const isOpen = kids.length > 0 && isOpenKey(key)
+          const state = itemState(x)
+          const st = machine.item(x)
+          // The item's pull request CI rides on the item's own line, after the item's time: a part of that time.
+          const ci = x.pr != null ? (l?.ci?.[x.pr] ?? null) : null
+          const ciTook = ci === null || ci.start === null ? null : (ci.end ?? Date.now()) - ci.start
+          // A done item with passed checks says nothing more; a failure always shows.
+          const ciPart =
+            ci === null || ci.state === 'none' || (ci.state === 'passing' && state === 'done')
+              ? null
+              : `${ci.state === 'running' ? 'CI' : ci.state === 'failing' ? 'CI failed' : 'CI passed'}${ciTook === null ? '' : ` ${durationOf(ciTook)}`}`
+          // A timer counts only while the item runs (its running time, never idle hours); a done item shows when it
+          // finished; an open one shows nothing.
+          const ran = runTime(key)
+          const timeWord =
+            st === 'running'
+              ? durationOf(ran !== null && ran > 0 ? ran : Math.max(0, t - (x.since ?? t)))
+              : state === 'done' && (x.doneAt ?? null) !== null
+                ? timeOfDay(x.doneAt ?? 0)
+                : null
+          const word = state === 'done' ? 'done' : state === 'needs' ? 'needs you' : state === 'now' ? 'in progress' : state === 'failed' ? 'failed' : 'not started'
+          const mine = s.links.filter(lk => lk.item !== null && findRef(allItems, lk.item, x.phase) === x)
+          const helpers = Svg !== undefined && hostName !== null && x.phase === s.phase && x.name === hostName ? running : []
+          const prNo = x.pr != null ? `#${String(x.pr).split('#').pop()}` : null
+          return {
+            id: key,
+            badge: badgeFor(st),
+            alt: `${x.name}: ${word}`,
+            fallback: <Text color={itemColor[x.status]}>{itemMark[x.status]}</Text>,
+            // Body style for every item; the badge carries the state, the colour only steps back for done and later items.
+            title: (
+              <Text color={state === 'now' || state === 'needs' ? undefined : SUBTEXT} wrap="wrap">
+                {x.name}
               </Text>
-            </Box>
-            <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
-              {kids.length > 0 ? (
-                <Button key={`open-${key}`} label={isOpen ? '−' : '+'} plain dimColor onPress={() => toggleKey(key)} />
-              ) : (
-                <Text>{''}</Text>
-              )}
-            </Box>
-          </Box>,
-        )
-        if ((x.note ?? null) !== null)
-          rows.push(
-            <Box flexDirection="row" gap={0} alignItems="flex-start" key={`${key}-note`}>
-              {prefix(rails, 14 + 16 * (linesOf(x.note ?? '', depth, rails.length) - 1), `${key}-note`)}
-              {railBox(down, 14 + 16 * (linesOf(x.note ?? '', depth, rails.length) - 1), `${key}-note-own`)}
-              <Box flexGrow={1} flexShrink={1} paddingRight={CHEV}>
-                <Text size="caption" color={NOTE} wrap="wrap">{x.note}</Text>
-              </Box>
-            </Box>,
-          )
-        // The item's sub-phases on one dot-separated line, in place of child cards: the one that runs now in full-opacity
-        // body text, the rest faint. Only an item in progress has a sub-phase that runs: a done, failed or later item
-        // shows every sub-phase faint, whatever its step says.
-        if ((x.steps ?? []).length > 0)
-          rows.push(
-            <Box flexDirection="row" gap={0} key={`${key}-steps`}>
-              {prefix(rails, 14, `${key}-steps`)}
-              {railBox(down, 14, `${key}-steps-own`)}
-              <Box flexGrow={1} flexShrink={1} paddingRight={CHEV}>
-                <Text size="caption" color={NOTE} wrap="wrap">
-                  {(x.steps ?? []).map((name, j) => [
+            ),
+            // The meta column: the pull request (its state icon and number), its CI, then the item's time.
+            meta: [
+              prNo !== null && (
+                <Box flexDirection="row" alignItems="center" gap={0} key={`${key}-pr`}>
+                  {svg(prIconSvg(ci?.pr ?? 'open'), `Pull request ${x.pr}: ${ci?.pr ?? 'open'}`, 14, `${key}-pr-icon`, undefined, 14)}
+                  {B.Caption({ children: ci?.url != null && isWebUrl(ci.url) ? <Link href={ci.url}>{prNo}</Link> : prNo })}
+                </Box>
+              ),
+              needsWord(st, key),
+              ciPart !== null && B.Caption({ key: `${key}-ci`, color: ci?.state === 'failing' ? 'error' : undefined, children: ciPart }),
+              timeWord !== null && B.Time({ key: `${key}-time`, children: timeWord }),
+            ],
+            control: B.Control({ id: key, open: isOpen, onPress: kids.length > 0 ? () => void toggleKey(key) : undefined }),
+            body: [
+              // The note sits directly under the name, with no gap.
+              (x.note ?? null) !== null && B.Note({ key: `${key}-note`, children: x.note }),
+              // Sub-sub-steps that run at the same time: each name pulses while the item runs, with a small offset
+              // between them, never one after another.
+              (x.steps ?? []).length > 0 && x.stepsParallel === true && Svg !== undefined &&
+                B.ChipRow({
+                  id: `${key}-psteps`,
+                  children: (x.steps ?? []).map((name, j) => svg(stepPulseSvg(name, j, st === 'running'), name, 16, `${key}-pstep-${j}`, undefined, textWidth(name, 12) + 2)),
+                }),
+              // Sub-sub-steps in order, on one dot-separated line: the one that runs now in full-opacity body text, the
+              // rest faint.
+              (x.steps ?? []).length > 0 && (x.stepsParallel !== true || Svg === undefined) &&
+                B.Note({
+                  key: `${key}-steps`,
+                  children: (x.steps ?? []).map((name, j) => [
                     j > 0 ? ' · ' : '',
-                    j === x.step && state === 'now'
-                      ? <Text key={`${key}-step-${j}`} weight="bold" color="text">{name}</Text>
-                      : name,
-                  ])}
-                </Text>
-              </Box>
-            </Box>,
-          )
-        // The item's pull request CI: its state and how long the checks ran, or run so far.
-        // The helpers the session runs now sit under the item in progress, as its children: a review's readers under
-        // the review.
-        if (Svg !== undefined && hostName !== null && x.phase === s.phase && x.name === hostName && running.length > 0) {
-          running.slice(0, 6).forEach((helper, j) =>
-            rows.push(
-              <Box flexDirection="row" gap={0} key={`${key}-helper-${helper.id}`}>
-                {prefix(rails, 22, `${key}-helper-${helper.id}`)}
-                {railBox(down, 22, `${key}-helper-own-${j}`)}
-                <Box flexGrow={1} flexShrink={1} paddingRight={CHEV}>
+                    j === x.step && state === 'now' ? <Text key={`${key}-step-${j}`} weight="bold" color="text">{name}</Text> : name,
+                  ]),
+                }),
+              // The helpers the session runs now sit under the item in progress, as its children.
+              ...helpers.slice(0, 6).map(helper => (
+                <Box key={`${key}-helper-${helper.id}`} paddingRight={CHEV} minWidth={0}>
                   {svg(stripSvg({ title: cap(helper.description), detail: helper.model, state: 'running', time: age(helper.startTime, t) }), `Helper ${helper.description}: running`, 22, `strip-${helper.id}`)}
                 </Box>
-              </Box>,
-            ),
-          )
-          if (running.length > 6)
-            rows.push(
-              <Box flexDirection="row" gap={0} key={`${key}-helper-more`}>
-                {prefix(rails, 14, `${key}-helper-more`)}
-                {railBox(down, 14, `${key}-helper-more-own`)}
-                <Text size="caption" color={NOTE}>{`${running.length - 6} more helpers run.`}</Text>
-              </Box>,
-            )
-        }
-        const mine = s.links.filter(l => l.item !== null && findRef(allItems, l.item, x.phase) === x)
-        if (mine.length > 0)
-          rows.push(
-            <Box flexDirection="row" gap={0} key={`${key}-links`}>
-              {prefix(rails, 20, `${key}-links`)}
-              {railBox(down, 20, `${key}-links-own`)}
-              {linkRow(mine, `links-${key}`)}
-            </Box>,
-          )
-        if (isOpen && depth < 5) rows.push(itemCards(kids, depth + 1, [...rails, down]))
-        // One fixed space between rows; it carries the lines that pass through it.
-        if (i < order.length - 1)
-          rows.push(
-            <Box flexDirection="row" gap={0} key={`${key}-gap`}>
-              {prefix(rails, 6, `${key}-gap`)}
-              {railBox(down, 6, `${key}-gap-own`, true)}
-            </Box>,
-          )
+              )),
+              helpers.length > 6 && B.Caption({ key: `${key}-more`, children: `${helpers.length - 6} more helpers run.` }),
+              mine.length > 0 && linkRow(mine, `links-${key}`),
+              // Children start one space below the item's last line, the same space as between siblings.
+              isOpen && depth < 5 && <Box key={`${key}-kids`} width="100%" marginTop={SPACE}>{itemCards(kids, depth + 1)}</Box>,
+            ],
+          }
+        }),
       })
-      return (
-        <Box flexDirection="column" gap={0} key={`list-${depth}-${rails.length}-${order[0]?.name ?? ''}`}>
-          {rows}
-        </Box>
-      )
     }
     const sameName = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase()
     // The item that holds the running helpers: the last item in progress in the current stage, not one named as the stage.
     const hostName =
       [...allItems].reverse().find(x => x.phase === s.phase && x.status === 'now' && !sameName(x.name, s.phases[s.phase] ?? ''))?.name ?? null
-    const itemTree = (k: number) => (
-      // A stage's items are its children: they start where the stage name starts, as nested items start under theirs.
-      <Box flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
-        {itemCards(allItems.filter(x => x.phase === k && findRef(allItems, x.parent, k, x) === undefined), 0)}
-      </Box>
-    )
-
-    // Each stage is a card: a status badge, the stage name over its measure, the figure large on the right, and an
-    // open control when the stage has items. The current stage's card carries the accent border.
+    // Each stage is a Card (blocks.tsx): a header Row with its badge, name, time and open control, then its links,
+    // items, wait and helpers. The running stage's card carries the accent border.
     const stageRow = (name: string, k: number) => {
-      // One stage is in progress at a time: the current one.
+      // The machine's word on the stage: running (a spinner and its timer), open, done or next.
       const state = stageState(k)
-      const mine = measures.filter(c => c.phase === k && c.m !== 0)
+      const stStage = machine.stage(k)
       const hasItems = allItems.some(x => x.phase === k)
       // A done stage can fold back to its one line, items or not.
       const canFold = hasItems || state === 'done'
       const isOpen = canFold && opened.includes(k)
-      const isDim = state === 'next'
-        return (
-        <Box
-          flexDirection="column"
-          gap={0}
-          key={`stage-${k}`}
-          borderStyle="single"
-          borderColor={state === 'now' ? ACCENT : 'subtle'}
-          borderDimColor={state !== 'now'}
-          paddingX={1}
-        >
-          <Box flexDirection="row" alignItems="center" gap={1}>
-            <Box width={BADGE} flexShrink={0}>
-              {Svg !== undefined ? svg(badgeSvg(state, 0, 16), `${name}: ${state === 'done' ? 'done' : state === 'now' ? 'in progress' : 'not started'}`, 16) : <Text>{state === 'done' ? '✓' : state === 'now' ? '●' : '○'}</Text>}
-            </Box>
-            <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-              <Box flexDirection="row" gap={1} alignItems="center">
-                <Text weight="semibold" dimColor={isDim}>{name}</Text>
-              </Box>
-            </Box>
-            <Box flexShrink={0} width={FIG} flexDirection="row" justifyContent="flex-end">
-              {(() => {
-                // The time on the stage: live on the current one, the time taken on a done one, nothing ahead.
-                const from = s.starts?.[k] ?? null
-                const to = state === 'done' ? (s.ends?.[k] ?? null) : state === 'now' ? Date.now() : null
-                if (from === null || to === null) return <Text>{''}</Text>
-                return (
-                  <Text weight="semibold" color={state === 'now' ? ACCENT_TEXT : undefined} dimColor={state === 'done'}>
-                    {clockOf(to - from)}
-                  </Text>
-                )
-              })()}
-            </Box>
-            <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
-              {canFold ? (
-                <Button key={`open-${k}`} label={isOpen ? '−' : '+'} plain dimColor onPress={() => toggle(k)} />
-              ) : (
-                <Text>{''}</Text>
-              )}
-            </Box>
-          </Box>
-          {(() => {
-            const mine = s.links.filter(l => l.phase === k && l.item === null)
-            return mine.length === 0 ? null : <Box paddingLeft={INDENT}>{linkRow(mine, `links-stage-${k}`)}</Box>
-          })()}
-          {isOpen && itemTree(k)}
-          {state === 'now' &&
-            s.waitingOn !== null && (
-              // A wait is a normal state, not a fault: a quiet subtitle under the stage, no warning box. The first letter
-              // drops to lower case only for a plain word, so CI and PR stay as written.
-              <Box paddingLeft={INDENT}>
-                <Text color={SUBTEXT} wrap="wrap">
+      // The time on the stage: its running time, live while it runs, its total once done; nothing open or ahead.
+      const ran = stStage === 'running' || stStage === 'done' ? stageTimeText(k, stStage) : null
+      const links = s.links.filter(lk => lk.phase === k && lk.item === null)
+      const word = stStage === 'done' ? 'done' : stStage === 'running' ? 'in progress' : stStage === 'next' ? 'not started' : stStage === 'needs' ? 'needs you' : 'open'
+      return B.Card({
+        id: `stage-${k}`,
+        active: stStage === 'running',
+        children: [
+          B.Row({
+            id: `stage-${k}`,
+            align: 'center',
+            badge: svg(badgeFor(stStage), `${name}: ${word}`, 16, `stage-badge-${k}`, undefined, 16) ?? <Text>{state === 'done' ? '✓' : state === 'now' ? '●' : '○'}</Text>,
+            title: <Text weight="semibold" dimColor={state === 'next'}>{name}</Text>,
+            meta: [needsWord(stStage, `stage-${k}`), ran !== null && B.Time({ key: `stage-time-${k}`, children: ran })],
+            control: B.Control({ id: String(k), open: isOpen, onPress: canFold ? () => void toggle(k) : undefined }),
+            body: [
+              links.length > 0 && linkRow(links, `links-stage-${k}`),
+              // A wait is a normal state, not a fault: a quiet subtitle under the stage, no warning box. The first
+              // letter drops to lower case only for a plain word, so CI and PR stay as written.
+              state === 'now' && s.waitingOn !== null && (
+                <Text key={`wait-${k}`} color={SUBTEXT} wrap="wrap">
                   {`Waiting on ${/^[A-Z][a-z]/.test(s.waitingOn) ? s.waitingOn.charAt(0).toLowerCase() + s.waitingOn.slice(1) : s.waitingOn}`}
                   <Text dimColor>{`  ·  ${age(s.waitingSince, t)}`}</Text>
                 </Text>
-              </Box>
-            )}
-          {k === s.phase && Svg !== undefined && running.length > 0 && hostName === null && (
-            <Box flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
-              {running.slice(0, 4).map(x =>
-                svg(
-                  stripSvg({ title: cap(x.description), detail: x.model, state: 'running', time: age(x.startTime, t) }),
-                  `Helper ${x.description}: running`,
-                  22,
-                  `strip-${x.id}`,
-                ),
-              )}
-              {running.length > 4 && small(`${running.length - 4} more helpers run.`)}
+              ),
+            ],
+          }),
+          // A stage's items are its children: they start where the stage name starts.
+          isOpen && (
+            <Box key={`tree-${k}`} width="100%" flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
+              {itemCards(allItems.filter(x => x.phase === k && findRef(allItems, x.parent, k, x) === undefined), 0)}
             </Box>
-          )}
-        </Box>
-      )
+          ),
+          k === s.phase && Svg !== undefined && running.length > 0 && hostName === null && (
+            <Box key={`helpers-${k}`} flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
+              {running.slice(0, 4).map(x =>
+                svg(stripSvg({ title: cap(x.description), detail: x.model, state: 'running', time: age(x.startTime, t) }), `Helper ${x.description}: running`, 22, `strip-${x.id}`),
+              )}
+              {running.length > 4 && B.Caption({ children: `${running.length - 4} more helpers run.` })}
+            </Box>
+          ),
+        ],
+      })
+    }
+    // A finished stage folds to one line: a flat Card (no visible border, the same width) holding one Row, so its
+    // badge, name and time sit exactly where an open card's do. Its met gates sit in the meta column, before the time.
+    // The line between stages runs through the row itself: it fills the badge column above and below the badge, and
+    // the space after the row sits inside it, so the line never breaks between folded stages.
+    const foldedRow = (name: string, k: number, gates: string[], hasMore: boolean, isLast: boolean) => {
+      const ran = stageTimeText(k, 'done')
+      const pic = svg(badgeSvg('done', 0, 16), `${name}: done`, 16, `fold-badge-${k}`, undefined, 16)
+      return B.Card({
+        id: `fold-${k}`,
+        flat: true,
+        children: B.Row({
+          id: `fold-${k}`,
+          align: 'center',
+          space: !isLast,
+          badge:
+            pic === null
+              ? <Text color="success">✓</Text>
+              : [B.Trunk({ id: `fold-up-${k}`, on: k > 0, source: waitsLineSvg }), pic, B.Trunk({ id: `fold-down-${k}`, on: !isLast, source: waitsLineSvg })],
+          title: <Text dimColor>{name}</Text>,
+          meta: [
+            gates.length > 0 && B.Caption({ key: `fold-gates-${k}`, color: 'success', children: `✓ ${gates.join(' · ')}` }),
+            ran !== null && B.Time({ key: `fold-time-${k}`, children: ran }),
+          ],
+          control: B.Control({ id: String(k), open: false, onPress: hasMore ? () => void toggle(k) : undefined }),
+        }),
+      })
     }
 
     const hypoMark: Record<HypothesisState, string> = { open: '○', testing: '●', 'ruled out': '✕', confirmed: '✓' }
@@ -511,107 +436,6 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const room = Math.max(20, Math.floor(((e.props.bodyColumns || 50) * 8 - 64) / 7))
     const fit = (text: string) => (text.length > room ? `${text.slice(0, room - 1)}…` : text)
 
-    // Tooltips on the stage bar: for each stage, its state, its time and its gate.
-    // Tooltips on the stage bar: state, the time a done stage took, and the clause. Nothing in them changes each
-    // second, so the drawing stays the same between redraws and does not flicker.
-    const tips = s.phases.map((name, k) => {
-      const isNow = stageState(k) === 'now'
-      const from = s.starts?.[k] ?? null
-      const to = !isNow && k < s.phase ? (s.ends?.[k] ?? null) : null
-      const exit = measures.find(c => c.phase === k && c.when !== undefined)
-      const state = isNow ? 'In progress' : stageState(k) === 'done' ? 'Done' : 'Not started'
-      return [
-        `${name}: ${state}${from !== null && to !== null ? `, took ${clockOf(to - from)}` : ''}.`,
-        exit !== undefined ? `Gate: ${exit.when}` : '',
-      ].filter(Boolean).join(' ')
-    })
-    const barInput = { total, done: Math.min(s.phase, total), current, isDone, clock: 0, names: s.phases, tips, checks: s.phases.map((_, k) => stageState(k) === 'done'), widthPx: Math.max(160, (e.props.bodyColumns || 50) * 8 - 32) }
-    const barFits = Svg === undefined || trackFits(barInput)
-    const barStart = await safe(read($, barStartAtom), null)
-    // The git bar: one line, closed by default; open, it lists the facts behind the line.
-    const g = l?.git ?? null
-    const isGitOpen = isOpenKey('git')
-    // Merge state: done once the pull request merges, in progress while one is open or work is committed, else ahead.
-    const mergeState: 'done' | 'now' | 'next' =
-      prs[0]?.state === 'MERGED' ? 'done' : prs[0]?.state === 'OPEN' || (g !== null && g.ahead > 0) ? 'now' : 'next'
-    // The GitHub read: a missing or signed-out CLI says so once; a failed read keeps the last pull requests and says
-    // when the next try runs.
-    const merge = l?.merge
-    const retryIn = (at: number) => {
-      const min = Math.ceil((at - clock) / 60_000)
-      return min <= 1 ? 'under 1 min' : `${min} min`
-    }
-    const ghLine =
-      merge?.gh === 'missing' ? (
-        <Text color={SUBTEXT} wrap="wrap">Pull request state needs the GitHub CLI.</Text>
-      ) : merge?.gh === 'failed' || (merge === undefined && l?.prsUnread === true) ? (
-        <Text color="warning" wrap="wrap">
-          {`Pull request read failed${prs.length > 0 ? '; this shows the last good read' : ''}. Next try in ${retryIn(merge?.nextGhAt ?? 0)}.`}
-        </Text>
-      ) : null
-    // With no repository (git missing, or the folder is not a git repository) the card does not show.
-    const gitBar =
-      g === null && prs.length === 0 ? null : (
-        // Merge is a stage card like the others: a badge for its state, its name, its facts as the subline.
-        <Box
-          flexDirection="column"
-          gap={0}
-          borderStyle="single"
-          borderColor={mergeState === 'now' ? ACCENT : 'subtle'}
-          borderDimColor={mergeState !== 'now'}
-          paddingX={1}
-        >
-          <Box flexDirection="row" alignItems="center" gap={1}>
-            <Box width={BADGE} flexShrink={0}>
-              {Svg !== undefined
-                ? svg(badgeSvg(mergeState, 0, 16), `Merge: ${mergeState === 'done' ? 'done' : mergeState === 'now' ? 'in progress' : 'not started'}`, 16)
-                : <Text>{mergeState === 'done' ? '✓' : mergeState === 'now' ? '●' : '○'}</Text>}
-            </Box>
-            <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-              <Text weight="semibold" dimColor={mergeState === 'next'}>Merge</Text>
-              <Box flexDirection="row" gap={2}>
-                {prFacts(prs[0], g).map((f, k) => (
-                  <Text key={`gf-${k}`} color={f.tone === 'dim' ? undefined : f.tone} dimColor={f.tone === 'dim'}>
-                    {f.text}
-                  </Text>
-                ))}
-              </Box>
-              {ghLine}
-            </Box>
-            <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
-              <Button key="open-git" label={isGitOpen ? '−' : '+'} plain dimColor onPress={() => toggleKey('git')} />
-            </Box>
-          </Box>
-          {isGitOpen && (
-            <Box flexDirection="column" gap={0} marginTop={1} paddingLeft={INDENT}>
-              {g !== null && (
-                <Box flexDirection="row" gap={2}>
-                  <Box flexShrink={0}>{small('Branch')}</Box>
-                  <Box flexGrow={1} flexShrink={1} flexDirection="row" justifyContent="flex-end">
-                    <Text dimColor wrap="truncate-middle">{g.branch}</Text>
-                  </Box>
-                </Box>
-              )}
-              {g !== null && row(small('Commits ahead of main'), small(`${g.ahead}`))}
-              {g !== null && row(small('Commits behind main'), small(`${g.behind ?? 0}`, (g.behind ?? 0) > 0 ? 'warning' : undefined))}
-              {g !== null && g.files > 0 && row(small('Files changed'), small(`${g.files}`))}
-              {g !== null && g.added + g.removed > 0 && row(small('Lines'), small(`+${g.added} −${g.removed}`))}
-              {g !== null && g.dirty > 0 && row(small('Files not committed'), small(`${g.dirty}`, 'warning'))}
-              {prs.map(p =>
-                row(
-                  <Text>
-                    {isWebUrl(p.url) ? <Link href={`${p.url}/files`}>{`#${p.number}`}</Link> : `#${p.number}`}
-                    {`  ${p.title}`}
-                  </Text>,
-                  small(p.state === 'MERGED' ? 'Merged' : p.state === 'CLOSED' ? 'Closed' : 'Open'),
-                  `git-pr-${p.number}`,
-                ),
-              )}
-            </Box>
-          )}
-        </Box>
-      )
-
     // Tabs: Progress, then one tab for each runbook the session follows. A press switches the view.
     const runbooks = s.runbooks ?? []
     const tab = await safe(read($, tabAtom), null)
@@ -619,35 +443,32 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     // Tabs: Progress, PRs (always), then each runbook or skill the session follows.
     const sessionPrs = l?.sessionPrs ?? []
     const onPrs = tab === 'prs'
-    // The tabs are chips like the pane's other chips, not native buttons: the open tab in the bar's purple, the others
-    // in a quiet grey. A chip is a Markdown link the pane answers itself.
-    // The open tab is a purple chip with white text, as the stage bar's pill; the others are quiet buttons. A Markdown
-    // link drew every tab in the link colour, underlined.
-    const tabChip = (key: string, label: string, isOn: boolean, value: string | null) =>
-      isOn ? (
-        <Box key={key} backgroundColor="#7462E8" paddingX={1} flexShrink={0}>
-          <Text weight="semibold" color="#FFFFFF">{label}</Text>
-        </Box>
-      ) : (
-        <Button key={key} label={label} plain dimColor onPress={() => void update($, tabAtom, () => value)} />
-      )
-    const tabRow = (
-      <Box flexDirection="row" gap={1} flexWrap="wrap" key="tabs">
-        {tabChip('tab-progress', 'Progress', book === null && !onPrs, null)}
-        {tabChip('tab-prs', sessionPrs.length > 0 ? `PRs ${sessionPrs.length}` : 'PRs', onPrs, 'prs')}
-        {/* One runbook: its tab reads Runbook (or Skill), and its title heads the view. Several: each tab carries its title. */}
-        {runbooks.map(r =>
-          tabChip(`tab-${r.id}`, runbooks.length === 1 ? (r.id.startsWith('skill-') ? 'Skill' : 'Runbook') : r.title.replace(/^Skill: /, ''), book?.id === r.id, r.id),
-        )}
-      </Box>
-    )
+    // The tab bar (blocks.tsx Tabs): Progress, PRs, then one tab for each runbook or skill. One runbook: its tab reads
+    // Runbook (or Skill), and its title heads the view. Several: each tab carries its title.
+    const pick = (value: string | null) => () => void update($, tabAtom, () => value)
+    const tabRow = B.Tabs({
+      id: 'tabs',
+      tabs: [
+        { key: 'tab-progress', icon: '◔', label: 'Progress', on: book === null && !onPrs, onPress: pick(null) },
+        { key: 'tab-prs', icon: '⎇', label: sessionPrs.length > 0 ? `PRs ${sessionPrs.length}` : 'PRs', on: onPrs, onPress: pick('prs') },
+        ...runbooks.map(r => ({
+          key: `tab-${r.id}`,
+          icon: r.id.startsWith('skill-') ? '✦' : '☰',
+          label: runbooks.length === 1 ? (r.id.startsWith('skill-') ? 'Skill' : 'Runbook') : r.title.replace(/^Skill: /, ''),
+          on: book?.id === r.id,
+          onPress: pick(r.id),
+        })),
+      ],
+    })
     if (onPrs) {
-      // The PRs tab: every pull request this session made, newest first, as a card that opens to its facts.
+      const prTabs = (await safe(read($, prTabAtom), {} as Record<string, string>)) ?? {}
+      // The PRs tab: every pull request this session made, newest first, as a card that opens to its facts. The tab
+      // names the view, so no heading repeats it.
       const word = { merged: 'Merged', open: 'Open', draft: 'Draft', conflict: 'Conflict', closed: 'Closed' } as const
       const ciWord = { running: 'CI running', passing: 'CI passed', failing: 'CI failed', none: 'No CI' } as const
       // CI on the closed row only while it runs (with its time so far) or after it failed; passed CI stays inside the card.
       const ciShort = (p: (typeof sessionPrs)[number]) =>
-        p.ci === 'running' ? `CI ${p.ciStart != null ? clockOf(Date.now() - p.ciStart) : ''}`.trim() : p.ci === 'failing' && p.state !== 'merged' ? 'CI failed' : null
+        p.ci === 'running' ? `CI ${p.ciStart != null ? durationOf(Date.now() - p.ciStart) : ''}`.trim() : p.ci === 'failing' && p.state !== 'merged' ? 'CI failed' : null
       const counts = (['merged', 'open', 'draft', 'conflict', 'closed'] as const)
         .map(st => [st, sessionPrs.filter(p => p.state === st).length] as const)
         .filter(([, n]) => n > 0)
@@ -656,39 +477,85 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       return (
         <Box flexDirection="column" gap={1} paddingBottom={1}>
           {tabRow}
-          <Text size="heading" weight="semibold">Pull requests</Text>
           <Text color={SUBTEXT}>{sessionPrs.length === 0 ? 'This session has made no pull request yet.' : counts}</Text>
           <Box flexDirection="column" gap={1}>
             {[...sessionPrs].reverse().map(p => {
               const key = `pr-${p.ref}`
               const isOpen = isOpenKey(key)
-              return (
-                <Box key={key} flexDirection="column" gap={0} borderStyle="single" borderColor="subtle" borderDimColor paddingX={1}>
-                  <Box flexDirection="row" alignItems="center" gap={1}>
-                    <Box width={BADGE} flexShrink={0}>
-                      {Svg !== undefined ? svg(prIconSvg(p.state), `${word[p.state]}`, 16) : <Text>{word[p.state][0]}</Text>}
-                    </Box>
-                    <Box flexGrow={1} flexShrink={1}>
-                      <Text wrap="truncate-end" dimColor={p.state === 'merged' || p.state === 'closed'}>{`#${p.number}  ${p.title}`}</Text>
-                    </Box>
-                    {ciShort(p) !== null && <Text size="caption" color={p.ci === 'failing' ? 'error' : ACCENT_TEXT}>{ciShort(p)}</Text>}
-                    <Text size="caption" color={p.state === 'conflict' ? 'warning' : SUBTEXT}>{word[p.state]}</Text>
-                    <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
-                      <Button key={`open-${key}`} label={isOpen ? '−' : '+'} plain dimColor onPress={() => toggleKey(key)} />
-                    </Box>
-                  </Box>
-                  {isOpen && (
-                    <Box flexDirection="column" gap={0} paddingLeft={INDENT}>
-                      <Text size="caption" color={p.ci === 'failing' ? 'error' : NOTE}>
-                        {`${ciWord[p.ci]}${p.ciStart != null ? `  ·  ${clockOf((p.ciEnd ?? Date.now()) - p.ciStart)}` : ''}`}
-                      </Text>
-                      <Text size="caption" color={NOTE}>{`${p.ref.split('#')[0]}${p.branch !== null ? `  ·  ${p.branch}` : ''}`}</Text>
-                      {p.mergedAt !== null && <Text size="caption" color={NOTE}>{`Merged at ${timeOfDay(p.mergedAt)}`}</Text>}
-                      {isWebUrl(p.url) && <Text size="caption"><Link href={p.url}>Open on GitHub</Link></Text>}
-                    </Box>
-                  )}
-                </Box>
-              )
+              const which = prTabs[p.ref] === 'ci' ? 'ci' : 'commits'
+              const pickTab = (name: string) => () => void update($, prTabAtom, m => ({ ...(m ?? {}), [p.ref]: name }))
+              const checks = p.checks ?? []
+              const commits = p.commits ?? []
+              return B.Card({
+                id: key,
+                children: [
+                  // Line 1: where it is: the repository and the linked number; its CI and state in the meta column.
+                  B.Row({
+                    id: `${key}-where`,
+                    align: 'center',
+                    title: B.Caption({
+                      wrap: 'truncate-end',
+                      children: [`${p.ref.includes('#') ? p.ref.split('#')[0] : 'This repository'}  •  `, isWebUrl(p.url) ? <Link key="n" href={p.url}>{`#${p.number}`}</Link> : `#${p.number}`],
+                    }),
+                    meta: [
+                      ciShort(p) !== null && B.Caption({ key: `${key}-ci`, color: p.ci === 'failing' ? 'error' : undefined, children: ciShort(p) }),
+                      B.Caption({ key: `${key}-state`, color: p.state === 'conflict' ? 'warning' : SUBTEXT, children: word[p.state] }),
+                    ],
+                    control: B.Control({ id: key, open: isOpen, onPress: () => void toggleKey(key) }),
+                  }),
+                  // Line 2: the state icon and the title, whole; line 3: what it does, in two sentences, open or closed.
+                  B.Row({
+                    id: `${key}-title`,
+                    badge: svg(prIconSvg(p.state), `${word[p.state]}`, 16, `${key}-icon`, undefined, 16) ?? <Text>{word[p.state][0]}</Text>,
+                    title: <Text wrap="wrap" dimColor={p.state === 'merged' || p.state === 'closed'}>{p.title}</Text>,
+                    body: [
+                      (p.summary ?? '') !== '' && B.Note({ key: `${key}-summary`, children: p.summary }),
+                      // Inside an open card: two tabs, Commits and CI; the choice is kept per pull request.
+                      isOpen && (
+                        <Box key={`${key}-open`} flexDirection="column" gap={0} marginTop={1}>
+                          {B.Tabs({
+                            id: `${key}-tabs`,
+                            tabs: [
+                              { key: `${key}-b-commits`, icon: '●', label: `Commits ${commits.length}`, on: which === 'commits', onPress: pickTab('commits') },
+                              { key: `${key}-b-ci`, icon: '✓', label: checks.length > 0 ? `CI ${checks.filter(c => c.state === 'passing').length}/${checks.length}` : 'CI', on: which === 'ci', onPress: pickTab('ci') },
+                            ],
+                          })}
+                          {which === 'commits' &&
+                            (commits.length === 0
+                              ? B.Caption({ children: 'No commits read yet.' })
+                              : commits.map(c => (
+                                  <Box key={`${key}-c-${c.sha}`} flexDirection="row" gap={1} minWidth={0}>
+                                    {B.Caption({ children: c.sha })}
+                                    <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                                      <Text size="caption" wrap="truncate-end">{c.title}</Text>
+                                    </Box>
+                                  </Box>
+                                )))}
+                          {which === 'ci' && (
+                            <Box flexDirection="column" gap={0}>
+                              {B.Caption({
+                                color: p.ci === 'failing' ? 'error' : undefined,
+                                children: `${ciWord[p.ci]}${p.ciStart != null ? `  ·  ${durationOf((p.ciEnd ?? Date.now()) - p.ciStart)}` : ''}`,
+                              })}
+                              {checks.map((c, j) => (
+                                <Box key={`${key}-k-${j}`} flexDirection="row" gap={1} minWidth={0}>
+                                  <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                                    <Text size="caption" wrap="truncate-end">{c.name}</Text>
+                                  </Box>
+                                  {B.Caption({
+                                    color: c.state === 'failing' ? 'error' : c.state === 'running' ? ACCENT_TEXT : undefined,
+                                    children: c.state === 'passing' ? 'Passed' : c.state === 'failing' ? 'Failed' : c.state === 'running' ? 'Running' : 'No result',
+                                  })}
+                                </Box>
+                              ))}
+                            </Box>
+                          )}
+                        </Box>
+                      ),
+                    ],
+                  }),
+                ],
+              })
             })}
           </Box>
         </Box>
@@ -707,25 +574,24 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       const summaryLine = [`${doneN} of ${m} done`, mine.length > 0 ? `${mine.length} need you` : null, nowStep !== null ? `now: ${nowStep.name}` : null]
         .filter(Boolean)
         .join('  ·  ')
-      const stepRow = (x: RunbookStep, k: number, key: string) => (
-        <Box flexDirection="row" gap={1} key={key}>
-          <Box width={BADGE} flexShrink={0}>
-            {Svg !== undefined
-              ? svg(badgeSvg(x.status === 'done' ? 'done' : x.status === 'now' ? 'now' : 'next', 0, 16), `Step ${k + 1}: ${x.status}`, 16)
-              : <Text>{x.status === 'done' ? '✓' : x.status === 'now' ? '●' : '○'}</Text>}
-          </Box>
-          <Box flexDirection="column" flexGrow={1} flexShrink={1}>
+      // Each step is a Row: its badge, its number and name, then its note and any wait in the body.
+      const stepRow = (x: RunbookStep, k: number, key: string) =>
+        B.Row({
+          id: key,
+          badge:
+            svg(badgeSvg(x.status === 'done' ? 'done' : x.status === 'now' ? 'now' : 'next', 0, 16), `Step ${k + 1}: ${x.status}`, 16, `${key}-badge`, undefined, 16) ??
+            <Text>{x.status === 'done' ? '✓' : x.status === 'now' ? '●' : '○'}</Text>,
+          title: (
             <Text wrap="wrap" dimColor={x.status === 'done'} color={x.status === 'now' ? ACCENT_TEXT : x.status === 'failed' ? 'error' : undefined}>
               <Text color={SUBTEXT}>{`${k + 1}  `}</Text>
               {x.name}
             </Text>
-            {x.note !== null && <Text size="caption" color={NOTE} wrap="wrap">{x.note}</Text>}
-            {x.status !== 'done' && waitText(x) !== null && (
-              <Text size="caption" color={isMine(x) ? 'warning' : SUBTEXT} wrap="wrap">{waitText(x)}</Text>
-            )}
-          </Box>
-        </Box>
-      )
+          ),
+          body: [
+            x.note !== null && B.Note({ key: `${key}-note`, children: x.note }),
+            x.status !== 'done' && waitText(x) !== null && B.Note({ key: `${key}-wait`, color: isMine(x) ? 'warning' : SUBTEXT, children: waitText(x) }),
+          ],
+        })
       return (
         <Box flexDirection="column" gap={1} paddingBottom={1}>
           {tabRow}
@@ -744,17 +610,22 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     }
 
     return (
-      <Box flexDirection="column" gap={2} paddingBottom={1}>
+      <Box flexDirection="column" alignItems="stretch" gap={2} paddingBottom={1}>
         {tabRow}
         {/* The header: the title; the goal below. */}
         <Box flexDirection="column" gap={1}>
           <Box flexDirection="row" justifyContent="space-between" alignItems="center" gap={2}>
-            <Box flexDirection="column" flexGrow={1} flexShrink={1}>
-              <Text size="heading" weight="semibold" wrap="wrap">{`Project: ${s.project}`}</Text>
+            <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+              <Text size="heading" weight="semibold" wrap="wrap">{s.project}</Text>
             </Box>
             {/* How old the agent's last update is; it goes back to 0s with each update. */}
             <Box flexShrink={0}>
-              <Text color={SUBTEXT}>{agoOf(t - s.at)}</Text>
+              {/* Live while a turn runs; else how long ago the session last did anything the pane saw. */}
+              {baseFacts.turnOpen ? (
+                <Text color={ACCENT_TEXT}>Live</Text>
+              ) : (
+                <Text color={SUBTEXT}>{agoOf(t - Math.max(seen, s.at))}</Text>
+              )}
             </Box>
           </Box>
           {s.ticket !== null && (
@@ -780,80 +651,34 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               {auto === false && <Button key="auto-on" label="Turn on auto-update" onPress={() => void setAutoUpdate($, true)} />}
             </Box>
           )}
-          {isDone ? (
-            <Text color="success" wrap="wrap">
-              {`All ${total} stages are done.`}
-              {(() => {
-                const from = s.starts?.[0] ?? null
-                const to = s.ends?.[total - 1] ?? null
-                return from !== null && to !== null && to >= from ? <Text color={SUBTEXT}>{`  ·  took ${clockOf(to - from)}`}</Text> : null
-              })()}
-            </Text>
-          ) : (
-            // Stale: amber is the only stale signal, with the age.
-            clock - s.at >= STALE_MS && (
-              <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
-                <Text color="warning" wrap="wrap">{`No update from the agent for ${age(s.at, clock)}.`}</Text>
-                <Button key="update-stale" label="Update" onPress={askUpdate} />
-              </Box>
-            )
+          {/* No line when all is done: the folded cards already say it. Stale: amber is the only stale signal, with the age. */}
+          {!isDone && clock - s.at >= STALE_MS && (
+            <Box flexDirection="row" gap={1} flexWrap="wrap" alignItems="center">
+              <Text color="warning" wrap="wrap">{`No update from the agent for ${age(s.at, clock)}.`}</Text>
+              <Button key="update-stale" label="Update" onPress={askUpdate} />
+            </Box>
           )}
           {readFailed && <Text color="error" wrap="wrap">The pane could not read part of its stored state. It shows the last good view.</Text>}
         </Box>
 
-        {(() => {
-          // A pane too narrow for every stage name shows a window of the stages, with ‹ and › to move it.
-          if (barFits) return null
-          const n = s.phases.length
-          const win = barWindow({ ...barInput, widthPx: barInput.widthPx - 56 }, barStart)
-          const part = {
-            ...barInput,
-            widthPx: undefined,
-            total: win.to - win.from + 1,
-            done: (isDone ? n : Math.min(s.phase, n)) - win.from,
-            isDone: isDone && win.to === n - 1,
-            names: s.phases.slice(win.from, win.to + 1),
-            tips: tips.slice(win.from, win.to + 1),
-            checks: barInput.checks.slice(win.from, win.to + 1),
-          }
-          const move = (to: number) => void update($, barStartAtom, () => Math.max(0, Math.min(to, n - 1)))
-          return (
-            <Box flexDirection="row" alignItems="center" gap={1} key="stage-window">
-              <Box width={3} flexShrink={0}>
-                {win.from > 0 ? <Button key="bar-left" label="‹" plain onPress={() => move(win.from - 1)} /> : <Text>{''}</Text>}
-              </Box>
-              {/* The window takes the room between the arrows as a fixed pixel width: a percentage width did not stretch. */}
-              <Box flexGrow={1} flexShrink={1}>
-                {Svg !== undefined && (
-                  <Svg
-                    key="stage-bar"
-                    source={trackSvg(part).replace('width="100%"', `width="${barInput.widthPx - 56}"`)}
-                    alt={`Stages ${win.from + 1} to ${win.to + 1} of ${n}${isDone ? '' : `; current: ${current}`}`}
-                    width={barInput.widthPx - 56}
-                    height={30}
-                    isInteractive
-                  />
-                )}
-              </Box>
-              <Box width={3} flexShrink={0}>
-                {win.to < n - 1 ? <Button key="bar-right" label="›" plain onPress={() => move(win.from + 1)} /> : <Text>{''}</Text>}
-              </Box>
-            </Box>
-          )
-        })()}
-        {!barFits
-          ? null
-          : Svg !== undefined
-          ? svg(
-              trackSvg(barInput),
-              isDone ? 'All stages are done.' : `Stage ${s.phase + 1} of ${total}: ${current}`,
-              30,
-              'stage-bar',
-              true,
-            )
-          : Progress !== undefined
-            ? <Progress label="Stages" value={Math.min(s.phase, total)} max={total} valueText={`${Math.min(s.phase, total)} of ${total}`} color="success" />
-            : null}
+        {/* The stage bar: one chip per stage in a row that wraps onto more lines when the pane is narrow. The layout
+            sizes it, so nothing is measured or guessed: every stage always shows, whole, in order. */}
+        {/* The stage bar: one line, always. When the pane is narrow, the chips other than the current one narrow and
+            cut their names; the bar never wraps onto a second line. */}
+        {B.ChipRow({
+          id: 'stage-bar',
+          oneLine: true,
+          children: s.phases.map((name, k) => {
+            const st = stageState(k)
+            const isCurrent = !isDone && k === s.phase
+            return B.Chip({
+              id: `stage-chip-${k}`,
+              label: st === 'done' && !isCurrent ? `✓ ${name}` : name,
+              tone: isCurrent ? 'on' : st === 'done' ? 'done' : 'quiet',
+              shrink: !isCurrent,
+            })
+          }),
+        })}
 
         {(s.stage === 'fix' || s.stage === 'cause') && s.symptom !== null && (
           <Box flexDirection="column" gap={1}>
@@ -868,81 +693,55 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               </Box>
             )}
             {s.stage === 'cause' &&
-              s.hypotheses.map((x, k) => (
-                <Box flexDirection="row" key={`hypo-${k}`}>
-                  <Box width={MARK} flexShrink={0}>
-                    <Text color={hypoColor[x.state]}>{hypoMark[x.state]}</Text>
-                  </Box>
-                  <Box flexGrow={1}>
-                    {row(
-                      <Text dimColor={x.state === 'ruled out' || x.state === 'open'}>{x.text}</Text>,
-                      small(cap(x.state), x.state === 'confirmed' ? 'success' : undefined),
-                    )}
-                  </Box>
-                </Box>
-              ))}
+              s.hypotheses.map((x, k) =>
+                B.Row({
+                  id: `hypo-${k}`,
+                  badge: <Text color={hypoColor[x.state]}>{hypoMark[x.state]}</Text>,
+                  title: <Text wrap="wrap" dimColor={x.state === 'ruled out' || x.state === 'open'}>{x.text}</Text>,
+                  meta: B.Caption({ color: x.state === 'confirmed' ? 'success' : undefined, children: cap(x.state) }),
+                }),
+              )}
           </Box>
         )}
 
-        <Box flexDirection="column" gap={0}>
+        <Box flexDirection="column" alignItems="stretch" gap={0}>
           {(() => {
-            // The Merge card stands in the flow before the Deploy stage (a pull request merges, then it ships); with
-            // no Deploy stage it closes the flow. It carries no gate of its own: the card already shows the merge state.
-            const deployAt = s.phases.findIndex(n => /deploy|release|ship/i.test(n))
-            const mergeAt = gitBar === null ? -1 : deployAt >= 0 ? deployAt : s.phases.length
+            // Pull requests show on the items that made them (a chip on the item's row), not as a card of their own.
             const rows: RenderChildren[] = []
             s.phases.forEach((name, k) => {
-              if (k === mergeAt) {
-                rows.push(<Box flexDirection="column" key="flow-merge">{gitBar}</Box>)
-                if (Svg !== undefined) rows.push(svg(flowLineSvg(16), 'Line to the next stage', 16, 'merge-line'))
-              }
               // A stage may have several gates: each draws its own chip on the line, one under another.
               const exits = measures.filter(c => c.phase === k && c.when !== undefined)
-              const isLast = k === s.phases.length - 1 && mergeAt !== s.phases.length
+              const isLast = k === s.phases.length - 1
               const met = stageState(k) === 'done'
               // A finished stage whose gates are all met folds to one line: its badge, name, gates and time. The
               // person's + opens the full card again.
               const hasMore = allItems.some(x => x.phase === k) || s.links.some(l => l.phase === k)
               if (met && !opened.includes(k)) {
-                const from = s.starts?.[k] ?? null
-                const to = s.ends?.[k] ?? null
                 rows.push(
-                  <Box flexDirection="column" gap={0} key={`flow-${k}`}>
-                    <Box flexDirection="row" alignItems="center" gap={1} paddingX={1}>
-                      <Box width={BADGE} flexShrink={0}>
-                        {Svg !== undefined ? svg(badgeSvg('done', 0, 14), `${name}: done`, 14) : <Text color="success">✓</Text>}
-                      </Box>
-                      <Text dimColor>{name}</Text>
-                      {exits.length > 0 && <Text color="success" size="caption">{`✓ ${exits.map(x => x.when).join(' · ')}`}</Text>}
-                      <Box flexGrow={1}><Text>{''}</Text></Box>
-                      {from !== null && to !== null && to >= from && <Text dimColor size="caption">{clockOf(to - from)}</Text>}
-                      <Box width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
-                        {hasMore ? <Button key={`open-${k}`} label="+" plain dimColor onPress={() => toggle(k)} /> : <Text>{''}</Text>}
-                      </Box>
-                    </Box>
-                    {!isLast && Svg !== undefined && svg(flowLineSvg(8), 'Line to the next stage', 8, `fold-line-${k}`)}
+                  <Box width="100%" flexDirection="column" gap={0} key={`flow-${k}`}>
+                    {foldedRow(name, k, exits.map(x => x.when ?? ''), hasMore, isLast)}
                   </Box>,
                 )
                 return
               }
               rows.push(
-                <Box flexDirection="column" gap={0} key={`flow-${k}`}>
+                <Box width="100%" flexDirection="column" gap={0} key={`flow-${k}`}>
                   {stageRow(name, k)}
                   {exits.map((exit, j) =>
                     Svg !== undefined
                       ? svg(
-                          exitSvg(exit.when ?? '', isLast && j === exits.length - 1, met || isMet(exit)),
-                          met || isMet(exit) ? `Gate met: ${exit.when}` : `Gate: ${exit.when}`,
+                          exitSvg(exit.when ?? '', isLast && j === exits.length - 1, isMet(exit)),
+                          isMet(exit) ? `Gate met: ${exit.when}` : `Gate: ${exit.when}`,
                           40,
                           `gate-${k}-${j}`,
                         )
                       : small(`Gate: ${exit.when}`),
                   )}
-                  {exits.length === 0 && !isLast && <Box height={1}><Text>{''}</Text></Box>}
+                  {/* Every card joins the next by a line, gate or no gate. */}
+                  {exits.length === 0 && !isLast && (Svg !== undefined ? svg(flowLineSvg(16), 'Line to the next stage', 16, `flow-line-${k}`) : <Box height={1}><Text>{''}</Text></Box>)}
                 </Box>,
               )
             })
-            if (mergeAt === s.phases.length) rows.push(<Box flexDirection="column" key="flow-merge">{gitBar}</Box>)
             return rows
           })()}
         </Box>

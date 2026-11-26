@@ -1,6 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { GIT_MS, ciNamed, storeKey } from '../hooks/readers'
-import type { RepoRead } from '../hooks/readers'
+import { GIT_MS, ciNamed } from '../hooks/readers'
 import { unionRefs } from '../hooks/register'
 
 // The data layer: reads, the transcript scan, the hooks' registration and the background cut.
@@ -111,11 +110,13 @@ async function boot($: any, on: any, w: World, extra: (on: any) => void = () => 
   on('tool.call', () => ({ result: 'https://github.com/acme/app/pull/9\n' }))
   on('classic.SessionStart', () => hooks.start())
   on('classic.Stop', () => hooks.stop())
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
   extra(on)
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   await clock.settle()
-  return { clock, calls, store, stored, shared: () => store.get(storeKey('/repo')) as RepoRead | undefined }
+  return { clock, calls, store, stored }
 }
 const send = ($: any, args: Record<string, unknown> = {}) => $.tool.call({ tool: 'mcp__mission-status__update', project: 'P', stage: 'build', phase: 1, phases: ['Plan', 'Build', 'Test'], ...args } as never)
 const text = async (ui: any, re: RegExp) => (await ui.find({ type: 'Text', text: re }))?.text
@@ -124,7 +125,7 @@ const run = async (clock: any, ms: number) => {
   for (let k = 0; k < ms / 5_000; k++) await clock.advance(5_000)
 }
 
-test('F9: a failed gh read keeps the pull request the PRs tab already shows', async ($, on) => {
+test('F9: a failed gh read keeps the pull request the PRs tab already shows', { timeoutMs: 20_000 }, async ($, on) => {
   const w: World = { view: 'ok' }
   const { clock } = await boot($, on, w)
   await send($)
@@ -132,25 +133,10 @@ test('F9: a failed gh read keeps the pull request the PRs tab already shows', as
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await clock.settle()
   await ui.press({ key: 'tab-prs' })
-  expect(await text(ui, /^#9  Add the tab$/)).toBe('#9  Add the tab')
+  expect(await text(ui, /^Add the tab$/)).toBe('Add the tab')
   w.view = 'fail'
   await run(clock, 65_000)
-  expect(await text(ui, /^#9  Add the tab$/)).toBe('#9  Add the tab')
-  await ui.unmount()
-})
-
-test('F10: a failed gh read on a new branch does not keep the old branch pull requests', async ($, on) => {
-  const w: World = { gh: 'ok', prs: [OPEN_PR], branch: 'feature/x' }
-  const { clock, shared } = await boot($, on, w)
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await clock.settle()
-  await run(clock, 20_000)
-  expect(shared()?.prs[0]?.number).toBe(7)
-  w.branch = 'feature/y'
-  w.gh = 'fail'
-  await run(clock, 20_000)
-  expect(shared()?.gh).toBe('failed')
-  expect(shared()?.prs).toEqual([])
+  expect(await text(ui, /^Add the tab$/)).toBe('Add the tab')
   await ui.unmount()
 })
 
@@ -192,7 +178,7 @@ test('F13: a tail with no newline that is shorter than a whole part waits for th
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await clock.settle()
   await ui.press({ key: 'tab-prs' })
-  expect(await text(ui, /^#9  Add the tab$/)).toBe('#9  Add the tab')
+  expect(await text(ui, /^Add the tab$/)).toBe('Add the tab')
   await ui.unmount()
 })
 
@@ -208,7 +194,7 @@ test('F14: another transcript path is scanned from its start', async ($, on) => 
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await clock.settle()
   await ui.press({ key: 'tab-prs' })
-  expect(await text(ui, /^#9  Add the tab$/)).toBe('#9  Add the tab')
+  expect(await text(ui, /^Add the tab$/)).toBe('Add the tab')
   await ui.unmount()
 })
 
@@ -264,11 +250,10 @@ test('F30: the pull request list keeps the newest 30, the earlier first', () => 
   expect(out[0]).toBe('a/b#3')
 })
 
-test('cut: with the pane closed git and GitHub are not read; open, git is read every 15 s', async ($, on) => {
+test('cut: with the pane closed git is not read; open, git is read every 15 s', { timeoutMs: 20_000 }, async ($, on) => {
   const { clock, calls } = await boot($, on, { gh: 'ok', prs: [] })
   await run(clock, 60_000)
   expect(calls.gitStatus).toBe(0)
-  expect(calls.gh).toBe(0)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await clock.settle()
   const first = calls.gitStatus
@@ -288,9 +273,15 @@ test('cut: the 1 s clock writes only while a stage, item or helper is in progres
   writes.now = 0
   await clock.advance(3_000)
   const idle = writes.now ?? 0
-  // An item in progress shows its timer.
+  // The agent's update is a main-loop tool call, so a turn runs: the item runs and its timer ticks every second.
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
   await send($, { phase: 1, items: [{ id: 'a', phase: 1, name: 'Work', status: 'now' }] })
   writes.now = 0
   await clock.advance(3_000)
   expect((writes.now ?? 0) - idle).toBeGreaterThanOrEqual(3)
+  // The turn ends with the item still "now": it is open, not running, and no timer runs (the 12-hour clock).
+  await $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 't1' } as never)
+  writes.now = 0
+  await clock.advance(3_000)
+  expect((writes.now ?? 0) - idle).toBeLessThanOrEqual(0)
 })

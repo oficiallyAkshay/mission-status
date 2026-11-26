@@ -1,0 +1,225 @@
+import type { ElementConstructor, RenderChildren } from 'claude-code'
+import { ACCENT } from './store'
+
+// The pane's building blocks. Every region of the pane is drawn from these, so every row lines up by construction:
+// one badge column, one title column that grows, one meta column on the right (times, CI, the PR chip) and one
+// control column (+ or −). The spacing lives here and nowhere else.
+
+// The badge column, in cells. A child item indents by the badge column plus its gap.
+export const BADGE = 2
+// The control column (+ or −), in cells.
+export const CHEV = 3
+// The gap between a row's columns, in cells.
+export const GAP = 1
+// How far a child starts in from its parent's name: the badge column and its gap.
+export const INDENT = BADGE + GAP
+// The space between sibling items, and between an item's last line and its children.
+export const SPACE = 'xs' as const
+
+// Text styles. Subtext reads on dark and light pages (the app's own secondary colour); a note is one step smaller in
+// a mid grey; accent text uses the app's purple theme key.
+export const SUBTEXT = 'inactive'
+export const NOTE = 'rgba(128, 128, 128, 0.75)'
+export const ACCENT_TEXT = 'merged'
+
+// A duration reads as one, never like a clock time: 12s, 3m 54s, 1h 02m. A clock time always carries AM or PM.
+export function durationOf(ms: number): string {
+  const sec = Math.max(0, Math.floor(ms / 1000))
+  if (sec < 60) return `${sec}s`
+  const m = Math.floor(sec / 60)
+  if (m < 60) return `${m}m ${String(sec % 60).padStart(2, '0')}s`
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
+}
+
+// Chip colours: running work is purple, done work green. The active chip solid purple with white text; a done chip a
+// purple tint; a quiet chip grey; a link chip a lighter purple tint with purple ink.
+const CHIP = {
+  on: { bg: ACCENT, ink: '#FFFFFF' },
+  done: { bg: 'rgba(139, 124, 246, 0.22)', ink: '#B7ADFF' },
+  quiet: { bg: 'rgba(128, 128, 128, 0.16)', ink: undefined },
+  link: { bg: 'rgba(139, 124, 246, 0.18)', ink: '#B7ADFF' },
+} as const
+export type ChipTone = keyof typeof CHIP
+
+// The desktop draws a border as a hairline, not a cell: a flat card pads exactly as a bordered one does, so its rows
+// line up with a bordered card's rows, and it adds no line above or below.
+
+type Els = {
+  Box: ElementConstructor<any>
+  Text: ElementConstructor<any>
+  Button: ElementConstructor<any>
+  Link: ElementConstructor<any>
+}
+// Draws one picture: source, description, height, key, width (pixels). Null on a surface with no pictures.
+export type Draw = (source: string, alt: string, height: number, key?: string, width?: number) => RenderChildren
+
+export function blocks(els: Els, draw: Draw) {
+  const { Box, Text, Button, Link } = els
+
+  // Caption: small text in the note grey, or in a colour given (a status word, an error).
+  const Caption = (p: { children: RenderChildren; color?: string; wrap?: 'wrap' | 'truncate-end'; key?: string; weight?: 'bold' | 'semibold' }) => (
+    <Text key={p.key} size="caption" color={p.color ?? NOTE} wrap={p.wrap} weight={p.weight}>
+      {p.children}
+    </Text>
+  )
+  // Note: a caption that wraps, under a name. It stops short of the control column, as the name does.
+  const Note = (p: { children: RenderChildren; color?: string; key?: string }) => (
+    <Box key={p.key} paddingRight={CHEV} minWidth={0}>
+      <Text size="caption" color={p.color ?? NOTE} wrap="wrap">
+        {p.children}
+      </Text>
+    </Box>
+  )
+  // A time in the meta column: always the quiet caption style, running or done.
+  const Time = (p: { children: string; color?: string; key?: string }) => <Caption key={p.key} color={p.color}>{p.children}</Caption>
+
+  // The + or − that opens and closes a card or an item; an empty cell where nothing opens.
+  const Control = (p: { id: string; open: boolean; onPress?: () => void }) =>
+    p.onPress === undefined ? <Text>{''}</Text> : <Button key={`open-${p.id}`} label={p.open ? '−' : '+'} plain dimColor onPress={p.onPress} />
+
+  // Every block takes the full width of what holds it (width 100%), never only its content's width, so a nested
+// row's meta column ends on the same right edge as its parent's, at any depth.
+// Row: badge | title (grows) | meta (right-aligned) | control. The badge column stretches to the row's whole height
+  // and can carry a line under the badge (the tree's trunk); the body sits under the title, inside the title column,
+  // so notes, tabs and children start where the name starts. space: room after the body, inside the stretched row,
+  // so a trunk runs through it.
+  const Row = (p: {
+    id: string
+    badge?: RenderChildren
+    // Drawn under the badge, filling the rest of the badge column's height.
+    rail?: RenderChildren
+    title: RenderChildren
+    meta?: RenderChildren
+    control?: RenderChildren
+    body?: RenderChildren
+    space?: boolean
+    align?: 'center' | 'flex-start'
+  }) => (
+    <Box key={`row:${p.id}`} width="100%" flexDirection="row" alignItems="stretch" gap={GAP}>
+      <Box key={`col:badge:${p.id}`} width={BADGE} flexShrink={0} flexDirection="column">
+        {p.badge ?? <Text>{''}</Text>}
+        {p.rail}
+      </Box>
+      <Box key={`col:main:${p.id}`} flexDirection="column" gap={0} flexGrow={1} flexShrink={1} minWidth={0} paddingBottom={p.space === true ? SPACE : 0}>
+        <Box width="100%" flexDirection="row" alignItems={p.align ?? 'flex-start'} gap={GAP}>
+          <Box key={`col:title:${p.id}`} flexGrow={1} flexShrink={1} minWidth={0}>
+            {p.title}
+          </Box>
+          <Box key={`col:meta:${p.id}`} flexShrink={0} flexDirection="row" justifyContent="flex-end" alignItems="center" gap={GAP}>
+            {p.meta}
+          </Box>
+          <Box key={`col:ctl:${p.id}`} width={CHEV} flexShrink={0} flexDirection="row" justifyContent="flex-end">
+            {p.control ?? <Text>{''}</Text>}
+          </Box>
+        </Box>
+        {p.body}
+      </Box>
+    </Box>
+  )
+
+  // Card: a border (the accent while it runs), one cell of padding, a header row and a body. A flat card draws no
+  // border and pads as a bordered card does, so a folded stage lines up with an open one and stays one line tall.
+  const Card = (p: { id: string; active?: boolean; flat?: boolean; children: RenderChildren }) => (
+    p.flat === true ? (
+      <Box key={p.id} width="100%" flexDirection="column" gap={0} paddingX={1}>
+        {p.children}
+      </Box>
+    ) : (
+      <Box
+        key={p.id}
+        width="100%"
+        flexDirection="column"
+        gap={0}
+        borderStyle="single"
+        borderColor={p.active === true ? ACCENT : 'subtle'}
+        borderDimColor={p.active !== true}
+        paddingX={1}
+      >
+        {p.children}
+      </Box>
+    )
+  )
+
+  // Chip: one text row tall, a tinted background with side padding. One shape for every chip on the pane: the stage
+  // bar, the tab bar, a pull request card's tabs, link chips. A chip with onPress is a plain button inside the shape;
+  // with href, a web link.
+  // shrink: the chip may narrow and cut its label when its row runs out of room (a one-line bar).
+  const Chip = (p: { id: string; label: string; tone: ChipTone; onPress?: () => void; href?: string; buttonKey?: string; shrink?: boolean }) => {
+    const c = CHIP[p.tone]
+    const strong = p.tone !== 'quiet'
+    return (
+      <Box key={`chip:${p.id}`} backgroundColor={c.bg} paddingX={1} flexShrink={p.shrink === true ? 1 : 0} minWidth={p.shrink === true ? 0 : undefined}>
+        {p.onPress !== undefined ? (
+          <Button key={p.buttonKey ?? p.id} label={p.label} plain dimColor={!strong} onPress={p.onPress} />
+        ) : (
+          <Text weight={strong ? 'semibold' : undefined} color={c.ink} dimColor={!strong} wrap={p.shrink === true ? 'truncate-end' : undefined}>
+            {p.href !== undefined ? <Link href={p.href}>{p.label}</Link> : p.label}
+          </Text>
+        )}
+      </Box>
+    )
+  }
+  // ChipRow: chips side by side, wrapping onto more lines when the pane is narrow; oneLine keeps them on one line,
+  // where shrinking chips narrow instead.
+  const ChipRow = (p: { id: string; children: RenderChildren; oneLine?: boolean }) => (
+    <Box key={p.id} width="100%" flexDirection="row" gap={GAP} flexWrap={p.oneLine === true ? 'nowrap' : 'wrap'} alignItems="center" overflow={p.oneLine === true ? 'hidden' : undefined}>
+      {p.children}
+    </Box>
+  )
+
+  // Tabs: one chip per tab, an icon before each label; the open tab a solid purple chip, the others quiet grey chips
+  // that switch the view on a press. The app's own grey button is kept for links that open in Claude itself.
+  const Tabs = (p: { id: string; tabs: { key: string; label: string; icon: string; on: boolean; onPress: () => void }[] }) =>
+    ChipRow({
+      id: p.id,
+      children: p.tabs.map(t =>
+        Chip({ id: t.key, buttonKey: t.key, label: `${t.icon}  ${t.label}`, tone: t.on ? 'on' : 'quiet', onPress: t.on ? undefined : t.onPress }),
+      ),
+    })
+
+  // A line that fills its cell whatever the cell's height: the cell stretches with its row and clips a drawing taller
+  // than any row, so a wrapped name, a note or open children never leave a gap and no height is guessed.
+  const TALL = 4000
+  const Trunk = (p: { id: string; on: boolean; source: (height: number) => string }) => (
+    <Box key={p.id} position="relative" overflow="hidden" flexGrow={1} width={BADGE}>
+      {p.on && (
+        <Box position="absolute" top={0} left={0}>
+          {draw(p.source(TALL), 'Wait line', TALL, undefined, 16)}
+        </Box>
+      )}
+    </Box>
+  )
+
+  // Tree: siblings in one column, each a Row whose badge column carries the trunk to the next sibling. A stub above
+  // and below each badge is its own drawing, so a sibling that comes or goes never restarts a running spinner.
+  // Children sit in the row's body, one space below its last line, the same space as between siblings.
+  type TreeNode = { id: string; badge: string; alt: string; title: RenderChildren; meta?: RenderChildren; control?: RenderChildren; body?: RenderChildren; fallback?: RenderChildren }
+  const Tree = (p: { id: string; nodes: TreeNode[]; line: (height: number) => string; none: string }) => (
+    <Box key={p.id} width="100%" flexDirection="column" gap={0}>
+      {p.nodes.map((n, i) => {
+        const up = i > 0
+        const down = i < p.nodes.length - 1
+        const pic = draw(n.badge, n.alt, 16, `${n.id}-badge`, 16)
+        return Row({
+          id: n.id,
+          badge:
+            pic === null
+              ? n.fallback
+              : [
+                  draw(up ? p.line(2) : p.none, 'Line from the item above', 2, `${n.id}-up`, 16),
+                  pic,
+                  draw(down ? p.line(2) : p.none, 'Line to the item below', 2, `${n.id}-down`, 16),
+                ],
+          rail: pic === null ? undefined : Trunk({ id: `${n.id}-line`, on: down, source: p.line }),
+          title: n.title,
+          meta: n.meta,
+          control: n.control,
+          body: n.body,
+          space: down,
+        })
+      })}
+    </Box>
+  )
+
+  return { Row, Card, Chip, ChipRow, Tabs, Tree, Trunk, Control, Caption, Note, Time }
+}

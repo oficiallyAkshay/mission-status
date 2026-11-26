@@ -1,8 +1,12 @@
 export type Count = { label: string; when?: string; n?: number; m?: number; text?: string; phase?: number; href?: string; hrefLabel?: string }
-export type ItemStatus = 'done' | 'now' | 'next' | 'failed'
+export type ItemStatus = 'done' | 'now' | 'next' | 'failed' | 'needs'
 // id: the agent's stable id for its item (from the name when the agent sends none). The task-list steps are the
 // pane's own items, kept apart in `tasks`: no agent write deletes them.
-export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null; pr?: string | null; doneAt?: number | null; steps?: string[] | null; step?: number | null; taskStep?: string | null; touchedAt?: number | null }
+export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null; pr?: string | null; doneAt?: number | null; steps?: string[] | null; step?: number | null; stepsParallel?: boolean; stepsSent?: StepEntry[] | null; stepSent?: number | null; promoted?: boolean; taskStep?: string | null; touchedAt?: number | null; parallel?: boolean | null }
+// A sub-step as sent: a name, or { name, steps } for one that has its own sub-steps (it becomes its own nested item).
+// stepsParallel: the sub-steps run at the same time. stepsSent/stepSent: an item's steps and step as sent, kept when an
+// entry was promoted to a child item. promoted: the item was made from its parent's steps, not sent by the agent.
+export type StepEntry = string | { name: string; steps?: StepEntry[]; status?: ItemStatus; note?: string }
 export type StepStatus = 'done' | 'now' | 'next'
 export type StageKey = 'plan' | 'build' | 'fix' | 'cause' | 'review' | 'ship'
 export type HypothesisState = 'open' | 'testing' | 'ruled out' | 'confirmed'
@@ -63,26 +67,34 @@ export type Fresh = {
   turnCalls?: number
   turnUpdated?: boolean
 }
+// The marker's kept marks (marker.ts): a mark per item id, the places of parentless items, and the failed calls in a row.
+export type Marks = { marks: Record<string, { status: 'done' | 'now' | 'failed' | 'needs'; at: number }>; places: { name: string; parent: string }[]; fails: number }
 export type MetricsSession = { holdback: boolean; calls: number; realWork: boolean; paneSent?: boolean }
 export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null; doneAt?: number | null }
+// Running time per node (machine.ts): ms counted, and the time it last became running, or null.
+export type Runs = Record<string, { ms: number; from: number | null }>
 export type Activity = { text: string; prev: string | null; at: number } | null
 export type Pr = { number: number; state: string; url: string; title: string; isDraft?: boolean; review?: string; merge?: string; ci?: 'passing' | 'failing' | 'running' | 'none' }
 export type Helper = { id: string; description: string; status: string; model: string | null; startTime: number }
 // CI of a pull request an item names: its state and when its checks started and finished.
 // A pull request this session made, as the PRs tab shows it.
-export type SessionPr = { ref: string; number: number; title: string; url: string; state: 'open' | 'draft' | 'merged' | 'closed' | 'conflict'; ci: 'running' | 'passing' | 'failing' | 'none'; ciStart?: number | null; ciEnd?: number | null; branch: string | null; mergedAt: number | null; at: number }
-export type ItemCi = { state: 'running' | 'passing' | 'failing' | 'none'; start: number | null; end: number | null; mergedAt?: number | null }
-export type Live = { helpers: Helper[]; prs: Pr[]; prsUnread: boolean; at: number; reads: number; git: Git; ci?: Record<string, ItemCi>; sessionPrs?: SessionPr[] }
+export type SessionPr = { ref: string; number: number; title: string; url: string; state: 'open' | 'draft' | 'merged' | 'closed' | 'conflict'; ci: 'running' | 'passing' | 'failing' | 'none'; ciStart?: number | null; ciEnd?: number | null; branch: string | null; mergedAt: number | null; at: number; summary?: string; summaryBy?: 'model' | 'text'; summaryKey?: string; bodyText?: string; v?: number; commits?: { sha: string; title: string }[]; checks?: { name: string; state: 'running' | 'passing' | 'failing' | 'none' }[] }
+// One pull request's record, keyed owner/name#number: the one read the item chip, the PRs tab and the Deploy count use.
+export type PrRecord = SessionPr
+export type ItemCi = { state: 'running' | 'passing' | 'failing' | 'none'; start: number | null; end: number | null; mergedAt?: number | null; pr?: 'open' | 'draft' | 'merged' | 'closed' | 'conflict'; url?: string | null }
+export type Live = { helpers: Helper[]; prs: Pr[]; prsUnread: boolean; at: number; reads: number; git: Git; ci?: Record<string, ItemCi>; sessionPrs?: SessionPr[]; prRecords?: Record<string, PrRecord> }
 
 declare module 'claude-code' {
   interface PluginState {
     'mission-status': { summary: Shaped<Summary>; live: Shaped<Live | null>; now: number; open: string[] | null; activity: Activity; tasks: Task[]
       // Wave 1: consent and metrics (metrics.tsx, onboarding.tsx), auto-update (update.tsx)
-      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; holdback: boolean; metricsNoticeShown: boolean; metricsSession: MetricsSession | null; autoUpdate: boolean | null; barStart: number | null; tab: string | null; prRefs: string[]
+      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; holdback: boolean; metricsNoticeShown: boolean; metricsSession: MetricsSession | null; autoUpdate: boolean | null; tab: string | null; prTab: Record<string, string>; prRefs: string[]; prBranches: string[]; turnOpen: boolean; waiting: boolean; runs: Runs; seenAt: number
       // Wave 1: freshness triggers (store.ts)
       fresh: Fresh; doc: { title: string; path: string } | null
       // The quiet chat's hidden and shown blocks (quiet.tsx), kept across a reload.
-      quietKept: { hidden: string[]; shown: string[] } }
+      quietKept: { hidden: string[]; shown: string[] }
+      // The marker's kept marks (marker.ts); the state machine reads them.
+      marks: Marks | null }
 
   }
 }

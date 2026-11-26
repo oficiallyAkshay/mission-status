@@ -1,55 +1,26 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Git, Helper, ItemCi, Live, Pr, SessionPr, Summary } from '../types'
+import type { Git, Helper, ItemCi, Live, Pr, PrRecord, Summary } from '../types'
 import { nowOf } from './store'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const live = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
 
-// The Merge card's timing. Git is read every 15 s while the pane is open. GitHub is read every 30 s while a pull request is open;
-// with no open pull request, again when the branch or its upstream moves, or after 5 minutes. After a failed read the
-// wait doubles from 60 s up to 10 minutes.
+// Git is read every 15 s while the pane is open. Each pull request is read at most once a minute, whether the pane
+// shows or not; a merged or closed one is not read again. A rate-limited reply stops every GitHub read for a while:
+// 60 s after one, 120 s after two, and so on, up to 10 minutes.
 export const GIT_MS = 15_000
-export const GH_MS = 60_000
-export const GH_IDLE_MS = 5 * 60_000
+export const PR_MS = 60_000
 export const GH_MAX_MS = 10 * 60_000
-// The pane counts as open when it was drawn within this long; git and GitHub are read only then.
+// The pane counts as open when it was drawn within this long; git is read only then.
 export const PANE_OPEN_MS = 30_000
-// A session that starts a GitHub read holds it this long, so other sessions on the repository wait for its result.
-const LEASE_MS = 25_000
-// Shared reads of a repository nobody polled for 7 days are deleted.
-const KEEP_MS = 7 * 24 * 3600_000
-
-// The state of the GitHub read, as the Merge card shows it.
-// ok: read. missing: the GitHub CLI is not installed or not signed in. failed: the last read failed (backoff runs).
-// none: the repository has no GitHub remote, so there is nothing to read. idle: not read yet.
-export type GhState = 'ok' | 'missing' | 'failed' | 'none' | 'idle'
-
-// What one poller reads for a repository, shared through $.store under the repository's top folder.
-export type RepoRead = {
-  repo: string
-  gitAt: number
-  git: Git
-  // The branch and its upstream commit: a change starts a GitHub read even with no open pull request.
-  sig: string
-  ghAt: number
-  gh: GhState
-  prs: Pr[]
-  failures: number
-  nextGhAt: number
-  lease: number
-}
 
 // The Merge card's own facts, kept on the live state beside the fields the types name.
-export type MergeInfo = { repo: string | null; gh: GhState; ghAt: number; nextGhAt: number; failures: number }
-export type MergeLive = Live & { merge?: MergeInfo }
+export type MergeLive = Live
 
-export const storeKey = (repo: string) => `repo:${repo}`
-// 60 s after one failure, 120 s after two, and so on, never more than 10 minutes.
-// The backoff keeps its own 30 s base: a failed read waits 60 s, then 120 s, whatever the normal read interval.
+// The backoff keeps its own 30 s base: one rate-limited reply waits 60 s, then 120 s, never more than 10 minutes.
 const BACKOFF_BASE_MS = 30_000
 export const backoffMs = (failures: number) => Math.min(GH_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(1, failures))
-
 
 // git runs in any folder the session opens: a repository's own config must not start a program (fsmonitor, an
 // external diff or a text conversion), and a read takes no optional lock.
@@ -67,6 +38,9 @@ const SAFE_GIT: Record<string, string> = {
 // The folder the Merge card reads: the repository the agent named for the work, else the session's own folder.
 let repoDir: string | null = null
 const prRefsAtom = atom({ plugin: 'mission-status', key: 'prRefs' } as const, [] as string[])
+// The branches this session's own tool inputs name (git push, git checkout -b and the like); register.tsx keeps them.
+const prBranchesAtom = atom({ plugin: 'mission-status', key: 'prBranches' } as const, [] as string[])
+const holdbackAtom = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
 const summaryAtom = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 
 // One command; null when it exits with an error, 'missing' when it cannot start.
@@ -79,151 +53,116 @@ async function runText($: EngineInterface, argv: string[], timeoutMs = 10_000): 
   }
 }
 
+// One gh command: its output, or why it failed. limited: GitHub refused for its rate limit.
+async function runGh($: EngineInterface, argv: string[]): Promise<{ out: string } | { fail: 'limited' | 'missing' | 'failed' }> {
+  try {
+    const r = await $.process.run(argv, { timeoutMs: 20_000, ...(repoDir === null ? {} : { cwd: repoDir }) })
+    if (r.exitCode === 0) return { out: r.stdout.trim() }
+    return { fail: /rate limit|HTTP 429/i.test(`${r.stderr}\n${r.stdout}`) ? 'limited' : 'failed' }
+  } catch {
+    // The GitHub CLI cannot start: it is not installed.
+    return { fail: 'missing' }
+  }
+}
+
 // The repository's top folder, or null when git is missing or the folder is not a git repository.
 export async function repoTop($: EngineInterface): Promise<string | null> {
   const top = await runText($, ['git', 'rev-parse', '--show-toplevel'])
   return top === null || top === 'missing' || top === '' ? null : top
 }
 
-function asRepoRead(v: unknown, repo: string): RepoRead | null {
-  if (v === null || typeof v !== 'object') return null
-  const o = v as Partial<RepoRead>
-  if (o.repo !== repo || typeof o.gitAt !== 'number' || typeof o.ghAt !== 'number' || !Array.isArray(o.prs)) return null
-  return {
-    repo,
-    gitAt: o.gitAt,
-    git: (o.git ?? null) as Git,
-    sig: typeof o.sig === 'string' ? o.sig : '',
-    ghAt: o.ghAt,
-    gh: (['ok', 'missing', 'failed', 'none', 'idle'] as const).find(x => x === o.gh) ?? 'idle',
-    prs: o.prs as Pr[],
-    failures: typeof o.failures === 'number' ? o.failures : 0,
-    nextGhAt: typeof o.nextGhAt === 'number' ? o.nextGhAt : 0,
-    lease: typeof o.lease === 'number' ? o.lease : 0,
+// The folder the agent named for the work, from the stored summary.
+async function syncRepo($: EngineInterface): Promise<Summary> {
+  const sum = await read($, summaryAtom).catch(() => null)
+  const named = (sum as { repo?: string | null } | null)?.repo ?? null
+  if (named !== repoDir) {
+    repoDir = named
+    defaultBranch = null
+    slugRead = false
   }
-}
-
-async function readShared($: EngineInterface, repo: string): Promise<RepoRead | null> {
-  try {
-    return asRepoRead(await $.store.get(storeKey(repo)), repo)
-  } catch {
-    return null
-  }
-}
-
-async function writeShared($: EngineInterface, r: RepoRead): Promise<void> {
-  try {
-    await $.store.set(storeKey(r.repo), r)
-  } catch {
-    // A failed write costs one extra read in another session, nothing more.
-  }
-}
-
-let pruned = false
-// Once per load: delete the shared reads of repositories nobody polled for 7 days.
-async function prune($: EngineInterface, t: number): Promise<void> {
-  if (pruned) return
-  pruned = true
-  try {
-    for (const key of await $.store.keys()) {
-      if (!key.startsWith('repo:')) continue
-      const v = (await $.store.get(key)) as { gitAt?: unknown } | undefined
-      if (typeof v?.gitAt !== 'number' || t - v.gitAt > KEEP_MS) await $.store.delete(key)
-    }
-  } catch {}
-}
-
-// Whether a GitHub read is due now, from the shared read.
-export function ghDue(r: RepoRead, sig: string, t: number): boolean {
-  if (r.lease > t) return false
-  if (r.gh === 'idle') return true
-  // A moved branch or upstream may have a new pull request: read at once, unless a failure backoff runs.
-  if (sig !== r.sig && r.gh !== 'failed') return true
-  return t >= r.nextGhAt
-}
-
-// The next GitHub read after this one.
-export function nextGh(gh: GhState, prs: Pr[], failures: number, t: number): number {
-  if (gh === 'failed') return t + backoffMs(failures)
-  if (gh === 'missing' || gh === 'none') return t + GH_MAX_MS
-  return t + (prs.some(p => p.state === 'OPEN') ? GH_MS : GH_IDLE_MS)
-}
-
-// One GitHub read of the pull requests for a branch.
-export async function readGh($: EngineInterface, branch: string): Promise<{ gh: GhState; prs: Pr[] }> {
-  const remotes = await runText($, ['git', 'remote'])
-  if (remotes === null || remotes === 'missing' || remotes === '') return { gh: 'none', prs: [] }
-  let out
-  try {
-    out = await $.process.run(
-      ['gh', 'pr', 'list', '--head', branch, '--state', 'all', '--json', 'number,state,url,title,isDraft,reviewDecision,mergeStateStatus,statusCheckRollup'],
-      { timeoutMs: 20_000, ...(repoDir === null ? {} : { cwd: repoDir }) },
-    )
-  } catch {
-    // The GitHub CLI cannot start: it is not installed.
-    return { gh: 'missing', prs: [] }
-  }
-  if (out.exitCode === 0) {
-    try {
-      return { gh: 'ok', prs: (JSON.parse(out.stdout) as Record<string, unknown>[]).map(asPr) }
-    } catch {
-      return { gh: 'failed', prs: [] }
-    }
-  }
-  const err = out.stderr
-  // gh exits 4 when it needs a sign-in.
-  if (out.exitCode === 4 || /gh auth login|not logged in|authenticat/i.test(err)) return { gh: 'missing', prs: [] }
-  if (/known GitHub host|no git remotes|none of the git remotes/i.test(err)) return { gh: 'none', prs: [] }
-  return { gh: 'failed', prs: [] }
+  return sum
 }
 
 // The CI of a pull request no item names any more is dropped.
 export const ciNamed = (ci: Record<string, ItemCi>, refs: string[]): Record<string, ItemCi> => Object.fromEntries(Object.entries(ci).filter(([ref]) => refs.includes(ref)))
 
-let ciAt = 0
-let prsAt = 0
-let prsSeen = 0
+// The one read of a pull request: every field the item chip, the PRs tab and the Deploy count use.
+const PR_FIELDS = 'number,title,url,state,isDraft,mergeStateStatus,statusCheckRollup,mergedAt,headRefName,body,commits'
 
-export function sessionPrOf(ref: string, o: Record<string, unknown>, at: number): SessionPr {
+// One pull request's record from its gh reply: merged, closed, a conflict, a draft, or open.
+export function prRecordOf(ref: string, o: Record<string, unknown>, at: number): PrRecord {
   const state = String(o.state ?? '').toUpperCase()
   const merged = typeof o.mergedAt === 'string' ? Date.parse(o.mergedAt) : NaN
+  const c = ciOf(Array.isArray(o.statusCheckRollup) ? (o.statusCheckRollup as Record<string, unknown>[]) : [])
   return {
     ref,
-    number: Number(o.number ?? ref.split('#')[1] ?? 0),
+    number: Number(o.number ?? ref.split('#').pop() ?? 0),
     title: String(o.title ?? ''),
     url: String(o.url ?? ''),
-    state:
-      state === 'MERGED'
-        ? 'merged'
-        : state === 'CLOSED'
-          ? 'closed'
-          : o.isDraft === true
-            ? 'draft'
-            : String(o.mergeable ?? '').toUpperCase() === 'CONFLICTING'
-              ? 'conflict'
-              : 'open',
-    ...(() => {
-      const c = ciOf(Array.isArray(o.statusCheckRollup) ? (o.statusCheckRollup as Record<string, unknown>[]) : [])
-      return { ci: c.state, ciStart: c.start, ciEnd: c.end }
-    })(),
+    state: state === 'MERGED' ? 'merged' : state === 'CLOSED' ? 'closed' : String(o.mergeStateStatus ?? '').toUpperCase() === 'DIRTY' ? 'conflict' : o.isDraft === true ? 'draft' : 'open',
+    ci: c.state,
+    ciStart: c.start,
+    ciEnd: c.end,
     branch: typeof o.headRefName === 'string' ? o.headRefName : null,
     mergedAt: Number.isFinite(merged) ? merged : null,
     at,
+    summary: summaryOf(typeof o.body === 'string' ? o.body : ''),
+    // The description the generated summary is made from, cut short, and its key: a new key means a new summary.
+    bodyText: (typeof o.body === 'string' ? o.body : '').slice(0, 4000),
+    summaryKey: keyOf(`${String(o.title ?? '')}\n${typeof o.body === 'string' ? o.body : ''}`),
+    v: REC_V,
+    // The newest 10 commits, newest first, and each check by name with its state, for the card's tabs.
+    commits: (Array.isArray(o.commits) ? (o.commits as Record<string, unknown>[]) : [])
+      .map(x => ({ sha: String(x.oid ?? '').slice(0, 7), title: String(x.messageHeadline ?? '') }))
+      .reverse()
+      .slice(0, 10),
+    checks: (Array.isArray(o.statusCheckRollup) ? (o.statusCheckRollup as Record<string, unknown>[]) : []).map(x => ({
+      name: String(x.name ?? x.context ?? 'check'),
+      state: ciOf([x]).state,
+    })),
   }
 }
 
-export async function readSessionPr($: EngineInterface, ref: string, at: number): Promise<SessionPr | null> {
-  const [repo, num] = ref.split('#')
-  if (!repo || !num) return null
-  const out = await runText($, ['gh', 'pr', 'view', num, '-R', repo, '--json', 'number,title,url,state,isDraft,mergeable,statusCheckRollup,mergedAt,headRefName'], 20_000)
-  if (out === null || out === 'missing') return null
-  try {
-    return sessionPrOf(ref, JSON.parse(out) as Record<string, unknown>, at)
-  } catch {
-    return null
-  }
+// A short key of a text, so a summary is made again only when the title or the description changes.
+export function keyOf(text: string): string {
+  let h = 5381
+  for (let i = 0; i < text.length; i++) h = ((h << 5) + h + text.charCodeAt(i)) | 0
+  return (h >>> 0).toString(36)
 }
-const CI_MS = 60_000
+
+// The summary until Haiku's is ready, and where the marker is off: the description's first two sentences, as plain
+// text. A sentence ends at . ! or ? followed by a space and a capital letter or the end, so "0.12.0" or "machine.ts"
+// never cut one. Headings, lists, links, code and the attribution line go.
+export function summaryOf(body: string): string {
+  const text = body
+    .split('\n')
+    .filter(l => !/^\s*(#|```|\||>|🤖|Co-Authored-By)/i.test(l) && !/Generated with \[?Claude Code/i.test(l))
+    .map(l => l.replace(/^\s*([-*+]|\d+\.)\s+/, ''))
+    .join(' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[`*_]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const sentences = text.match(/.+?[.!?](?=\s+[A-Z(“"]|\s*$)/g) ?? (text === '' ? [] : [text])
+  const two = sentences.slice(0, 2).join('').trim()
+  return two.length > 280 ? `${two.slice(0, 279)}…` : two
+}
+// What the item chip shows of a record.
+export const itemCiOf = (r: PrRecord): ItemCi => ({ state: r.ci, start: r.ciStart ?? null, end: r.ciEnd ?? null, mergedAt: r.mergedAt, pr: r.state, url: r.url === '' ? null : r.url })
+// What the Deploy count reads of a record.
+export const prOf = (r: PrRecord): Pr => ({
+  number: r.number,
+  state: r.state === 'merged' ? 'MERGED' : r.state === 'closed' ? 'CLOSED' : 'OPEN',
+  url: r.url,
+  title: r.title,
+  isDraft: r.state === 'draft',
+  ci: r.ci,
+})
+// A merged or closed pull request does not change again: it is not read again.
+// The record's shape version: a record from an older version is read once more, even when merged or closed, so it gains
+// the fields added since (summary, commits, checks).
+export const REC_V = 2
+export const prFinal = (r: PrRecord | undefined) => r !== undefined && (r.v ?? 0) >= REC_V && (r.state === 'merged' || r.state === 'closed' || r.mergedAt !== null)
 
 // The CI of one pull request: running while any check runs, else failing or passing, with the first start and the
 // last finish of its checks.
@@ -242,20 +181,179 @@ export function ciOf(rollup: Record<string, unknown>[]): ItemCi {
   }
 }
 
-export async function readItemCi($: EngineInterface, ref: string): Promise<ItemCi | null> {
-  const [repo, num] = ref.includes('#') ? ref.split('#') : [null, ref]
-  const out = await runText($, ['gh', 'pr', 'view', String(num), ...(repo ? ['-R', repo] : []), '--json', 'statusCheckRollup,mergedAt'], 20_000)
-  if (out === null || out === 'missing') return null
+// owner/name of the work's repository, from its origin remote (no gh call); null when it is not on GitHub.
+let slugOf: string | null = null
+let slugRead = false
+async function repoSlug($: EngineInterface): Promise<string | null> {
+  if (slugRead) return slugOf
+  const url = await runText($, ['git', 'remote', 'get-url', 'origin'])
+  slugRead = true
+  slugOf = (typeof url === 'string' ? /github\.com[:/]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(url) : null)?.[1] ?? null
+  return slugOf
+}
+
+// The PR reads' own timing: the last try of each pull request, the last list, and the rate-limit backoff.
+const tried = new Map<string, number>()
+let listAt = 0
+let holdUntil = 0
+let limits = 0
+let prBusy = false
+let prAgain = false
+// The next time a PR read or the list falls due; a tick before it reads nothing.
+let prNextAt = 0
+
+// The pull requests this session made, from its own tool inputs: gh pr list in the session's repository, kept only
+// when the head branch is the current branch or one the session's inputs named.
+async function listMine($: EngineInterface): Promise<{ refs: string[]; fail?: 'limited' | 'missing' | 'failed' }> {
+  const current = await runText($, ['git', 'branch', '--show-current'])
+  const branches = new Set([...(await read($, prBranchesAtom).catch(() => [] as string[])), ...(typeof current === 'string' && current !== '' ? [current] : [])])
+  if (branches.size === 0) return { refs: [] }
+  const got = await runGh($, ['gh', 'pr', 'list', '--author', '@me', '--state', 'all', '--limit', '30', '--json', 'number,url,headRefName'])
+  if ('fail' in got) return { refs: [], fail: got.fail }
   try {
-    const o = JSON.parse(out) as { statusCheckRollup?: Record<string, unknown>[]; mergedAt?: string | null }
-    const merged = typeof o.mergedAt === 'string' ? Date.parse(o.mergedAt) : NaN
-    return { ...ciOf(Array.isArray(o.statusCheckRollup) ? o.statusCheckRollup : []), mergedAt: Number.isFinite(merged) ? merged : null }
+    const list = JSON.parse(got.out) as { url?: unknown; headRefName?: unknown }[]
+    return {
+      refs: list
+        .filter(p => typeof p.headRefName === 'string' && branches.has(p.headRefName))
+        .map(p => /github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/.exec(String(p.url ?? '')))
+        .filter((m): m is RegExpExecArray => m !== null)
+        .map(m => `${m[1]}#${m[2]}`),
+    }
+  } catch {
+    return { refs: [] }
+  }
+}
+
+// One pass of the PR reads, apart from the git poll: every pull request due is read at once, in parallel.
+// No gh call at all in a holdback session. A failed read keeps the last record.
+// force: a new pull request or an agent update came; the pass runs now, and still reads each one at most once a minute.
+export async function pollPrs($: EngineInterface, force = false): Promise<void> {
+  if (prBusy) {
+    if (force) prAgain = true
+    return
+  }
+  prBusy = true
+  try {
+    let forced = force
+    do {
+      prAgain = false
+      await prsOnce($, forced)
+      forced = true
+    } while (prAgain)
+  } catch {
+    // A pass that broke leaves the records as they were; the next tick reads again.
+  } finally {
+    prBusy = false
+  }
+}
+
+async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
+  const t = await nowOf($)
+  if (!force && t < prNextAt) return
+  prNextAt = t + PR_MS
+  if (await read($, holdbackAtom).catch(() => true)) return
+  const sum = await syncRepo($)
+  const limited = t < holdUntil
+  let made = await read($, prRefsAtom).catch(() => [] as string[])
+  let fails: ('limited' | 'missing' | 'failed')[] = []
+  if (!limited && t - listAt >= PR_MS) {
+    listAt = t
+    const mine = await listMine($)
+    if (mine.fail !== undefined) fails.push(mine.fail)
+    const added = mine.refs.filter(r => !made.includes(r))
+    if (added.length > 0) {
+      await update($, prRefsAtom, list => [...list, ...added.filter(r => !list.includes(r))].slice(-30))
+      made = [...made, ...added]
+    }
+  }
+  made = made.slice(-20)
+  const itemRefs = [...new Set(((sum as { items?: { pr?: string | null }[] } | null)?.items ?? []).map(i => i.pr ?? null).filter((x): x is string => x !== null))].slice(0, 20)
+  const slug = itemRefs.some(r => !r.includes('#')) ? await repoSlug($) : null
+  // The record key: owner/name#number; a bare number belongs to the work's repository.
+  const keyOf = (ref: string) => (ref.includes('#') || slug === null ? ref : `${slug}#${ref}`)
+  const keys = [...new Set([...made, ...itemRefs.map(keyOf)])]
+  const prev = await read($, live).catch(() => null)
+  const before = prev?.prRecords ?? {}
+  const due = limited ? [] : keys.filter(k => !prFinal(before[k]) && t - (tried.get(k) ?? -Infinity) >= PR_MS)
+  for (const k of due) tried.set(k, t)
+  const got = await Promise.all(
+    due.map(async k => {
+      const [repo, num] = k.includes('#') ? k.split('#') : [null, k]
+      const r = await runGh($, ['gh', 'pr', 'view', String(num), ...(repo ? ['-R', repo] : []), '--json', PR_FIELDS])
+      if ('fail' in r) return { k, fail: r.fail }
+      try {
+        return { k, rec: prRecordOf(k, JSON.parse(r.out) as Record<string, unknown>, t) }
+      } catch {
+        return { k, fail: 'failed' as const }
+      }
+    }),
+  )
+  fails = [...fails, ...got.flatMap(g => ('fail' in g && g.fail !== undefined ? [g.fail] : []))]
+  if (fails.includes('limited') || fails.includes('missing')) {
+    // Rate limited, or no GitHub CLI: stop reading for a while and keep the last records.
+    limits = fails.includes('limited') ? limits + 1 : limits
+    holdUntil = t + (fails.includes('limited') ? backoffMs(limits) : GH_MAX_MS)
+  } else limits = 0
+  const recs: Record<string, PrRecord> = { ...before }
+  for (const g of got) if ('rec' in g && g.rec !== undefined) recs[g.k] = g.rec
+  // Each card's two-sentence summary, written by Haiku inside Claude Code from the title and the description: once per
+  // pull request, and again only when either changes. Until then, and where traffic is off, the first two sentences.
+  // In parallel, and each text tried once per load, so a failing call never repeats every minute.
+  await Promise.all(
+    keys.map(async k => {
+      const rec = recs[k]
+      const old = before[k]
+      if (rec === undefined) return
+      if (old?.summaryKey === rec.summaryKey && old?.summaryBy === 'model' && old.summary) {
+        recs[k] = { ...rec, summary: old.summary, summaryBy: 'model' }
+        return
+      }
+      const tag = `${k}:${rec.summaryKey ?? ''}`
+      if (summaryTried.has(tag)) return
+      summaryTried.add(tag)
+      const made = await summarize($, rec.title, rec.bodyText ?? '')
+      if (made !== null) recs[k] = { ...rec, summary: made, summaryBy: 'model' }
+    }),
+  )
+  const kept = Object.fromEntries(keys.filter(k => recs[k] !== undefined).map(k => [k, recs[k] as PrRecord]))
+  // The next pass: when the list or a pull request not yet merged or closed is due, and not inside a backoff.
+  prNextAt = Math.max(holdUntil, Math.min(listAt + PR_MS, ...keys.filter(k => !prFinal(kept[k])).map(k => (tried.get(k) ?? t) + PR_MS)))
+  const ci = Object.fromEntries(itemRefs.filter(r => kept[keyOf(r)] !== undefined).map(r => [r, itemCiOf(kept[keyOf(r)] as PrRecord)]))
+  const mine = made.map(r => kept[r]).filter((x): x is PrRecord => x !== undefined)
+  // The PRs tab and the Deploy count: the same records of the session's pull requests.
+  const fields = { prRecords: kept, ci, sessionPrs: mine, prs: mine.map(prOf), prsUnread: t < holdUntil }
+  // Nothing new: no write, so the pane does not draw again for nothing.
+  if ((Object.keys(fields) as (keyof typeof fields)[]).every(f => JSON.stringify(prev?.[f]) === JSON.stringify(fields[f]))) return
+  try {
+    await update($, live, now => ({ ...(now ?? { helpers: [], at: t, reads: 0, git: null }), ...fields }) as Live)
+  } catch {
+    // The session or the reload ended while the read ran: the next tick writes again.
+  }
+}
+
+// One summary from Haiku; null when traffic is off, in a holdback session, or when the call fails (the card then keeps
+// the description's first sentences). A short call: 30 s at most, a small reply.
+const summaryTried = new Set<string>()
+async function summarize($: EngineInterface, title: string, body: string): Promise<string | null> {
+  try {
+    if (await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')) return null
+    if (await read($, holdbackAtom)) return null
+    const r = await $.model.complete({
+      model: 'haiku',
+      system: 'You summarize a GitHub pull request for a progress pane. Answer with exactly two short plain sentences, present tense, no markdown, no lists, no file names unless essential: what the change does for the person who uses it, then the most important detail.',
+      prompt: `Title: ${title}\n\nDescription:\n${body}`,
+      maxTokens: 160,
+      effort: 'low',
+      timeoutMs: 30_000,
+    })
+    const text = (r as { text?: unknown }).text
+    return typeof text === 'string' && text.trim() !== '' ? text.trim().replace(/\s+/g, ' ').slice(0, 320) : null
   } catch {
     return null
   }
 }
 
-// The pane's last draw or opening: git and GitHub are read only while the pane is open, that is seen within PANE_OPEN_MS.
+// The pane's last draw or opening: git is read only while the pane is open, that is seen within PANE_OPEN_MS.
 // A flag the Pane render and each ui.open set, the least machinery that needs no event for a closed pane.
 let paneAt = 0
 // The pane was drawn or opened. After a closed spell a draw starts a read, so the card has facts soon.
@@ -270,22 +368,21 @@ export async function paneSeen($: EngineInterface, drawn = false): Promise<void>
 let current: Promise<void> | null = null
 let pollAgain = false
 
-// One poll, every 5 s from register.tsx; this file keeps the Merge card's own timing.
-// force: an agent update just came; GitHub is read now, not at its next 60 s turn.
-// One poll runs at a time; a forced poll that arrives meanwhile makes one more run after it. The answer settles
-// when the runs are done.
+// One poll, every 5 s from register.tsx: the helpers, git while the pane shows, and a pass of the PR reads, which
+// runs apart from it.
+// force: an agent update just came. One poll runs at a time; a forced poll that arrives meanwhile makes one more run
+// after it. The answer settles when the runs are done.
 export function poll($: EngineInterface, force = false): Promise<void> {
+  void pollPrs($, force)
   if (current !== null) {
     if (force) pollAgain = true
     return current
   }
   current = (async () => {
     try {
-      let forced = force
       do {
         pollAgain = false
-        await pollOnce($, forced)
-        forced = true
+        await pollOnce($)
       } while (pollAgain)
     } catch {
       // A poll that broke leaves the card as it was; the next tick reads again.
@@ -296,25 +393,16 @@ export function poll($: EngineInterface, force = false): Promise<void> {
   return current
 }
 
-async function pollOnce($: EngineInterface, force: boolean): Promise<void> {
+async function pollOnce($: EngineInterface): Promise<void> {
   const t = await nowOf($)
-  // With the pane closed nothing shows git or GitHub, so none is read; the helpers still are. The app's own list of
+  // With the pane closed nothing shows git, so it is not read; the helpers still are. The app's own list of
   // panes says whether it is open; where that list cannot be read, the last draw within PANE_OPEN_MS stands in.
   const listed = await Promise.resolve()
     .then(() => $.ui.panes())
     .then(list => list.some(x => x.id === 'progress' && x.isPlaced))
     .catch(() => null)
   const shown = listed ?? t - paneAt <= PANE_OPEN_MS
-  if (force) {
-    ciAt = 0
-    prsAt = 0
-  }
-  const sum = await read($, summaryAtom).catch(() => null)
-  const named = (sum as { repo?: string | null } | null)?.repo ?? null
-  if (named !== repoDir) {
-    repoDir = named
-    defaultBranch = null
-  }
+  await syncRepo($)
   let helpers: Helper[] = []
   try {
     helpers = (await $.agent.list()).map(a => ({
@@ -325,104 +413,32 @@ async function pollOnce($: EngineInterface, force: boolean): Promise<void> {
       startTime: a.startTime,
     }))
   } catch {}
-  const merge = shown ? await pollRepo($, t, force).catch(() => null) : undefined
-  // CI of the pull requests items name: read every 30 s, at most 6, and kept between reads.
-  const named6 = [...new Set(((sum as { items?: { pr?: string | null; status?: string }[] } | null)?.items ?? []).map(i => i.pr ?? null).filter((x): x is string => x !== null))]
-  const refs = named6.slice(0, 6)
-  const ci: Record<string, ItemCi> = {}
-  // The pull requests this session made: their state for the PRs tab, read every 30 s, the newest 20.
-  const made = shown ? (await read($, prRefsAtom).catch(() => [] as string[])).slice(-20) : []
-  // The read of each pull request; one that failed has no entry, and the stored one stays.
-  let sessionPrs: Map<string, SessionPr> | null = null
-  if (made.length > 0 && (t - prsAt >= CI_MS || made.length !== prsSeen)) {
-    prsAt = t
-    prsSeen = made.length
-    sessionPrs = new Map()
-    for (const ref of made) {
-      const got = await readSessionPr($, ref, t).catch(() => null)
-      if (got !== null) sessionPrs.set(ref, got)
-    }
-  }
-  if (shown && refs.length > 0 && t - ciAt >= CI_MS) {
-    ciAt = t
-    for (const ref of refs) {
-      const got = await readItemCi($, ref).catch(() => null)
-      if (got !== null) ci[ref] = got
-    }
-  }
+  const repo = shown ? await pollRepo($, t).catch(() => undefined) : undefined
   try {
-    // Built from the value in the store when the write runs, so a poll that overlapped this one is not overwritten.
+    // Built from the value in the store when the write runs, so the PR reads' fields are kept.
     await update($, live, before => {
-      // The pane is closed: the facts stay as they were.
-      if (merge === undefined) return { ...(before ?? { prs: [], at: t, reads: 0, git: null }), helpers } as Live
-      const next: MergeLive =
-        merge === null
-          ? // The read itself broke: keep the last good facts and say the read failed.
-            {
-              helpers,
-              prs: before?.prs ?? [],
-              prsUnread: true,
-              at: t,
-              reads: (before?.reads ?? 0) + 1,
-              git: before?.git ?? null,
-              merge: { ...((before as MergeLive | null)?.merge ?? { repo: null, ghAt: 0, nextGhAt: 0, failures: 0 }), gh: 'failed' },
-            }
-          : {
-              helpers,
-              prs: merge.prs,
-              prsUnread: merge.gh === 'failed',
-              at: t,
-              reads: (before?.reads ?? 0) + 1,
-              git: merge.git,
-              merge: { repo: merge.repo, gh: merge.gh, ghAt: merge.ghAt, nextGhAt: merge.nextGhAt, failures: merge.failures },
-            }
-      // A pull request whose read failed keeps its previous entry.
-      const prev = before?.sessionPrs ?? []
-      const sessionOut = sessionPrs === null ? prev : made.map(ref => sessionPrs.get(ref) ?? prev.find(p => p.ref === ref)).filter((x): x is SessionPr => x !== undefined)
-      return { ...next, ci: ciNamed({ ...(before?.ci ?? {}), ...ci }, named6), sessionPrs: sessionOut } as Live
+      const base = before ?? ({ prs: [], prsUnread: false, at: t, reads: 0, git: null } as Omit<Live, 'helpers'>)
+      // The pane is closed, or the git read broke: the git facts stay as they were.
+      if (repo === undefined) return { ...base, helpers } as Live
+      return { ...base, helpers, at: t, reads: (before?.reads ?? 0) + 1, git: repo.git } as Live
     })
   } catch {
     // The session or the reload ended while the read ran: the next tick writes again.
   }
 }
 
-// The repository's facts: from the shared read when it is fresh, else read here and shared.
-// With no repository (git missing, or not a git folder) the card has nothing to show.
-export async function pollRepo(
-  $: EngineInterface,
-  t: number,
-  force = false,
-): Promise<{ repo: string | null; git: Git; prs: Pr[]; gh: GhState; ghAt: number; nextGhAt: number; failures: number }> {
+// The repository's git facts, read again once GIT_MS has passed. With no repository (git missing, or not a git
+// folder) the card has nothing to show.
+let gitAt = 0
+let gitOf: { repo: string; git: Git } | null = null
+export async function pollRepo($: EngineInterface, t: number): Promise<{ repo: string | null; git: Git }> {
   const repo = await repoTop($)
-  if (repo === null) return { repo: null, git: null, prs: [], gh: 'idle', ghAt: 0, nextGhAt: 0, failures: 0 }
-  void prune($, t)
-  const shared = await readShared($, repo)
-  let r: RepoRead = shared ?? { repo, gitAt: 0, git: null, sig: '', ghAt: 0, gh: 'idle', prs: [], failures: 0, nextGhAt: 0, lease: 0 }
-  let changed = false
-  // Git: the shared read serves while it is younger than one poll.
-  if (shared === null || t - shared.gitAt >= GIT_MS) {
-    r = { ...r, git: await readGit($).catch(() => r.git), gitAt: t }
-    changed = true
+  if (repo === null) return { repo: null, git: null }
+  if (gitOf === null || gitOf.repo !== repo || t - gitAt >= GIT_MS) {
+    gitOf = { repo, git: await readGit($).catch(() => (gitOf?.repo === repo ? gitOf.git : null)) }
+    gitAt = t
   }
-  const branch = r.git?.branch ?? ''
-  if (branch !== '') {
-    const up = await runText($, ['git', 'rev-parse', '@{u}'])
-    const sig = `${branch}@${typeof up === 'string' ? up : ''}`
-    // An agent update reads now, unless a read, here or by another session, is under 15 s old.
-    if (ghDue(r, sig, t) || (force && r.gh !== 'failed' && r.lease <= t && t - r.ghAt >= 15_000)) {
-      // Take the lease first, so a session that polls meanwhile uses this read and does not start its own.
-      await writeShared($, { ...r, lease: t + LEASE_MS })
-      const got = await readGh($, branch)
-      const failures = got.gh === 'failed' ? r.failures + 1 : 0
-      // A failed read keeps the last good pull requests, unless the branch changed: those belong to the old branch.
-      const branchOf = (s: string) => s.slice(0, s.lastIndexOf('@'))
-      const prs = got.gh !== 'failed' ? got.prs : branchOf(r.sig) === branchOf(sig) ? r.prs : []
-      r = { ...r, sig, gh: got.gh, prs, ghAt: t, failures, nextGhAt: nextGh(got.gh, prs, failures, t), lease: 0 }
-      changed = true
-    }
-  }
-  if (changed) await writeShared($, r)
-  return { repo, git: r.git, prs: r.prs, gh: r.gh, ghAt: r.ghAt, nextGhAt: r.nextGhAt, failures: r.failures }
+  return gitOf
 }
 
 let defaultBranch: string | null = null
@@ -464,59 +480,4 @@ export async function readGit($: EngineInterface): Promise<Git> {
   const pick = (re: RegExp) => Number(stat.match(re)?.[1] ?? 0)
   const dirty = ((await run(['git', 'status', '--porcelain'])) ?? '').split('\n').filter(Boolean).length
   return { branch, ahead, behind, files: pick(/(\d+) files? changed/), added: pick(/(\d+) insertions?/), removed: pick(/(\d+) deletions?/), dirty }
-}
-
-// One pull request with its CI state folded to one word: passing, failing, running, or none.
-export function asPr(o: Record<string, unknown>): Pr {
-  const checks = Array.isArray(o.statusCheckRollup) ? (o.statusCheckRollup as Record<string, unknown>[]) : []
-  const word = (c: Record<string, unknown>) => String(c.conclusion ?? c.state ?? c.status ?? '').toUpperCase()
-  const ci =
-    checks.length === 0
-      ? 'none'
-      : checks.some(c => ['FAILURE', 'ERROR', 'CANCELLED', 'TIMED_OUT', 'ACTION_REQUIRED'].includes(word(c)))
-        ? 'failing'
-        : checks.some(c => ['', 'PENDING', 'QUEUED', 'IN_PROGRESS', 'EXPECTED'].includes(word(c)))
-          ? 'running'
-          : 'passing'
-  return {
-    number: Number(o.number ?? 0),
-    state: String(o.state ?? ''),
-    url: String(o.url ?? ''),
-    title: String(o.title ?? ''),
-    isDraft: o.isDraft === true,
-    review: String(o.reviewDecision ?? ''),
-    merge: String(o.mergeStateStatus ?? ''),
-    ci,
-  }
-}
-
-// The facts of a pull request and its branch, as short words with the colour of their state.
-export function prFacts(pr: Pr | undefined, g: Git): { text: string; tone: 'success' | 'error' | 'warning' | 'dim' }[] {
-  const out: { text: string; tone: 'success' | 'error' | 'warning' | 'dim' }[] = []
-  if (pr !== undefined) {
-    out.push(
-      pr.state === 'MERGED'
-        ? { text: 'Merged', tone: 'success' }
-        : pr.state === 'CLOSED'
-          ? { text: 'Closed', tone: 'error' }
-          : pr.isDraft === true
-            ? { text: 'Draft', tone: 'dim' }
-            : { text: 'Open', tone: 'dim' },
-    )
-    if (pr.state === 'OPEN') {
-      if (pr.ci === 'passing') out.push({ text: 'CI passing', tone: 'success' })
-      if (pr.ci === 'failing') out.push({ text: 'CI failing', tone: 'error' })
-      if (pr.ci === 'running') out.push({ text: 'CI running', tone: 'warning' })
-      if (pr.review === 'APPROVED') out.push({ text: 'Approved', tone: 'success' })
-      if (pr.review === 'CHANGES_REQUESTED') out.push({ text: 'Changes requested', tone: 'error' })
-      if (pr.review === 'REVIEW_REQUIRED') out.push({ text: 'Review needed', tone: 'warning' })
-      if (pr.merge === 'DIRTY') out.push({ text: 'Conflicts', tone: 'error' })
-    }
-  }
-  if (g !== null) {
-    if ((g.behind ?? 0) > 0) out.push({ text: `${g.behind} behind main`, tone: 'warning' })
-    if (g.added + g.removed > 0) out.push({ text: `+${g.added} −${g.removed}`, tone: 'dim' })
-    if (g.dirty > 0) out.push({ text: `${g.dirty} not committed`, tone: 'warning' })
-  }
-  return out
 }

@@ -116,7 +116,7 @@ test('the demo moves with the clock: a 1 s clock starts with the pane and each t
   expect(await svgAlt(ui, /^Helper Scan tests: done$/)).toBeTruthy()
   clock.at += 4_500
   await ui.redraw()
-  expect(await svgAlt(ui, /^All stages are done\.$/)).toBeTruthy()
+  expect(await svgAlt(ui, /^All cards are done\.$/)).toBeTruthy()
   clock.at += 1_000
   await ui.redraw()
   expect(await svgAlt(ui, /^Stage 1 of 5: Plan$/)).toBeTruthy()

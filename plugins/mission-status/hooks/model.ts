@@ -1,4 +1,4 @@
-import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket, Runbook, RunbookStatus, RunbookStep } from '../types'
+import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, StepEntry, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket, Runbook, RunbookStatus, RunbookStep } from '../types'
 
 
 // The stage bar of each kind of work: the stages it passes through, in order.
@@ -90,7 +90,7 @@ export function actionOf(e: Record<string, unknown>): string | null {
 
 
 
-export const ITEM_STATES: readonly ItemStatus[] = ['done', 'now', 'next', 'failed']
+export const ITEM_STATES: readonly ItemStatus[] = ['done', 'now', 'next', 'failed', 'needs']
 
 // A skill's steps, read from its SKILL.md: the numbered lines of its Steps (or Order of work) section, else every
 // numbered line. A bold lead names the step; else its first words do. At most 20.
@@ -129,31 +129,97 @@ export function byteLength(text: string): number {
   return n
 }
 
-// Every pull request a session made, from its transcript (JSON lines): each gh pr create call's own result.
+// Every pull request a session made, from its transcript (JSON lines): the own result of each call that may make one.
 export function prRefsInTranscript(text: string): string[] {
   return prRefsInLines(text.split('\n'), new Set<string>())
 }
 
-// The same over some lines, with the gh pr create calls seen so far kept in creates, so a scan can go in parts.
-export function prRefsInLines(lines: string[], creates: Set<string>): string[] {
+// The same over some lines, with the calls seen so far kept in makers, so a scan can go in parts. The branches the
+// calls' own inputs name go into branches.
+export function prRefsInLines(lines: string[], makers: Set<string>, branches: Set<string> = new Set()): string[] {
   const out: string[] = []
   for (const line of lines) {
-    if (line.includes('gh pr create') && line.includes('"tool_use"')) {
-      for (const m of line.matchAll(/"id":"(toolu_[\w]+)","name":"Bash","input":\{"command":"([^"\\]|\\.)*?gh pr create/g)) creates.add(m[1] ?? '')
+    const use = line.includes('"tool_use"') && line.includes('"Bash"')
+    const res = line.includes('"tool_result"') && line.includes('/pull/')
+    if (!use && !res) continue
+    let content: unknown
+    try {
+      content = (JSON.parse(line) as { message?: { content?: unknown } }).message?.content
+    } catch {
+      continue
     }
-    if (line.includes('"tool_result"') && line.includes('/pull/')) {
-      const id = /"tool_use_id":"(toolu_[\w]+)"/.exec(line)?.[1]
-      if (id !== undefined && creates.has(id)) for (const ref of prRefsIn('gh pr create', line)) if (!out.includes(ref)) out.push(ref)
+    if (!Array.isArray(content)) continue
+    for (const c of content as { type?: unknown; id?: unknown; name?: unknown; input?: { command?: unknown }; tool_use_id?: unknown; content?: unknown }[]) {
+      if (c?.type === 'tool_use' && c.name === 'Bash' && typeof c.input?.command === 'string') {
+        if (PR_MAKERS.test(c.input.command)) makers.add(String(c.id))
+        for (const b of branchesIn(c.input.command)) branches.add(b)
+      }
+      if (c?.type === 'tool_result' && makers.has(String(c.tool_use_id)))
+        for (const ref of prUrlsIn(JSON.stringify(c.content ?? ''))) if (!out.includes(ref)) out.push(ref)
     }
   }
   return out
 }
 
-// The pull requests a tool call made: every pull request address in the output of a gh pr create call, as owner/name#number.
-export function prRefsIn(command: string, output: string): string[] {
-  if (!/\bgh\s+pr\s+create\b/.test(command)) return []
+// The commands whose output names the pull requests they made: gh pr create, and a Marga job (marga run, wait or
+// collect), which may open one in another repository. The live catch and the transcript scan use the same matcher.
+export const PR_MAKERS = /\b(?:gh\s+pr\s+create|marga\s+(?:run|wait|collect))\b/
+
+// Every pull request address in a text, as owner/name#number.
+export function prUrlsIn(text: string): string[] {
   const out = new Set<string>()
-  for (const m of output.matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g)) out.add(`${m[1]}#${m[2]}`)
+  for (const m of text.matchAll(/https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)/g)) out.add(`${m[1]}#${m[2]}`)
+  return [...out]
+}
+
+// The pull requests a tool call made: every pull request address in the output of a call PR_MAKERS matches.
+export function prRefsIn(command: string, output: string): string[] {
+  return PR_MAKERS.test(command) ? prUrlsIn(output) : []
+}
+
+// The newest 30 pull requests: the earlier ones first in the order first seen, the new ones after.
+export const unionRefs = (list: string[], added: string[]) => [...list, ...added.filter(r => !list.includes(r))].slice(-30)
+
+// The branches a command names as its own input: git push's targets, git checkout -b, git switch -c, git worktree
+// add -b and gh pr create --head. A branch that only a command's output names does not count.
+export function branchesIn(command: string): string[] {
+  const out = new Set<string>()
+  const ok = (b: string | undefined) => {
+    const name = (b ?? '').replace(/^refs\/heads\//, '')
+    if (name !== '' && name !== 'HEAD' && !name.startsWith('-') && /^[\w./-]+$/.test(name)) out.add(name)
+  }
+  for (const part of command.split(/&&|\|\||[;|\n]/)) {
+    const words = (part.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map(w => w.replace(/^["']|["']$/g, ''))
+    const flag = (args: string[], names: string[]) => {
+      for (let k = 0; k < args.length; k++) {
+        const w = args[k] ?? ''
+        if (names.includes(w)) ok(args[k + 1]?.split(':').pop())
+        for (const n of names) if (n.startsWith('--') && w.startsWith(`${n}=`)) ok(w.slice(n.length + 1).split(':').pop())
+      }
+    }
+    const gh = words.indexOf('gh')
+    if (gh >= 0 && words[gh + 1] === 'pr' && words[gh + 2] === 'create') flag(words.slice(gh + 3), ['--head', '-H'])
+    let g = words.indexOf('git')
+    if (g < 0) continue
+    // git's own options before the subcommand: -C and -c take a value.
+    g++
+    while (g < words.length && (words[g] ?? '').startsWith('-')) g += words[g] === '-C' || words[g] === '-c' ? 2 : 1
+    const sub = words[g]
+    const rest = words.slice(g + 1)
+    if (sub === 'checkout' || sub === 'switch') flag(rest, ['-b', '-B', '-c', '-C', '--create', '--force-create'])
+    else if (sub === 'worktree' && rest[0] === 'add') flag(rest, ['-b', '-B'])
+    else if (sub === 'push') {
+      const valued = ['--repo', '-o', '--push-option', '--receive-pack', '--exec']
+      const pos: string[] = []
+      for (let k = 0; k < rest.length; k++) {
+        const w = rest[k] ?? ''
+        if (valued.includes(w)) k++
+        else if (!w.startsWith('-')) pos.push(w)
+      }
+      // The first word is the remote; each refspec after it names its target branch.
+      for (const spec of pos.slice(1)) ok(spec.replace(/^\+/, '').split(':').pop())
+    }
+  }
   return [...out]
 }
 
@@ -188,20 +254,128 @@ export function asItem(raw: unknown): Item | undefined {
     text: text === null ? undefined : cap(text),
     pr: asPrRef(o.pr),
     ...subPhases(o),
+    ...(o.stepsParallel === true ? { stepsParallel: true } : {}),
     taskStep: str(o.taskStep),
+    // Siblings follow one another in the order sent; parallel lets this one run beside the one before it.
+    ...(o.parallel === true ? { parallel: true } : {}),
   }
 }
 
 // An item's sub-phases: a short dot-separated line under its name, the one at step shown bold and the others faint.
 // steps null clears the line. A step outside the list shows every sub-phase faint.
-function subPhases(o: Record<string, unknown>): { steps?: string[] | null; step?: number | null } {
-  const out: { steps?: string[] | null; step?: number | null } = {}
-  if (o.steps === null) out.steps = null
-  else if (Array.isArray(o.steps)) out.steps = o.steps.filter((x): x is string => typeof x === 'string' && x.trim() !== '').map(x => cap(x.trim())).slice(0, MAX_SUB)
+// A sub-step sent as { name, steps } keeps its entry in stepsSent; the line shows the rest (see splitSteps).
+function subPhases(o: Record<string, unknown>): Pick<Item, 'steps' | 'step' | 'stepsSent' | 'stepSent'> {
+  const out: Pick<Item, 'steps' | 'step' | 'stepsSent' | 'stepSent'> = {}
   const step = num(o.step)
   if (o.step === null) out.step = null
   else if (step !== undefined) out.step = Math.round(step)
+  if (o.steps === null) out.steps = null
+  else if (Array.isArray(o.steps)) Object.assign(out, splitSteps(stepEntries(o.steps), out.step))
   return out
+}
+
+// The sub-steps as sent, cleaned: names in sentence case, at most MAX_SUB in a list, nested lists to MAX_DEPTH. An object
+// entry with no steps of its own is just its name.
+const MAX_DEPTH = 4
+function stepEntries(raw: unknown[], depth = 0): StepEntry[] {
+  const out: StepEntry[] = []
+  for (const x of raw) {
+    if (typeof x === 'string') {
+      if (x.trim() !== '') out.push(cap(x.trim()))
+      continue
+    }
+    if (!isObj(x) || str(x.name) === null) continue
+    const name = cap(str(x.name) ?? '')
+    const steps = Array.isArray(x.steps) && depth < MAX_DEPTH ? stepEntries(x.steps, depth + 1) : []
+    if (steps.length === 0) {
+      out.push(name)
+      continue
+    }
+    const status = ITEM_STATES.find(k => k === x.status)
+    const note = str(x.note)
+    out.push({ name, steps, ...(status ? { status } : {}), ...(note !== null ? { note: cap(note) } : {}) })
+  }
+  return out.slice(0, MAX_SUB)
+}
+
+const promotable = (e: StepEntry): e is Exclude<StepEntry, string> => typeof e !== 'string' && (e.steps?.length ?? 0) > 0
+
+// The steps line once the entries with their own sub-steps are taken out, with step moved so it still names the same
+// sub-step (null when that one was taken out). With no such entry, the line is the list as sent and nothing is kept.
+function splitSteps(sent: StepEntry[], at: number | null | undefined): Pick<Item, 'steps' | 'step' | 'stepsSent' | 'stepSent'> {
+  if (!sent.some(promotable)) return { steps: sent.map(e => (typeof e === 'string' ? e : e.name)), ...(at !== undefined ? { step: at } : {}) }
+  const steps: string[] = []
+  let step: number | null | undefined = at === undefined || at === null ? at : null
+  sent.forEach((e, k) => {
+    if (promotable(e)) return
+    if (k === at) step = steps.length
+    // An object entry with no sub-steps of its own stays as its name (the guard above narrows its type away).
+    steps.push(typeof e === 'string' ? e : (e as { name: string }).name)
+  })
+  // A step past the end still shows every sub-phase faint.
+  if (typeof at === 'number' && at >= sent.length) step = steps.length
+  return { steps, step, stepsSent: sent, stepSent: at ?? null }
+}
+
+// Promotion: each sub-step sent as { name, steps } becomes its own child item under the item that holds it, in the same
+// stage, with id <parent id>-<its name as an id>. Its status is the one sent, else read from its place: before step done,
+// at step (or any place while the parent runs its sub-steps in parallel and is now) now, else next. Promoted items are
+// made again from their parent at every pass, so a repeated write makes no duplicate and a parent that drops the entry
+// drops the child. An item the agent sent with the same id wins over the promoted one.
+export function promoteSteps(items: Item[]): Item[] {
+  const before = new Map(items.filter(x => x.promoted === true).map(x => [x.id ?? idOf(x.name), x]))
+  const agents = items.filter(x => x.promoted !== true)
+  const taken = new Set(agents.map(x => x.id ?? idOf(x.name)))
+  const out: Item[] = []
+  const add = (x: Item, depth: number) => {
+    out.push(x)
+    const sent = x.stepsSent
+    if (!Array.isArray(sent) || depth > MAX_DEPTH) return
+    const at = x.stepSent
+    const parent = x.id ?? idOf(x.name)
+    sent.forEach((e, k) => {
+      if (!promotable(e)) return
+      const id = `${parent}-${idOf(e.name)}`
+      if (taken.has(id)) return
+      taken.add(id)
+      const status: ItemStatus =
+        e.status ??
+        // A done parent's sub-steps are done; parallel sub-steps of a running parent all run; else by position.
+        (x.status === 'done'
+          ? 'done'
+          : x.stepsParallel === true
+            ? x.status === 'now' ? 'now' : 'next'
+            : typeof at === 'number' && k < at ? 'done' : k === at ? 'now' : 'next')
+      const was = before.get(id)
+      const child: Item = {
+        id,
+        phase: x.phase,
+        name: e.name,
+        status,
+        after: null,
+        parent,
+        when: null,
+        note: e.note ?? null,
+        promoted: true,
+        ...splitSteps(e.steps ?? [], undefined),
+        // Its timers: the ones it had at the last pass, else its parent's.
+        since: status === 'now' ? (was?.status === 'now' ? was.since : x.since) ?? null : null,
+        doneAt: status === 'done' ? (was?.status === 'done' ? was.doneAt : x.doneAt) ?? null : null,
+        touchedAt: was?.touchedAt ?? x.touchedAt ?? null,
+      }
+      add(child, depth + 1)
+    })
+  }
+  for (const x of agents) add(x, 0)
+  return out
+}
+
+// An item's steps from a stored state: a list that still holds { name, steps } entries (written before this version
+// split them, or by hand) is split here, so every read promotes them.
+function sentSteps(x: Item): Pick<Item, 'steps' | 'step' | 'stepsSent' | 'stepSent'> {
+  const raw = x.stepsSent ?? (x.steps as unknown)
+  if (!Array.isArray(raw) || !raw.some(e => typeof e !== 'string')) return {}
+  return splitSteps(stepEntries(raw), x.stepsSent ? x.stepSent : x.step)
 }
 
 export const figureOf = (c: Count) => (c.text !== undefined ? c.text : c.m === undefined ? `${c.n ?? ''}` : `${c.n ?? 0} of ${c.m}`)
@@ -227,7 +401,7 @@ export function normalize(raw: Summary): Summary {
     waitingSince: typeof r.waitingSince === 'number' ? r.waitingSince : 0,
     counts: Array.isArray(r.counts) ? (r.counts as Count[]) : [],
     items: Array.isArray(r.items)
-      ? linkRefs((r.items as Item[]).map(x => ({ ...x, id: x.id ?? idOf(x.name), after: x.after ?? null, parent: x.parent ?? null, when: x.when ?? null })))
+      ? linkRefs(promoteSteps((r.items as Item[]).map(x => ({ ...x, id: x.id ?? idOf(x.name), after: x.after ?? null, parent: x.parent ?? null, when: x.when ?? null, ...sentSteps(x) }))))
       : [],
     starts: Array.isArray(r.starts) ? (r.starts as (number | null)[]) : phases.map(() => null),
     ends: Array.isArray(r.ends) ? (r.ends as (number | null)[]) : phases.map(() => null),
@@ -332,10 +506,12 @@ export const UPDATE_TOOL = 'mcp__mission-status__update'
 
 // The standing rule: in the system prompt, and put back into the context after each compaction.
 export const RULE =
-  '# Progress pane\nKeep the progress pane current with mcp__mission-status__update at every meaningful change. ' +
+  '# Mission status pane\nKeep the Mission status pane current with mcp__mission-status__update at every meaningful change. ' +
   'At each update, look again at the stages: keep a template only while it fits the work, and send new stages when the work changes. ' +
   'Stages may run in parallel (active). The pane reads the task list, git, pull requests and helpers itself: do not send those. ' +
-  'Give each item a stable id, and send small item changes as patch operations. Never name an item as its stage: an item is work inside the stage. ' +
+  'The pane has four levels: a card is one stage (phases); a step is an item in a card; a sub-step is an item under a step (its parent); ' +
+  'sub-sub-steps are one line under a sub-step (its steps; stepsParallel when they run at the same time). ' +
+  'Give each step a stable id, and send small step changes as patch operations. Never name a step as its card: a step is work inside the card. ' +
   'When the work is in another repository than the session folder, send repo once. ' +
   'When an item has a pull request, send its number as the item\'s pr, so the pane shows its CI. ' +
   'When the session follows a runbook (a numbered procedure or checklist), send it as runbooks with each step\'s status, and keep it current. A skill you run with numbered steps gets its tab by itself (id skill-<name>): mark its steps as you go. ' +
@@ -347,16 +523,16 @@ export const RULE =
 // The check every 2 minutes: the items the pane still shows in progress, asked about by name.
 export const CHECK_MS = 2 * 60_000
 export function checkLine(names: string[]): string {
-  return `Progress pane check: are these still in progress: ${names.join('; ')}? If any finished or changed, send a patch with mcp__mission-status__update now.`
+  return `Mission status pane check: are these still in progress: ${names.join('; ')}? If any finished or changed, send a patch with mcp__mission-status__update now.`
 }
-export const REMINDER = 'Progress pane: the state is stale. Send the current state with mcp__mission-status__update now.'
+export const REMINDER = 'Mission status pane: the state is stale. Send the current state with mcp__mission-status__update now.'
 export const FIRST_REMINDER =
-  'Progress pane: it opened by itself from the task list and waits for you. Send the first state with mcp__mission-status__update now.'
+  'Mission status pane: it opened by itself from the task list and waits for you. Send the first state with mcp__mission-status__update now.'
 // The end of a turn that did work but sent the pane nothing: one short request, so the pane moves every turn.
 export const TURN_TEXT =
-  'Progress pane: this turn did work but sent no update. Before you end the turn, send what changed (stage, items, gates) with mcp__mission-status__update.'
+  'Mission status pane: this turn did work but sent no update. Before you end the turn, send what changed (stage, items, gates) with mcp__mission-status__update.'
 export const HOLD_TEXT =
-  'Progress pane: the state is stale. Before you end the turn, send the current state with mcp__mission-status__update.'
+  'Mission status pane: the state is stale. Before you end the turn, send the current state with mcp__mission-status__update.'
 
 // A stable id from a name: lower case, words joined by hyphens.
 export const idOf = (name: string): string =>
@@ -393,6 +569,18 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object
 const isText = (v: unknown) => typeof v === 'string' && v.trim() !== ''
 const isNum = (v: unknown) => typeof v === 'number' && Number.isFinite(v)
 
+// A steps list: at most MAX_SUB entries, each a name or { name, steps?, status?, note? } (nested to MAX_DEPTH).
+function stepsOk(v: unknown, depth: number): boolean {
+  if (!Array.isArray(v) || v.length > MAX_SUB) return false
+  return v.every(e =>
+    isText(e) ||
+    (isObj(e) && isText(e.name) &&
+      (e.steps === undefined || (depth < MAX_DEPTH && stepsOk(e.steps, depth + 1))) &&
+      (e.status === undefined || ITEM_STATES.includes(e.status as ItemStatus)) &&
+      (e.note === undefined || typeof e.note === 'string')),
+  )
+}
+
 function checkItemFields(o: Record<string, unknown>, where: string, whole: boolean, errors: string[]): void {
   if (whole || o.name !== undefined) if (!isText(o.name)) errors.push(`${where}: name must be a non-empty string`)
   if (whole || o.phase !== undefined) if (!isNum(o.phase) || (o.phase as number) < 0) errors.push(`${where}: phase must be a number from 0`)
@@ -402,8 +590,9 @@ function checkItemFields(o: Record<string, unknown>, where: string, whole: boole
   for (const k of ['after', 'parent', 'note', 'when', 'text', 'taskStep'] as const)
     if (o[k] !== undefined && o[k] !== null && typeof o[k] !== 'string') errors.push(`${where}: ${k} must be a string`)
   for (const k of ['n', 'm'] as const) if (o[k] !== undefined && !isNum(o[k])) errors.push(`${where}: ${k} must be a number`)
-  if (o.steps !== undefined && o.steps !== null && !(Array.isArray(o.steps) && o.steps.length <= MAX_SUB && o.steps.every(isText)))
-    errors.push(`${where}: steps must be a list of at most ${MAX_SUB} names`)
+  if (o.steps !== undefined && o.steps !== null && !stepsOk(o.steps, 0))
+    errors.push(`${where}: steps must be a list of at most ${MAX_SUB} names or { name, steps } entries`)
+  if (o.stepsParallel !== undefined && typeof o.stepsParallel !== 'boolean') errors.push(`${where}: stepsParallel must be true or false`)
   if (o.step !== undefined && o.step !== null && !isNum(o.step)) errors.push(`${where}: step must be a number`)
   if (o.pr !== undefined && o.pr !== null && asPrRef(o.pr) === null) errors.push(`${where}: pr must be a pull request number, or owner/name#number`)
 }
@@ -670,8 +859,11 @@ export function applyPatch(items: Item[], patch: unknown[]): Item[] {
       continue
     }
     const was = next[k] as Item
-    const merged = asItem({ ...was, ...Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)), id: was.id })
-    if (merged !== undefined) next[k] = merged
+    // The steps as sent, so a patch of step alone still counts places in the list the agent sent.
+    const sent = was.stepsSent ? { steps: was.stepsSent, step: was.stepSent } : {}
+    const merged = asItem({ ...was, ...sent, ...Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)), id: was.id })
+    // A promoted item stays promoted: its parent makes it again at the next read.
+    if (merged !== undefined) next[k] = was.promoted === true ? { ...merged, promoted: true } : merged
   }
   return next
 }

@@ -25,17 +25,19 @@
 
 mission-status is a live progress pane for Claude Code in the Claude desktop app. It sits beside the chat and shows the goal, the stages, what done means for each stage, and where the work is right now.
 
+The pane has four levels: a **card** for each stage, **steps** inside a card, **sub-steps** under a step, and **sub-sub-steps** on one line under a sub-step (they pulse together when they run side by side). A step that waits on you shows an amber badge and "Needs you".
+
 <p align="center">👀<br><b>Read in a glance</b><br>The goal, the current stage and its gate show on one screen, so you never ask "where are we?" again.</p>
 
 <p align="center">🧭<br><b>Fits any work</b><br>Features, bug fixes, incidents, research or your own saved stages: the pane changes shape with the work.</p>
 
-<p align="center">🔁<br><b>Stays current</b><br>The agent keeps it up to date, and the pane reminds it when the view goes stale.</p>
+<p align="center">🔁<br><b>Stays current</b><br>One state machine shows only what runs now and ends work from facts; a small model in Claude Code keeps the steps current between agent updates.</p>
 
 <p align="center">🤫<br><b>A quiet chat</b><br>The chat holds only what needs you: a decision, an approval, or a step only you can do.</p>
 
-<p align="center">🔒<br><b>Private stays private</b><br>Usage counts are anonymous, never hold your words, files or names, and turn off with one command.</p>
+<p align="center">🔒<br><b>Private stays private</b><br>Usage counts are anonymous, never hold your words, files or names, and turn off with one command. The step marker sends only tool names and step names to your own session's model, and stays off when nonessential traffic is off.</p>
 
-<p align="center">📊<br><b>Live numbers</b><br>Git, pull requests, checks and helpers come from their own sources, read while the pane is open.</p>
+<p align="center">📊<br><b>Live numbers</b><br>Git, pull requests, checks and helpers come from their own sources; pull requests stay current even while the pane is closed.</p>
 
 ## Fit
 
