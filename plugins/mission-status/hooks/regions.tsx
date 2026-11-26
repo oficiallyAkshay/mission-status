@@ -297,9 +297,15 @@ export function stageCard(r: Region, c: StageState, name: string, k: number) {
       ),
       k === s.phase && hasSvg && running.length > 0 && hostKey === null && (
         <Box key={`helpers-${k}`} flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
-          {running.slice(0, 4).map(x =>
-            svg(stripSvg({ title: cap(x.description), detail: x.model, state: 'running', time: age(x.startTime, t) }), `Helper ${x.description}: running`, 22, `strip-${x.id}`),
-          )}
+          {/* The timer is text beside the strip, so the strip's source never changes and its spinner never restarts. */}
+          {running.slice(0, 4).map(x => (
+            <Box key={`strip-row-${x.id}`} flexDirection="row" alignItems="center" gap={1} minWidth={0}>
+              <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                {svg(stripSvg({ title: cap(x.description), detail: x.model, state: 'running', now: Date.now() }), `Helper ${x.description}: running`, 22, `strip-${x.id}`)}
+              </Box>
+              {B.Time({ key: `strip-time-${x.id}`, children: age(x.startTime, t) })}
+            </Box>
+          ))}
           {running.length > 4 && B.Caption({ children: `${running.length - 4} more helpers run.` })}
         </Box>
       ),
@@ -328,7 +334,7 @@ export function foldedCard(r: Region, c: StageState, name: string, k: number, ga
           : [B.Trunk({ id: `fold-up-${k}`, on: k > 0, source: waitsLineSvg }), pic, B.Trunk({ id: `fold-down-${k}`, on: !isLast, source: waitsLineSvg })],
       title: <Text dimColor>{name}</Text>,
       meta: [
-        gates.length > 0 && B.Caption({ key: `fold-gates-${k}`, color: 'success', children: `✓ ${gates.join(' · ')}` }),
+        gates.length > 0 && B.Caption({ key: `fold-gates-${k}`, children: `✓ ${gates.join(' · ')}` }),
         ran !== null && B.Time({ key: `fold-time-${k}`, children: ran }),
       ],
       control: B.Control({ id: String(k), open: false, onPress: hasMore ? () => void toggle(k) : undefined }),
@@ -382,8 +388,8 @@ export function progressTab(r: Region, c: StageState, head: RenderChildren) {
           </Box>
           {confirmed !== undefined && (
             <Box flexDirection="column">
-              {small('Cause', 'success')}
-              <Text color="success">{confirmed.text}</Text>
+              {small('Cause')}
+              <Text>{confirmed.text}</Text>
             </Box>
           )}
           {s.stage === 'cause' &&
@@ -392,7 +398,7 @@ export function progressTab(r: Region, c: StageState, head: RenderChildren) {
                 id: `hypo-${k}`,
                 badge: <Text color={hypoColor[x.state]}>{hypoMark[x.state]}</Text>,
                 title: <Text wrap="wrap" dimColor={x.state === 'ruled out' || x.state === 'open'}>{x.text}</Text>,
-                meta: B.Caption({ color: x.state === 'confirmed' ? 'success' : undefined, children: cap(x.state) }),
+                meta: B.Caption({ children: cap(x.state) }),
               }),
             )}
         </Box>
@@ -462,7 +468,7 @@ export function runbookTab(r: Region, book: Runbook) {
     B.Row({
       id: key,
       badge:
-        svg(badgeSvg(x.status === 'done' ? 'done' : x.status === 'now' ? 'now' : 'next', 0, 16), `Step ${k + 1}: ${x.status}`, 16, `${key}-badge`, undefined, 16) ??
+        svg(badgeSvg(x.status === 'done' ? 'done' : x.status === 'now' ? 'now' : 'next', Date.now(), 16), `Step ${k + 1}: ${x.status}`, 16, `${key}-badge`, undefined, 16) ??
         <Text>{x.status === 'done' ? '✓' : x.status === 'now' ? '●' : '○'}</Text>,
       title: (
         <Text wrap="wrap" dimColor={x.status === 'done'} color={x.status === 'now' ? ACCENT_TEXT : x.status === 'failed' ? 'error' : undefined}>

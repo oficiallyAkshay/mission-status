@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { badgeSvg, exitSvg, LIGHT, needsBadgeSvg, stepPulseSvg, stripSvg, trackSvg, waitsLineSvg } from '../hooks/bars'
+import { badgeSvg, exitSvg, LIGHT, needsBadgeSvg, pulseWidth, stepPulseSvg, stripSvg, textWidth, trackSvg, waitsLineSvg } from '../hooks/bars'
 import { brokenRules, derive, type Facts, mergeItems, NO_FACTS } from '../hooks/machine'
 import { age, applyPlan, cap, normalize } from '../hooks/model'
 import { prRecordOf } from '../hooks/readers'
@@ -298,7 +298,7 @@ test('cause: suspected causes with states, the confirmed one named', async ($, o
   })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await text(ui, /^Ruled out$/)).toBe('Ruled out')
-  expect((await ui.find({ type: 'Text', text: /^Clock stamp is fixed$/ }))?.props?.color).toBe('success')
+  expect((await ui.find({ type: 'Text', text: /^Clock stamp is fixed$/ }))?.props?.color).toBeUndefined()
   await ui.unmount()
 })
 
@@ -596,7 +596,8 @@ test('a running spinner keeps one drawing and one key through sibling adds, remo
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const seen = async () => {
     const x = await svgAlt(ui, /^Run: in progress$/)
-    return `${String(x?.key)}|${String(x?.props?.source)}`
+    // The begin time follows the wall clock, so it is left out: the drawing and its key must not change.
+    return `${String(x?.key)}|${String(x?.props?.source).replace(/begin="[^"]*"/, '')}`
   }
   const first = await seen()
   expect(first.includes('<animateTransform')).toBe(true)
@@ -869,16 +870,21 @@ test('a plain string entry, and an object with no steps, stay on the line as nam
   expect(items()).toHaveLength(1)
 })
 
-test('stepPulseSvg animates only while running, and its begin offset grows with k', () => {
+test('stepPulseSvg shimmers left to right only while running, and its begin offset grows with k', () => {
   const still = stepPulseSvg('Bugs', 2, false)
   expect(still).not.toContain('<animate')
   expect(still).toContain('>Bugs<')
   expect(still).toContain('height="16"')
   expect(still).toContain('rgba(128,128,128,.75)')
   expect(still).toContain('prefers-color-scheme:light')
-  const begins = [0, 1, 2].map(k => Number(/begin="([\d.]+)s"/.exec(stepPulseSvg('Bugs', k, true))?.[1]))
-  expect(begins).toEqual([0, 0.25, 0.5])
-  expect(stepPulseSvg('Bugs', 1, true)).toContain('values="1;.35;1" dur="1.6s"')
+  // At wall-clock time 0, each later name stands a quarter second behind the one before it in the 1.6 s sweep.
+  const begins = [0, 1, 2].map(k => Number(/begin="(-?[\d.]+)s"/.exec(stepPulseSvg('Bugs', k, true, 0))?.[1]))
+  expect(begins).toEqual([-0, -1.35, -1.1])
+  expect(stepPulseSvg('Bugs', 1, true)).toContain('attributeName="gradientTransform" type="translate"')
+  expect(stepPulseSvg('Bugs', 1, true)).toContain('dur="1.6s"')
+  // Each name is sized to its letters: wide enough for "Gamma", with no wide gap after "Beta".
+  expect(pulseWidth('Gamma')).toBeGreaterThan(textWidth('Gamma', 12) + 2)
+  expect(pulseWidth('Beta')).toBeLessThan(textWidth('Beta', 12) + 6)
   expect(stepPulseSvg('A & B', 0, true)).toContain('A &amp; B')
 })
 
@@ -891,9 +897,11 @@ test('pane: parallel sub-sub-steps each pulse while their sub-step runs, offset 
   const ui = await $.ui.mount({ plugin: 'mission-status', component: 'Pane', requestId: 'progress', surface: 'desktop', props: { title: 'P', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } } as never)
   const svgs = (await ui.findAll({ type: 'Svg' })) as any[]
   const pulses = ['Bugs', 'Speed', 'Docs'].map(n => svgs.find(x => x.props?.alt === n))
-  expect(pulses.every(x => /<animate /.test(String(x?.props?.source)))).toBe(true)
-  const begins = pulses.map(x => Number(/begin="([\d.]+)s"/.exec(String(x?.props?.source))?.[1]))
-  expect(begins[0]! < begins[1]! && begins[1]! < begins[2]!).toBe(true)
+  expect(pulses.every(x => /<animateTransform /.test(String(x?.props?.source)))).toBe(true)
+  // Each later name stands a quarter second behind the one before it in the 1.6 s pulse.
+  const begins = pulses.map(x => Number(/begin="(-?[\d.]+)s"/.exec(String(x?.props?.source))?.[1]))
+  const gap = (a: number, b: number) => Math.round((((b - a) % 1.6) + 1.6) % 1.6 * 1000) / 1000
+  expect([gap(begins[0]!, begins[1]!), gap(begins[1]!, begins[2]!)]).toEqual([0.25, 0.25])
   // In-order sub-sub-steps draw as the dot-separated caption line, not as pulses.
   expect(svgs.some(x => x.props?.alt === 'Draft')).toBe(false)
   expect((await ui.find({ type: 'Text', text: /Draft · Send/ })) !== undefined).toBe(true)
@@ -1054,8 +1062,10 @@ test('light theme: the dark look keeps its colours', () => {
   expect(waitsLineSvg()).toContain('.wa{stroke:#8B8A85}')
 })
 
-test('a spinner\'s source never changes, so a redraw keeps the same drawing and the turn runs on', () => {
-  expect(badgeSvg('now', 1_700_000_000_250, 16)).toBe(badgeSvg('now', 1_700_000_000_907, 16))
+test('a spinner starts at the wall clock\'s place in its turn, so a rebuilt drawing picks up where it was', () => {
+  expect(badgeSvg('now', 1_700_000_000_250, 16)).toContain('begin="-0.250s"')
+  expect(stripSvg({ title: 'Scan', detail: null, state: 'running', now: 12_600 })).toContain('begin="-0.600s"')
+  expect(pulseWidth('Gamma')).toBeGreaterThan(textWidth('Gamma', 12) + 2)
   expect(stripSvg({ title: 'Scan', detail: null, state: 'running', time: '1 min' })).toBe(stripSvg({ title: 'Scan', detail: null, state: 'running', time: '1 min' }))
 })
 }
@@ -1160,3 +1170,10 @@ test('a local Markdown link opens the document pane, which draws the file as Mar
   await docUi.unmount()
 })
 }
+
+// A rebuilt picture restarts its animation, so a running strip must keep one source while its timer ticks.
+test('a running helper strip keeps one source while time passes', () => {
+  const strip = () => stripSvg({ title: 'Scan tests', detail: 'haiku', state: 'running' })
+  expect(strip()).toBe(strip())
+  expect(strip()).not.toContain('min')
+})
