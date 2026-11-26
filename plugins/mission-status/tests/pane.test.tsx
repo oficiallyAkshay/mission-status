@@ -1,5 +1,15 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
+import { badgeSvg, exitSvg, LIGHT, needsBadgeSvg, stepPulseSvg, stripSvg, trackSvg, waitsLineSvg } from '../hooks/bars'
+import { brokenRules, derive, type Facts, mergeItems, NO_FACTS } from '../hooks/machine'
+import { actionOf, age, applyPlan, cap, clockOf, normalize, secondsOf } from '../hooks/model'
+import { prOf, prRecordOf } from '../hooks/readers'
+import { agoOf, timeOfDay } from '../hooks/view'
+import { type Item, type Summary } from '../types'
 
+// Each block below was one test file. The blocks keep their own helpers and state; one file runs in one child.
+
+// ---- was pane.test.tsx
+{
 // Find a drawing by its description: the test engine's find does not filter on alt, so filter here.
 const svgAlt = async (ui: { findAll: (q: { type: string }) => Promise<{ props?: Record<string, unknown> }[]> }, alt: RegExp | string) =>
   (await ui.findAll({ type: 'Svg' })).find(x => (typeof alt === 'string' ? x.props?.alt === alt : alt.test(String(x.props?.alt ?? '')))) ?? undefined
@@ -635,3 +645,531 @@ test('no surface attached: the pane never asks to open, so the app prints no "no
   expect(asked).toEqual([])
   expect(out?.text ?? '').toMatch(/no app window is attached/)
 })
+}
+
+// ---- was layout.test.tsx
+{
+// The layout contract of the pane's building blocks (hooks/blocks.tsx): every row has the same badge and control
+// columns, every time sits in a row's meta column, and every time ends on one right edge, whatever region holds it.
+
+const PANE = {
+  plugin: 'mission-status',
+  component: 'Pane',
+  requestId: 'progress',
+  props: { title: 'Progress', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+} as const
+
+const start = async ($: any, on: any) => {
+  const clock = mock.clock(on, { now: Date.now() })
+  on('tool.register', () => ({ value: {} }))
+  on('command.register', () => ({ value: { command: 'mission-status' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('agent.list', () => ({ value: [] }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'ok' }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.turn.start({ text: 'go', turnId: 'turn-1' } as never)
+  return clock
+}
+const send = ($: any, args: Record<string, unknown>) => $.tool.call({ tool: 'mcp__mission-status__update', ...args } as never)
+
+type Node = { type: string; key?: string; props: Record<string, any>; children: unknown[] }
+const asNode = (x: unknown): Node | null => {
+  if (x === null || typeof x !== 'object' || typeof (x as any).type !== 'string') return null
+  const props = ((x as any).props ?? {}) as Record<string, any>
+  const raw = (x as any).children ?? props.children ?? []
+  const children = (Array.isArray(raw) ? raw : [raw]).flat(Infinity)
+  return { type: (x as any).type, key: props.key ?? (x as any).key, props, children }
+}
+// Each drawn element becomes one Node, made once, so a parent's children are the same objects a path holds.
+const made = new WeakMap<object, Node>()
+const nodeOf = (x: unknown): Node | null => {
+  if (x === null || typeof x !== 'object') return null
+  const hit = made.get(x)
+  if (hit !== undefined) return hit
+  const n = asNode(x)
+  if (n !== null) made.set(x, n)
+  return n
+}
+const kidsOf = (n: Node) => n.children.map(nodeOf).filter((x): x is Node => x !== null)
+const textOf = (n: Node): string => n.children.map(c => (typeof c === 'string' ? c : nodeOf(c) ? textOf(nodeOf(c) as Node) : '')).join('')
+// Every element with the path from the root to it.
+const walk = (n: Node, path: Node[] = [], out: { node: Node; path: Node[] }[] = []) => {
+  out.push({ node: n, path: [...path, n] })
+  for (const k of kidsOf(n)) walk(k, [...path, n], out)
+  return out
+}
+const cells = (v: unknown) => (typeof v === 'number' ? v : v === undefined ? 0 : 1)
+// How far an element's right edge sits from the pane's right edge, in cells: the borders and right padding of every
+// box around it, and in each row the fixed widths and gaps of the columns after it. NaN when that cannot be known:
+// a column after it with no fixed width, or a row that does not push it to the right.
+const rightInset = (path: Node[]): number => {
+  let sum = 0
+  for (let i = path.length - 2; i >= 0; i--) {
+    const box = path[i] as Node
+    const child = path[i + 1] as Node
+    const p = box.props
+    // The desktop draws a border as a hairline inside the box's edge, so only padding moves a row in.
+    sum += cells(p.paddingRight ?? p.paddingX ?? p.padding)
+    // In a column, a child reaches the right edge only when it stretches: its width is 100%, or the column says so.
+    if (p.flexDirection !== 'row' && child.type === 'Box' && child.props.width !== '100%' && p.alignItems !== 'stretch') return NaN
+    if (p.flexDirection === 'row') {
+      const kids = kidsOf(box)
+      const at = kids.indexOf(child)
+      const later = kids.slice(at + 1)
+      const pushed = p.justifyContent === 'flex-end' || p.justifyContent === 'space-between' || kids.slice(0, at + 1).some(k => (k.props.flexGrow ?? 0) > 0)
+      if (!pushed && later.length > 0) return NaN
+      if (!pushed && later.length === 0 && at > 0 && !kids.slice(0, at).some(k => (k.props.flexGrow ?? 0) > 0)) return NaN
+      for (const k of later) {
+        if (typeof k.props.width !== 'number') return NaN
+        sum += k.props.width + cells(p.columnGap ?? p.gap)
+      }
+    }
+  }
+  return sum
+}
+const TIME = /^(CI (failed |passed )?)?(\d+:\d{2} [AP]M|(\d+h )?(\d+m )?\d+[sm])$/
+
+test('layout: every row has one badge and one control width, and every time sits in the meta column on one right edge', async ($, on) => {
+  const clock = await start($, on)
+  await send($, { project: 'P', phases: ['Plan', 'Build', 'Test'], phase: 0, items: [{ id: 'p1', phase: 0, name: 'Read the code', status: 'now' }] })
+  await clock.advance(65_000)
+  await send($, { phase: 1, patch: [{ op: 'change', id: 'p1', status: 'done' }] })
+  await send($, { patch: [
+    { op: 'add', id: 'a', phase: 1, name: 'Write the blocks', status: 'done' },
+    { op: 'add', id: 'b', phase: 1, name: 'Rebuild the view from the blocks', status: 'now', note: 'every region' },
+    { op: 'add', id: 'c', phase: 1, name: 'Stage cards', status: 'now', parent: 'b' },
+  ] })
+  await clock.advance(12_000)
+  await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const all = walk(nodeOf(await ui.drawn()) as Node)
+
+  // Every time on the pane sits in a meta column and ends on one right edge.
+  const times = all.filter(x => x.node.type === 'Text' && TIME.test(textOf(x.node).trim()))
+  expect(times.length >= 3).toBe(true)
+  const insets = times.map(x => rightInset(x.path))
+  expect(insets.every(v => Number.isFinite(v))).toBe(true)
+  expect(new Set(insets).size).toBe(1)
+  for (const x of times) expect(x.path.some(n => String(n.key ?? '').startsWith('col:meta:'))).toBe(true)
+
+  // Every row: badge, title, meta, control, with one badge width and one control width on the whole pane.
+  const rows = all.filter(x => x.node.type === 'Box' && String(x.node.key ?? '').startsWith('row:')).map(x => x.node)
+  expect(rows.length >= 5).toBe(true)
+  const col = (row: Node, name: string) => walk(row).find(x => x.node.key === `col:${name}:${String(row.key).slice(4)}`)?.node
+  for (const r of rows) for (const name of ['badge', 'title', 'meta', 'ctl']) expect(col(r, name) !== undefined).toBe(true)
+  expect(new Set(rows.map(r => col(r, 'badge')?.props.width)).size).toBe(1)
+  expect(new Set(rows.map(r => col(r, 'ctl')?.props.width)).size).toBe(1)
+  await ui.unmount()
+})
+}
+
+// ---- was substeps.test.tsx
+{
+// Sub-steps: stepsParallel, and a sub-step sent as { name, steps } promoted to its own nested item.
+
+const start = async ($: any, on: any) => {
+  watch(on)
+  on('tool.register', () => ({ value: {} }))
+  on('command.register', () => ({ value: { command: 'mission-status' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('agent.list', () => ({ value: [] }))
+  on('clock.every', () => ({ value: () => {} }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('tool.call', () => ({ result: 'ok' }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+}
+const send = ($: any, args: Record<string, unknown>) => $.tool.call({ tool: 'mcp__mission-status__update', ...args } as never)
+// The plugin's state as the engine stores it, read the way every reader reads it: through normalize.
+let stored: Record<string, any> = {}
+const watch = (on: any) => {
+  stored = {}
+  on('state.set', (_: unknown, e: { plugin: string; key: string; value: unknown }, next: any) => {
+    const v = e.value as any
+    if (e.plugin === 'mission-status') stored[e.key] = v !== null && typeof v === 'object' && 'shape' in v && 'value' in v ? v.value : v
+    return next(e)
+  })
+}
+const items = (): any[] => normalize(stored.summary)?.items ?? []
+const byId = (id: string) => items().find(x => x.id === id)
+const BASE = { project: 'P', phases: ['Build', 'Close out'], phase: 1 }
+
+const REVIEW = { id: 'review', phase: 1, name: 'Review', status: 'now', steps: ['Read', { name: 'Lenses', steps: ['Bugs', 'Speed'] }, 'Curate', 'File'], step: 2 }
+
+test('stepsParallel survives a write and a patch', async ($, on) => {
+  await start($, on)
+  expect((await send($, { ...BASE, items: [{ id: 'fan', phase: 1, name: 'Fan out', status: 'now', steps: ['A', 'B'], stepsParallel: true }] })).deny).toBeUndefined()
+  expect(byId('fan').stepsParallel).toBe(true)
+  expect((await send($, { patch: [{ op: 'change', id: 'fan', step: 1 }] })).deny).toBeUndefined()
+  expect(byId('fan').stepsParallel).toBe(true)
+  expect((await send($, { patch: [{ op: 'change', id: 'fan', stepsParallel: false }] })).deny).toBeUndefined()
+  expect(byId('fan').stepsParallel).toBeUndefined()
+  expect((await send($, { patch: [{ op: 'add', id: 'two', phase: 1, name: 'Two', status: 'now', steps: ['X', 'Y'], stepsParallel: true }] })).deny).toBeUndefined()
+  expect(byId('two').stepsParallel).toBe(true)
+  expect(String((await send($, { patch: [{ op: 'change', id: 'two', stepsParallel: 'yes' }] })).deny)).toContain('stepsParallel')
+})
+
+test('promotion: a { name, steps } sub-step becomes a child item, leaves the steps line, and step still names the same sub-step', async ($, on) => {
+  await start($, on)
+  expect((await send($, { ...BASE, items: [REVIEW] })).deny).toBeUndefined()
+  const parent = byId('review')
+  expect(parent.steps).toEqual(['Read', 'Curate', 'File'])
+  expect(parent.step).toBe(1)
+  expect(parent.steps[parent.step]).toBe('Curate')
+  const child = byId('review-lenses')
+  expect(child).toMatchObject({ name: 'Lenses', parent: 'review', phase: 1, status: 'done', promoted: true, steps: ['Bugs', 'Speed'] })
+  expect(items().map(x => x.id)).toEqual(['review', 'review-lenses'])
+})
+
+test('promotion: status as sent wins; else at step it is now and step goes null; parallel and now makes every one now', async ($, on) => {
+  await start($, on)
+  await send($, { ...BASE, items: [{ ...REVIEW, step: 1 }] })
+  expect(byId('review').step).toBeNull()
+  expect(byId('review-lenses').status).toBe('now')
+  await send($, { ...BASE, items: [{ ...REVIEW, step: 0 }] })
+  expect(byId('review-lenses').status).toBe('next')
+  await send($, { ...BASE, items: [{ ...REVIEW, step: 0, steps: ['Read', { name: 'Lenses', steps: ['Bugs'], status: 'failed', note: 'Two lenses' }] }] })
+  expect(byId('review-lenses')).toMatchObject({ status: 'failed', note: 'Two lenses' })
+  await send($, { ...BASE, items: [{ id: 'fan', phase: 1, name: 'Fan out', status: 'now', stepsParallel: true, steps: [{ name: 'Web', steps: ['Search'] }, { name: 'Code', steps: ['Read', { name: 'Deep', steps: ['Trace'] }] }] }] })
+  expect(['fan-web', 'fan-code'].map(id => byId(id).status)).toEqual(['now', 'now'])
+  // Its own sub-steps follow the same rule, one level down.
+  expect(byId('fan-code').steps).toEqual(['Read'])
+  expect(byId('fan-code-deep')).toMatchObject({ parent: 'fan-code', phase: 1, promoted: true, steps: ['Trace'] })
+})
+
+test('a repeated write makes no duplicate; a patch keeps the child; dropping the entry drops the child', async ($, on) => {
+  await start($, on)
+  await send($, { ...BASE, items: [REVIEW] })
+  await send($, { ...BASE, items: [REVIEW] })
+  expect(items().filter(x => x.id === 'review-lenses')).toHaveLength(1)
+  // A patch of step alone counts places in the list as sent: 3 is File.
+  expect((await send($, { patch: [{ op: 'change', id: 'review', step: 3 }] })).deny).toBeUndefined()
+  expect(items().filter(x => x.id === 'review-lenses')).toHaveLength(1)
+  expect(byId('review').steps[byId('review').step]).toBe('File')
+  expect(normalize(normalize(stored.summary))?.items.map(x => x.id)).toEqual(['review', 'review-lenses'])
+  // A patch that sends the steps without the entry drops the promoted child.
+  expect((await send($, { patch: [{ op: 'change', id: 'review', steps: ['Read', 'Curate'] }] })).deny).toBeUndefined()
+  expect(byId('review-lenses')).toBeUndefined()
+  // A full write without it does the same; an item the agent sent itself stays.
+  await send($, { ...BASE, items: [REVIEW] })
+  expect(byId('review-lenses')).toBeDefined()
+  await send($, { ...BASE, items: [{ ...REVIEW, steps: ['Read'] }, { id: 'mine', phase: 1, name: 'Mine', status: 'next' }] })
+  expect(items().map(x => x.id)).toEqual(['review', 'mine'])
+})
+
+test('a plain string entry, and an object with no steps, stay on the line as names', async ($, on) => {
+  await start($, on)
+  await send($, { ...BASE, items: [{ id: 'plain', phase: 1, name: 'Plain', status: 'now', steps: ['One', { name: 'two' }, 'Three'], step: 2 }] })
+  expect(byId('plain')).toMatchObject({ steps: ['One', 'Two', 'Three'], step: 2 })
+  expect(byId('plain').stepsSent).toBeUndefined()
+  expect(items()).toHaveLength(1)
+})
+
+test('stepPulseSvg animates only while running, and its begin offset grows with k', () => {
+  const still = stepPulseSvg('Bugs', 2, false)
+  expect(still).not.toContain('<animate')
+  expect(still).toContain('>Bugs<')
+  expect(still).toContain('height="16"')
+  expect(still).toContain('rgba(128,128,128,.75)')
+  expect(still).toContain('prefers-color-scheme:light')
+  const begins = [0, 1, 2].map(k => Number(/begin="([\d.]+)s"/.exec(stepPulseSvg('Bugs', k, true))?.[1]))
+  expect(begins).toEqual([0, 0.25, 0.5])
+  expect(stepPulseSvg('Bugs', 1, true)).toContain('values="1;.35;1" dur="1.6s"')
+  expect(stepPulseSvg('A & B', 0, true)).toContain('A &amp; B')
+})
+
+test('pane: parallel sub-sub-steps each pulse while their sub-step runs, offset from each other; in-order ones stay one line', async ($, on) => {
+  await start($, on)
+  await send($, { ...BASE, items: [
+    { id: 'lenses', phase: 1, name: 'Lenses', status: 'now', steps: ['Bugs', 'Speed', 'Docs'], stepsParallel: true },
+    { id: 'file', phase: 1, name: 'File', status: 'next', steps: ['Draft', 'Send'], step: 0 },
+  ] })
+  const ui = await $.ui.mount({ plugin: 'mission-status', component: 'Pane', requestId: 'progress', surface: 'desktop', props: { title: 'P', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } } as never)
+  const svgs = (await ui.findAll({ type: 'Svg' })) as any[]
+  const pulses = ['Bugs', 'Speed', 'Docs'].map(n => svgs.find(x => x.props?.alt === n))
+  expect(pulses.every(x => /<animate /.test(String(x?.props?.source)))).toBe(true)
+  const begins = pulses.map(x => Number(/begin="([\d.]+)s"/.exec(String(x?.props?.source))?.[1]))
+  expect(begins[0]! < begins[1]! && begins[1]! < begins[2]!).toBe(true)
+  // In-order sub-sub-steps draw as the dot-separated caption line, not as pulses.
+  expect(svgs.some(x => x.props?.alt === 'Draft')).toBe(false)
+  expect((await ui.find({ type: 'Text', text: /Draft · Send/ })) !== undefined).toBe(true)
+  await ui.unmount()
+})
+}
+
+// ---- was needs.test.tsx
+{
+// The "needs" item status: an item the agent leaves waiting on the person (an approval, a sign-off, an answer).
+
+let registered = ''
+let stored: Record<string, any> = {}
+const start = async ($: any, on: any) => {
+  registered = ''
+  stored = {}
+  on('tool.register', (_: unknown, e: unknown) => {
+    registered += JSON.stringify(e)
+    return { value: {} }
+  })
+  on('state.set', (_: unknown, e: { plugin: string; key: string; value: unknown }, next: any) => {
+    // A shaped value is stored as { shape, value }.
+    const v = e.value as any
+    if (e.plugin === 'mission-status') stored[e.key] = v !== null && typeof v === 'object' && 'shape' in v && 'value' in v ? v.value : v
+    return next(e)
+  })
+  on('command.register', () => ({ value: { command: 'mission-status' } }))
+  on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('agent.list', () => ({ value: [] }))
+  on('clock.every', () => ({ value: () => {} }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('tool.call', () => ({ result: 'ok' }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  on('turn.complete', () => ({ text: '' }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.turn.start({ text: 'go', turnId: 'turn-1' } as never)
+}
+const send = ($: any, args: Record<string, unknown>) => $.tool.call({ tool: 'mcp__mission-status__update', ...args } as never)
+const BASE = { project: 'P', stage: 'build', phase: 1 }
+
+const mk = (id: string, status: string, phase = 1, parent: string | null = null) => ({ id, phase, name: id, status, parent, after: null, when: null, since: null, touchedAt: 0 }) as Item
+const summaryOf = (items: Item[], phase = 1) =>
+  ({ project: 'P', ticket: null, links: [], goalLine: null, stage: 'build', phases: ['Plan', 'Build', 'Test'], phase, symptom: null, hypotheses: [], waitingOn: null, waitingSince: 0, counts: [], items, active: [], template: null, starts: [], ends: [], change: null, at: 0 }) as unknown as NonNullable<Summary>
+const LIVE: Facts = { ...NO_FACTS, turnOpen: true }
+const run = (items: Item[], facts: Facts = LIVE, phase = 1) => {
+  const s = summaryOf(items, phase)
+  const merged = mergeItems(s, [], facts)
+  const d = derive(s, merged, facts)
+  expect(brokenRules(s, merged, facts, d)).toEqual([])
+  return { d, merged }
+}
+
+test('the tool schema offers needs for items and patches, says what it means, and the tool keeps it through a send and a patch', async ($, on) => {
+  await start($, on)
+  expect(registered).toMatch(/"needs"/)
+  expect(registered).toMatch(/needs = the item waits on the person \(an approval, a sign-off, an answer\)/)
+  const r = await send($, { ...BASE, items: [{ id: 'sign', phase: 1, name: 'Sign-off', status: 'needs' }, { id: 'code', phase: 1, name: 'Code', status: 'now' }] })
+  expect(r.deny).toBeUndefined()
+  expect(stored.summary.items.map((x: Item) => x.status)).toEqual(['needs', 'now'])
+  const p = await send($, { patch: [{ op: 'change', id: 'code', status: 'needs' }, { op: 'change', id: 'sign', status: 'done' }] })
+  expect(p.deny).toBeUndefined()
+  expect(stored.summary.items.map((x: Item) => x.status)).toEqual(['done', 'needs'])
+  const bad = await send($, { ...BASE, items: [{ phase: 1, name: 'Bad', status: 'sleeping' }] })
+  expect(bad.deny).toMatch(/status must be one of done, now, next, failed, needs/)
+})
+
+test('an item that needs the person is needs, and so is its stage while nothing else runs; it never runs, even in a live turn', () => {
+  const { d, merged } = run([mk('approve', 'needs'), mk('draft', 'done')])
+  expect(d.item(merged[0] as Item)).toBe('needs')
+  expect(d.stage(1)).toBe('needs')
+  // In a stage already passed, too.
+  const later = run([mk('approve', 'needs')], LIVE, 2)
+  expect(later.d.stage(1)).toBe('needs')
+  // Holding the running helpers does not make it run either.
+  const hosted = run([mk('approve', 'needs')], { ...LIVE, helpersRunning: true, hostKey: 'item-1-approve' })
+  expect(hosted.d.item(hosted.merged[0] as Item)).toBe('needs')
+})
+
+test('a done mark and a failed item still win over needs on the item; on the stage, needs comes first', () => {
+  const failed = run([mk('approve', 'needs'), mk('build', 'failed')])
+  expect(failed.d.item(failed.merged[0] as Item)).toBe('needs')
+  expect(failed.d.item(failed.merged[1] as Item)).toBe('failed')
+  // The stage rule: an item that needs the person outranks a failed one, so the wait on the person is seen first.
+  expect(failed.d.stage(1)).toBe('needs')
+  const marked = summaryOf([mk('approve', 'needs')])
+  const facts: Facts = { ...LIVE, marks: { approve: { status: 'done', at: 5 } } }
+  const merged = mergeItems(marked, [], facts)
+  expect(derive(marked, merged, facts).item(merged[0] as Item)).toBe('done')
+})
+
+test('a running sibling makes the stage running', () => {
+  // Parallel: work after an item that waits on the person runs only when the agent says it may run beside it.
+  const { d, merged } = run([mk('approve', 'needs'), { ...mk('code', 'now'), parallel: true } as Item])
+  expect(d.item(merged[0] as Item)).toBe('needs')
+  expect(d.item(merged[1] as Item)).toBe('running')
+  expect(d.stage(1)).toBe('running')
+})
+
+test('allDone is false while an item needs the person', () => {
+  const items = [mk('plan', 'done', 0), mk('approve', 'needs', 1), mk('ship', 'done', 2)]
+  expect(run(items, NO_FACTS, 3).d.allDone).toBe(false)
+  expect(run(items.map(x => ({ ...x, status: 'done' }) as Item), NO_FACTS, 3).d.allDone).toBe(true)
+})
+
+test('needsBadgeSvg draws an amber ring with a light-theme override', () => {
+  const svg = needsBadgeSvg()
+  expect(svg).toMatch(/^<svg [^>]*width="16" height="16"/)
+  expect(svg).toMatch(/<circle/)
+  expect(svg).toMatch(/#E5A23D/)
+  expect(svg).toMatch(/@media \(prefers-color-scheme:light\)\{[^}]*#A8650A/)
+  expect(needsBadgeSvg(20)).toMatch(/width="20" height="20"/)
+})
+}
+
+// ---- was theme.test.ts
+{
+// WCAG relative luminance and contrast ratio of two six-digit hex colours.
+const lum = (hex: string) => {
+  const [r, g, b] = [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255).map(c => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4))
+  return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0)
+}
+const contrast = (a: string, b: string) => {
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x)
+  return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05)
+}
+// The light pages the drawings sit on: white and the app's light page.
+const PAGES = ['#FFFFFF', LIGHT.page]
+
+const drawings: [string, string][] = [
+  ['stage bar', trackSvg({ total: 5, done: 2, current: 'Test', isDone: false, names: ['Plan', 'Build', 'Test', 'Deploy', 'Learn'] })],
+  ['stage bar, all done', trackSvg({ total: 3, done: 3, current: null, isDone: true, names: ['Plan', 'Build', 'Test'] })],
+  ['helper strip', stripSvg({ title: 'Scan tests', detail: 'haiku', state: 'running', time: '2 min' })],
+  ['badge ahead', badgeSvg('next', 0)],
+  ['badge current', badgeSvg('now', 0)],
+  ['wait line', waitsLineSvg()],
+  ['exit clause', exitSvg('all tests pass', false)],
+]
+
+test('light theme: every drawing with text or thin lines has a light rule', () => {
+  for (const [name, svg] of drawings) expect(`${name}: ${svg.includes('@media (prefers-color-scheme:light)')}`).toBe(`${name}: true`)
+})
+
+test('light theme: light text colours reach 4.5:1 and line colours 3:1 on a light page', () => {
+  for (const page of PAGES) {
+    for (const ink of [LIGHT.accent, LIGHT.green, LIGHT.amber, LIGHT.grey, LIGHT.ink]) expect(contrast(ink, page)).toBeGreaterThanOrEqual(4.5)
+  }
+})
+
+test('light theme: the dark look keeps its colours', () => {
+  const track = trackSvg({ total: 5, done: 2, current: 'Test', isDone: false, names: ['Plan', 'Build', 'Test', 'Deploy', 'Learn'] })
+  expect(track).toContain('.np{fill:#fff;fill-opacity:.78}.nf{fill:#A8A69E;fill-opacity:.85}.dv{fill:#fff;fill-opacity:.12}')
+  expect(track).toContain('fill="#7462E8"')
+  const exit = exitSvg('all tests pass', true)
+  expect(exit).toContain('fill:#1F1E1D;stroke:#8B8A85;stroke-opacity:.7}.el{stroke:#8B8A85;stroke-opacity:.6}')
+  expect(badgeSvg('now', 0)).toContain('stroke="#8B7CF6"')
+  expect(badgeSvg('next', 0)).toContain('.bn{stroke:#A8A69E;stroke-opacity:.55}')
+  expect(waitsLineSvg()).toContain('.wa{stroke:#8B8A85}')
+})
+
+test('a spinner\'s source never changes, so a redraw keeps the same drawing and the turn runs on', () => {
+  expect(badgeSvg('now', 1_700_000_000_250, 16)).toBe(badgeSvg('now', 1_700_000_000_907, 16))
+  expect(stripSvg({ title: 'Scan', detail: null, state: 'running', time: '1 min' })).toBe(stripSvg({ title: 'Scan', detail: null, state: 'running', time: '1 min' }))
+})
+}
+
+// ---- was age.test.ts
+{
+test('ages read as plain words', () => {
+  expect(age(0, 30_000)).toBe('now')
+  expect(age(0, 4 * 60_000)).toBe('4 min')
+  expect(age(0, 75 * 60_000)).toBe('1 h 15 min')
+})
+
+test('sentence case keeps the rest as written', () => {
+  expect(cap('ship to GitHub')).toBe('Ship to GitHub')
+})
+
+test('the same input draws the same source, so an unchanged bar does not flicker; different input, different ids', () => {
+  const ids = (svg: string) => [...svg.matchAll(/id="([^"]+)"/g)].map(m => m[1])
+  const one = trackSvg({ total: 5, done: 2, current: 'Test', isDone: false })
+  expect(trackSvg({ total: 5, done: 2, current: 'Test', isDone: false })).toBe(one)
+  const other = ids(trackSvg({ total: 5, done: 3, current: 'Deploy', isDone: false }))
+  expect(ids(one).filter(x => other.includes(x))).toEqual([])
+})
+
+test('the live line uses the chat status words', () => {
+  expect(actionOf({ tool: 'Bash', command: 'x', description: 'Run the pane tests' })).toBe('Running a command')
+  expect(actionOf({ tool: 'Edit', file_path: '/a/b/register.tsx' })).toBe('Editing a file')
+  expect(actionOf({ tool: 'mcp__mission-status__update' })).toBeNull()
+  expect(secondsOf(12_400)).toBe('12s')
+  expect(secondsOf(65_000)).toBe('1m 5s')
+})
+
+test('the stage timer reads MM:SS, and H:MM:SS past an hour', () => {
+  expect(clockOf(65_000)).toBe('01:05')
+  expect(clockOf(3_725_000)).toBe('1:02:05')
+})
+
+test('task-list steps slot into the stage in progress when they first appear, and keep it', () => {
+  const one = applyPlan([], { items: [{ content: 'Read the API', status: 'in_progress' }, { content: 'Build it', status: 'pending' }] }, 1)
+  expect(one.map(x => [x.name, x.status, x.phase])).toEqual([['Read the API', 'now', 1], ['Build it', 'next', 1]])
+  const two = applyPlan(one, { advance: true }, 2)
+  expect(two.map(x => [x.status, x.phase])).toEqual([['done', 1], ['now', 2]])
+})
+
+test('a state stored by an earlier version keeps its data and gains the new fields', () => {
+  const kept = normalize({ project: 'P', stage: 'build', phases: ['A', 'B'], phase: 1, counts: [], items: [{ phase: 1, name: 'X', status: 'now' }] } as never)
+  expect(kept?.project).toBe('P')
+  expect(kept?.active).toEqual([])
+  expect(kept?.items[0]?.after).toBeNull()
+})
+
+test('a small badge stays small', () => {
+  expect(badgeSvg('done', 0, 16)).toContain('width="16"')
+})
+
+test('a pull request reads its CI as one word', () => {
+  const pr = prOf(prRecordOf('o/r#7', { number: 7, state: 'OPEN', url: 'u', title: 't', statusCheckRollup: [{ conclusion: 'SUCCESS' }, { status: 'IN_PROGRESS' }] }, 0))
+  expect(pr.ci).toBe('running')
+})
+
+test('the header age reads seconds, then minutes, then hours', () => {
+  expect(agoOf(0)).toBe('0s ago')
+  expect(agoOf(42_000)).toBe('42s ago')
+  expect(agoOf(5 * 60_000)).toBe('5m ago')
+  expect(agoOf(2 * 3_600_000)).toBe('2h ago')
+})
+
+test('a done time reads as a clock time with AM or PM', () => {
+  const at = new Date(2026, 10, 25, 21, 5).getTime()
+  expect(timeOfDay(at)).toBe('9:05 PM')
+  expect(timeOfDay(new Date(2026, 10, 25, 0, 30).getTime())).toBe('12:30 AM')
+})
+
+test('a clock time is local time and names no time zone', () => {
+  expect(timeOfDay(new Date(2026, 10, 25, 21, 5).getTime())).toBe('9:05 PM')
+})
+}
+
+// ---- was doc.test.tsx
+{
+const PANE = {
+  plugin: 'mission-status',
+  component: 'Pane',
+  props: { title: 'x', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} },
+} as const
+
+test('a local Markdown link opens the document pane, which draws the file as Markdown', async ($, on) => {
+  const opened: string[] = []
+  on('tool.register', () => ({ value: {} }))
+  on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
+  on('ui.open', (_: unknown, e: { id: string }) => {
+    opened.push(e.id)
+    return { value: { isPlaced: true } }
+  })
+  on('agent.list', () => ({ value: [] }))
+  on('clock.every', () => ({ value: () => {} }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('fs.read', () => ({ value: '# The plan\n\nOne line.' }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.tool.call({ tool: 'mcp__mission-status__update', project: 'P', stage: 'build', phase: 1, links: [{ phase: 0, label: 'Plan', href: '/tmp/plan.md' }], items: [{ phase: 0, name: 'a', status: 'done' }] } as never)
+  const ui = await $.ui.mount({ ...PANE, requestId: 'progress', surface: 'desktop' })
+  // Stage 0 is done and folded: open it first.
+  await ui.press({ key: 'open-0' })
+  // The document link is a plain button, as the tabs and artifact chips are; a press opens the document pane.
+  const link = (await ui.findAll({ type: 'Button' })).find(x => String(x.props?.label ?? '') === '↗ Plan')
+  expect(link).toBeTruthy()
+  await ui.press({ key: String(link?.key ?? '') })
+  expect(opened).toContain('mission-status-doc')
+  await ui.unmount()
+  const docUi = await $.ui.mount({ ...PANE, requestId: 'mission-status-doc', surface: 'desktop' })
+  const md = await docUi.find({ type: 'Markdown' })
+  expect(String(md?.props?.text ?? '')).toContain('# The plan')
+  await docUi.unmount()
+})
+}
