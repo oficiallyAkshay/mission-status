@@ -2,7 +2,7 @@ export type Count = { label: string; when?: string; n?: number; m?: number; text
 export type ItemStatus = 'done' | 'now' | 'next' | 'failed' | 'needs'
 // id: the agent's stable id for its item (from the name when the agent sends none). The task-list steps are the
 // pane's own items, kept apart in `tasks`: no agent write deletes them.
-export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null; pr?: string | null; doneAt?: number | null; steps?: string[] | null; step?: number | null; stepsParallel?: boolean; stepsSent?: StepEntry[] | null; stepSent?: number | null; promoted?: boolean; taskStep?: string | null; touchedAt?: number | null; parallel?: boolean | null }
+export type Item = { id?: string; phase: number; name: string; status: ItemStatus; after: string | null; parent: string | null; when: string | null; note?: string | null; n?: number; m?: number; text?: string; since?: number | null; pr?: string | null; doneAt?: number | null; steps?: string[] | null; step?: number | null; stepsParallel?: boolean; stepsSent?: StepEntry[] | null; stepSent?: number | null; promoted?: boolean; taskStep?: string | null; touchedAt?: number | null; parallel?: boolean | null; seenAt?: number | null }
 // A sub-step as sent: a name, or { name, steps } for one that has its own sub-steps (it becomes its own nested item).
 // stepsParallel: the sub-steps run at the same time. stepsSent/stepSent: an item's steps and step as sent, kept when an
 // entry was promoted to a child item. promoted: the item was made from its parent's steps, not sent by the agent.
@@ -69,9 +69,11 @@ export type Fresh = {
 export type Marks = { marks: Record<string, { status: 'done' | 'now' | 'failed' | 'needs'; at: number }>; fails: number }
 // prs: the pull requests this session counted, by number, kept on the device; never sent.
 export type MetricsSession = { calls: number; realWork: boolean; paneSent?: boolean; project?: string | null; prs?: number[] }
-export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null; doneAt?: number | null }
+export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null; doneAt?: number | null; seenAt?: number | null }
 // Running time per node (machine.ts): ms counted, and the time it last became running, or null.
 export type Runs = Record<string, { ms: number; from: number | null }>
+// A wakeup the session scheduled: why, and when it is due.
+export type Wakeup = { reason: string; due: number; at: number }
 export type Helper = { id: string; description: string; status: string; model: string | null; startTime: number }
 // One pull request's record, keyed owner/name#number: the one read the item chip, the PRs tab and the Deploy count use.
 export type PrRecord = { ref: string; number: number; title: string; url: string; state: 'open' | 'draft' | 'merged' | 'closed' | 'conflict'; ci: 'running' | 'passing' | 'failing' | 'none'; ciStart?: number | null; ciEnd?: number | null; branch: string | null; mergedAt: number | null; at: number; summary?: string; summaryBy?: 'model' | 'text'; summaryKey?: string; v?: number; commits?: { sha: string; title: string }[]; checks?: { name: string; state: 'running' | 'passing' | 'failing' | 'none' }[] }
@@ -89,7 +91,9 @@ declare module 'claude-code' {
       // The quiet chat's hidden and shown blocks (quiet.tsx), kept across a reload.
       quietKept: { hidden: string[]; shown: string[] }
       // The marker's kept marks (marker.ts); the state machine reads them.
-      marks: Marks | null }
+      marks: Marks | null
+      // Wakeups the session scheduled (ScheduleWakeup); the Watching strip shows the ones still due.
+      wakeups: Wakeup[] }
 
   }
 }

@@ -1,6 +1,6 @@
 import { atom, update } from 'claude-code'
 import type { EngineInterface, RenderChildren } from 'claude-code'
-import type { Count, HypothesisState, Helper, Item, PrRecord, Runbook, RunbookStep } from '../types'
+import type { Count, HypothesisState, Helper, Item, PrRecord, Runbook, RunbookStep, Wakeup } from '../types'
 import { stepsRailSvg, prIconSvg, badgeSvg, exitSvg, flowLineSvg, waitsLineSvg } from './bars'
 import { age, cap } from './model'
 import type { deriveNow } from './store'
@@ -239,6 +239,7 @@ export type StageState = {
   isDone: boolean
   t: number
   running: Helper[]
+  due: Wakeup[]
   hostKey: string | null
   stageState: (k: number) => 'done' | 'now' | 'next'
   stageTimeText: (k: number, st: NodeStatus) => string | null
@@ -251,10 +252,10 @@ export type StageState = {
 
 
 // Each stage is a Card (blocks.tsx): a header Row with its badge, name, time and open control, then its links,
-// items, wait and helpers. The running stage's card carries the accent border.
+// items and wait. The running stage's card carries the accent border; helpers show in the Watching strip.
 export function stageCard(r: Region, c: StageState, name: string, k: number) {
-  const { Box, Text, B, svg, hasSvg, linkRow } = r
-  const { s, machine, allItems, opened, t, running, hostKey, stageState, stageTimeText, badgeFor, needsWord, toggle, itemCards, isRoot } = c
+  const { Box, Text, B, svg, linkRow } = r
+  const { s, machine, allItems, opened, t, stageState, stageTimeText, badgeFor, needsWord, toggle, itemCards, isRoot } = c
   // The machine's word on the stage: running (a spinner and its timer), open, done or next.
   const state = stageState(k)
   const stStage = machine.stage(k)
@@ -295,12 +296,6 @@ export function stageCard(r: Region, c: StageState, name: string, k: number) {
           {itemCards(allItems.filter(x => x.phase === k && isRoot(x)), 0)}
         </Box>
       ),
-      k === s.phase && hasSvg && running.length > 0 && hostKey === null && (
-        <Box key={`helpers-${k}`} flexDirection="column" gap={0} paddingLeft={INDENT} marginTop={1}>
-          {running.slice(0, 4).map(x => B.Helper({ id: x.id, description: x.description, model: x.model, time: age(x.startTime, t) }))}
-          {running.length > 4 && B.Caption({ children: `${running.length - 4} more helpers run.` })}
-        </Box>
-      ),
     ],
   })
 }
@@ -335,6 +330,27 @@ export function foldedCard(r: Region, c: StageState, name: string, k: number, ga
 }
 
 // The Progress tab: the tabs, the header, the stage bar, the symptom and cause, then the stage cards in order.
+// Background watches in one strip of their own, under the stage bar: each helper the session runs (a background
+// shell, a Monitor, a subagent) with how long it has run, and each scheduled wakeup with when it is due. The cards
+// hold the work; the strip holds what waits in the background. Nothing shows when nothing watches.
+export function watchStrip(r: Region, c: StageState): RenderChildren {
+  const { Box, Text, B, hasSvg } = r
+  const { running, due, t } = c
+  if (running.length === 0 && due.length === 0) return null
+  const MAX = 6
+  const rows = [
+    ...running.map(x => ({ id: x.id, description: x.description, model: x.model, time: age(x.startTime, t) })),
+    ...due.map(w => ({ id: `wake-${w.at}`, description: w.reason, model: 'wakeup', time: `in ${durationOf(Math.max(0, w.due - t))}` })),
+  ]
+  return (
+    <Box key="watching" flexDirection="column" gap={0}>
+      {B.Caption({ children: `Watching · ${rows.length}` })}
+      {rows.slice(0, MAX).map(x => (hasSvg ? B.Helper(x) : <Text key={x.id} wrap="truncate">{`● ${cap(x.description)}  ${x.time}`}</Text>))}
+      {rows.length > MAX && B.Caption({ children: `${rows.length - MAX} more watches run.` })}
+    </Box>
+  )
+}
+
 export function progressTab(r: Region, c: StageState, head: RenderChildren) {
   const { Box, Text, B, svg, hasSvg, tabRow } = r
   const { s, allItems, opened, measures, isDone, machine, stageState } = c
@@ -371,6 +387,8 @@ export function progressTab(r: Region, c: StageState, head: RenderChildren) {
           })
         }),
       })}
+
+      {watchStrip(r, c)}
 
       {(s.stage === 'fix' || s.stage === 'cause') && s.symptom !== null && (
         <Box flexDirection="column" gap={1}>

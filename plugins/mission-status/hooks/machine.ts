@@ -52,8 +52,27 @@ export function mergeItems(s: NonNullable<Summary>, steps: Task[], facts: Facts)
   })
   const fromSteps = steps
     .filter(t => !bindings.has(t))
-    .map(t => ({ id: `task:${idOf(t.name)}`, phase: t.phase, name: cap(t.name), status: t.status, after: null, parent: null, when: null, since: t.since ?? null, doneAt: t.doneAt ?? null }) as Item)
-  return [...items, ...fromSteps]
+    .map(t => ({ id: `task:${idOf(t.name)}`, phase: t.phase, name: cap(t.name), status: t.status, after: null, parent: null, when: null, since: t.since ?? null, doneAt: t.doneAt ?? null, seenAt: t.seenAt ?? null }) as Item)
+  return interleave(items, fromSteps)
+}
+
+// One list in the work's order: the agent's items keep the order it sent; each task-list step goes among them by time.
+// A done step goes before the first top-level item of its stage that is not done or was done after it; any other
+// step goes before the first top-level item not yet done that appeared after it. A step with no time goes last.
+export function interleave(items: Item[], fromSteps: Item[]): Item[] {
+  const out = [...items]
+  for (const t of fromSteps) {
+    const top = (x: Item) => x.phase === t.phase && x.parent == null && !x.id?.startsWith('task:')
+    const k =
+      t.status === 'done'
+        ? out.findIndex(x => top(x) && (x.status !== 'done' || (x.doneAt ?? 0) > (t.doneAt ?? 0)))
+        : t.seenAt == null
+          ? -1
+          : out.findIndex(x => top(x) && x.status !== 'done' && (x.seenAt ?? 0) > (t.seenAt ?? 0))
+    if (k < 0) out.push(t)
+    else out.splice(k, 0, t)
+  }
+  return out
 }
 
 // Words that carry meaning, for matching a step to an item.
@@ -61,8 +80,9 @@ const STOP = new Set(['the', 'and', 'for', 'with', 'from', 'into', 'then', 'that
 const wordsOf = (text: string) => new Set(text.toLowerCase().split(/[^a-z0-9]+/).filter(w => w.length >= 3 && !STOP.has(w)))
 
 // Which item each task-list step is: the agent's own link (taskStep) first, then the same name, then one name inside
-// the other, then the item in the step's stage whose words overlap the step's most (half or more of the smaller
-// set). An item already linked by name is preferred over one only similar. A step with no match stays its own row.
+// the other, then the item whose words overlap the step's most (half or more of the smaller set). Any stage counts:
+// a step is slotted in the stage that ran when it first appeared, and the agent's item for the same work may sit in a
+// later one; an item in the step's own stage wins a tie. A step with no match stays its own row.
 export function bindSteps(items: Item[], steps: Task[]): Map<Task, Item> {
   const out = new Map<Task, Item>()
   const norm = (t: string) => t.trim().toLowerCase()
@@ -70,15 +90,15 @@ export function bindSteps(items: Item[], steps: Task[]): Map<Task, Item> {
     const n = norm(t.name)
     const byLink = items.find(x => norm(x.taskStep ?? '') === n)
     const byName = items.find(x => norm(x.name) === n)
-    const byContain = items.find(x => x.phase === t.phase && norm(x.name).length >= 4 && (n.includes(norm(x.name)) || norm(x.name).includes(n)))
+    const contains = (x: Item) => norm(x.name).length >= 4 && (n.includes(norm(x.name)) || norm(x.name).includes(n))
+    const byContain = items.find(x => x.phase === t.phase && contains(x)) ?? items.find(contains)
     let best: Item | undefined
     let bestScore = 0
     const tw = wordsOf(t.name)
     for (const x of items) {
-      if (x.phase !== t.phase) continue
       const xw = wordsOf(x.name)
       const shared = [...tw].filter(w => xw.has(w)).length
-      const score = Math.min(tw.size, xw.size) === 0 ? 0 : shared / Math.min(tw.size, xw.size)
+      const score = (Math.min(tw.size, xw.size) === 0 ? 0 : shared / Math.min(tw.size, xw.size)) + (x.phase === t.phase ? 0.001 : 0)
       if (shared >= 1 && score >= 0.5 && score > bestScore) {
         best = x
         bestScore = score

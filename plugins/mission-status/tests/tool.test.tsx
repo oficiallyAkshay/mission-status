@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { brokenRules, derive, type Facts, itemKey, itemRule, mergeItems, NO_FACTS, type NodeStatus, stageRule, timeOf } from '../hooks/machine'
-import { applyPlan, applyUpdate, asTemplates, CAP_BYTES, CHECK_MS, FIRST_REMINDER, HOLD_TEXT, prRefsInTranscript, REMINDER, REMIND_MS, RULE, skillSteps, templatesLine, TURN_TEXT } from '../hooks/model'
-import { settleRuns } from '../hooks/store'
+import { applyGoal, applyPlan, applyUpdate, goalOf, asTemplates, CAP_BYTES, CHECK_MS, FIRST_REMINDER, HOLD_TEXT, prRefsInTranscript, REMINDER, REMIND_MS, RULE, skillSteps, templatesLine, TURN_TEXT } from '../hooks/model'
+import { applyWakeup, settleRuns } from '../hooks/store'
 import { type Item, type Summary, type Task } from '../types'
 
 // Each block below was one test file. The blocks keep their own helpers and state; one file runs in one child.
@@ -767,6 +767,73 @@ test('the owner\'s Analyze card: the checklist step joins "Warehouse load", and 
   expect(d.item(merged[2] as Item)).toBe('running')
   expect(d.item(merged[3] as Item)).toBe('next')
   expect(brokenRules(s, merged, facts, d)).toEqual([])
+})
+
+test('the owner\'s Live test card: task-list steps done before the agent\'s items show above them, not at the bottom', () => {
+  const items = [it('Watch stage spinner', 0, 'now', { seenAt: 2000 }), it('Check colours', 0, 'done', { seenAt: 2000 }), it('Your verdict', 0, 'needs', { seenAt: 3000 })]
+  const s = one(items, ['Live test'], 0)
+  const steps: Task[] = [
+    { name: 'Start a branch from latest main', status: 'done', phase: 0, seenAt: 1000 },
+    { name: 'Redo the spinner fixes', status: 'done', phase: 0, seenAt: 1000 },
+    { name: 'Late step', status: 'next', phase: 0, seenAt: 2500 },
+  ]
+  const merged = mergeItems(s, steps, { ...NO_FACTS, turnOpen: true })
+  expect(merged.map(x => x.name)).toEqual(['Start a branch from latest main', 'Redo the spinner fixes', 'Watch stage spinner', 'Check colours', 'Late step', 'Your verdict'])
+})
+
+test('a task-list step and an agent item get the time they first appeared, kept across later updates', () => {
+  const plan = applyPlan([], { items: [{ content: 'Step one', status: 'in_progress' }] }, 0)
+  expect(typeof plan[0]?.seenAt).toBe('number')
+  const again = applyPlan(plan, { advance: true }, 0)
+  expect(again[0]?.seenAt).toBe(plan[0]?.seenAt)
+})
+
+test('/goal: the text after the command is the goal; /goal clear and other prompts set none', () => {
+  expect(goalOf('/goal ship the watches strip')).toBe('ship the watches strip')
+  expect(goalOf('ship it', '/goal')).toBe('ship it')
+  expect(goalOf('/goal clear')).toBe(null)
+  expect(goalOf('/goal')).toBe(null)
+  expect(goalOf('what is the goal here?')).toBe(null)
+  expect(goalOf('/goals')).toBe(null)
+})
+
+test('/goal: with no pane it starts one named for the goal; with a pane it sets only the goal line', () => {
+  const made = applyGoal(null, 'Ship the watches strip', [], 1000)
+  expect(made.summary.goalLine).toBe('Ship the watches strip')
+  expect(made.summary.project).toBe('Ship the watches strip')
+  const s = { ...made.summary, phases: ['Plan', 'Build'], items: [it('a', 0, 'done')] }
+  const next = applyGoal(s, 'A new goal', [], 2000)
+  expect(next.steps).toBe(null)
+  expect(next.summary.goalLine).toBe('A new goal')
+  expect(next.summary.phases).toEqual(['Plan', 'Build'])
+  expect(next.summary.items.length).toBe(1)
+})
+
+test('wakeups: a scheduled wakeup is kept with its due time, a new one replaces it, stop clears it', () => {
+  const one = applyWakeup([], { delaySeconds: 600, reason: 'watching CI run' }, 1000)
+  expect(one).toEqual([{ reason: 'watching CI run', due: 601000, at: 1000 }])
+  expect(applyWakeup(one, { delaySeconds: 60, reason: 'next' }, 2000).map(w => w.reason)).toEqual(['next'])
+  expect(applyWakeup(one, { stop: true }, 2000)).toEqual([])
+  expect(applyWakeup(one, {}, 2000)).toBe(one)
+})
+
+test('the standing rule sends watches to the strip, not to items', () => {
+  expect(RULE).toContain('Watching strip')
+  expect(RULE).toContain('/goal')
+  expect(RULE).toContain('never send an item that repeats one')
+})
+
+test('the owner\'s Plan and Build cards: a task-list step slotted in an earlier stage binds to the agent\'s item for it, so no work shows twice', () => {
+  const items = [it('Your go on plan', 1, 'done'), it('Order fix', 2, 'done'), it('Watches strip', 2, 'done'), it('Site update', 2, 'now')]
+  const s = one(items, ['Answer', 'Plan', 'Build', 'Ship'], 2)
+  const steps: Task[] = [
+    { name: 'Order rows by when they first appeared', status: 'done', phase: 1 },
+    { name: 'Watches strip above stage cards', status: 'done', phase: 1 },
+    { name: 'Site: add four features', status: 'next', phase: 1 },
+  ]
+  const merged = mergeItems(s, steps, { ...NO_FACTS, turnOpen: true })
+  expect(merged.filter(x => /site/i.test(x.name)).map(x => x.name)).toEqual(['Site update'])
+  expect(merged.filter(x => /watches/i.test(x.name)).map(x => x.name)).toEqual(['Watches strip'])
 })
 
 test('parallel lets an item run beside the one before it; without it, it waits', () => {

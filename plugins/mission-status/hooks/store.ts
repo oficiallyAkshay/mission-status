@@ -1,7 +1,7 @@
 import { openPane } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Fresh, Item, Live, Marks, Runs, Summary, Task } from '../types'
+import type { Fresh, Item, Live, Marks, Runs, Summary, Task, Wakeup } from '../types'
 import { type Derived, type Facts, derive, itemKey, mergeItems, stageKey } from './machine'
 import { MAX_FAILS } from './marker'
 import { AUTO_OPEN_CALLS, CHECK_MS, checkLine, FIRST_REMINDER, TURN_TEXT, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, REMIND_MS, STALE_STEPS, autoSummary, normalize } from './model'
@@ -23,6 +23,14 @@ export const now = atom({ plugin: 'mission-status', key: 'now' } as const, 0)
 export const open = atom({ plugin: 'mission-status', key: 'open' } as const, null as string[] | null)
 // The session's task list, as the app shows it, each step slotted into a stage.
 export const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
+// One ScheduleWakeup call: a new wakeup replaces the one before it (the loop has one), and stop clears it.
+export function applyWakeup(list: Wakeup[], args: Record<string, unknown>, at: number): Wakeup[] {
+  if (args.stop === true) return []
+  const secs = typeof args.delaySeconds === 'number' ? Math.min(3600, Math.max(60, args.delaySeconds)) : null
+  if (secs === null) return list
+  const reason = typeof args.reason === 'string' && args.reason.trim() !== '' ? args.reason.trim() : 'Scheduled check'
+  return [{ reason, due: at + secs * 1000, at }]
+}
 
 
 export async function tick($: EngineInterface): Promise<void> {
