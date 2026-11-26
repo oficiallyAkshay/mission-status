@@ -44,7 +44,7 @@ The pane ships ten templates. The agent picks one, or writes its own stages when
 
 ## Updates and cost
 
-The plugin checks this repository's latest release at start and every six hours, and installs a newer one between turns. A copy installed from a folder never updates itself. Most of the pane is read by code and costs no tokens: the task list, helpers, git and timers. Three things ask the agent for an update: a stage change, a reminder when the state is stale, and the hold of a turn end. The reminder and the hold each ask the agent to call the update tool once.
+The plugin checks this repository's latest release at start and every six hours, and installs a newer one between turns. A copy installed from a folder never updates itself. Most of the pane is read by code and costs no tokens: the task list, helpers, git and timers. The agent is asked for its first state once, and updates at each stage change. Between updates, the step marker asks Haiku through the session's own model 5 s after the last tool call and at each turn end, which uses a small share of the plan's tokens. Where the marker is off (nonessential traffic off, or a headless session), a reminder when the state is stale, a two-minute check and the hold of a turn end ask the agent to call the update tool instead.
 
 ## Workflows
 

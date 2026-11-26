@@ -1,9 +1,10 @@
 import { openPane } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Activity, Count, Fresh, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Marks, Pr, Runs, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
+import type { Fresh, Item, Live, Marks, Runs, Summary, Task } from '../types'
 import { type Derived, type Facts, derive, itemKey, mergeItems, stageKey } from './machine'
-import { AUTO_OPEN_CALLS, CHECK_MS, checkLine, FIRST_REMINDER, TURN_TEXT, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, STALE_MS, STALE_STEPS, autoSummary, normalize } from './model'
+import { MAX_FAILS } from './marker'
+import { AUTO_OPEN_CALLS, CHECK_MS, checkLine, FIRST_REMINDER, TURN_TEXT, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, REMIND_MS, STALE_STEPS, autoSummary, normalize } from './model'
 
 export const PANE = 'progress'
 // The pane's one accent, the purple of the stage bar; the app's own accent is orange.
@@ -23,13 +24,6 @@ export const open = atom({ plugin: 'mission-status', key: 'open' } as const, nul
 // The session's task list, as the app shows it, each step slotted into a stage.
 export const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 
-// The latest action of the session, as the chat shows it: the current card's live line.
-export const activity = atom({ plugin: 'mission-status', key: 'activity' } as const, null as Activity)
-
-export async function say($: EngineInterface, text: string): Promise<void> {
-  await update($, activity, old => (old !== null && old.text === text ? old : { text, prev: old?.text ?? null, at: Date.now() }))
-}
-
 
 export async function tick($: EngineInterface): Promise<void> {
   try {
@@ -42,6 +36,8 @@ export async function tick($: EngineInterface): Promise<void> {
 // A main-loop turn runs now: set at its turn.start, cleared at its turn.complete (any reason) and at session start and
 // end. Not saved, so a restore reads it closed.
 export const turnOpen = atom({ plugin: 'mission-status', key: 'turnOpen' } as const, false as boolean)
+// Background work still in flight at the last turn end (register.tsx writes it at each turn end).
+const background = atom({ plugin: 'mission-status', key: 'background' } as const, false as boolean)
 // The turn waits on the person: a question to them is open.
 export const waiting = atom({ plugin: 'mission-status', key: 'waiting' } as const, false as boolean)
 // The newest thing the session did that the pane saw: a main-loop tool call, a turn's start or end, a task-list change,
@@ -55,6 +51,8 @@ export async function noteEvent($: EngineInterface): Promise<void> {
 // Running time per node: ms already counted, and when the node last became running (null while it is not running).
 export const runs = atom({ plugin: 'mission-status', key: 'runs' } as const, {} as Runs)
 // The marker's kept marks (marker.ts writes them).
+// A headless run (claude -p, an SDK host, a helper job): no person sees a pane (metrics.tsx writes it at session start).
+const headless = atom({ plugin: 'mission-status', key: 'headless' } as const, false as boolean)
 const marks = atom({ plugin: 'mission-status', key: 'marks' } as const, null as Marks | null)
 
 // The item that holds the running helpers: the last item in progress in the current stage, not one named as the stage.
@@ -72,7 +70,8 @@ export async function deriveNow($: EngineInterface): Promise<{ s: NonNullable<Su
   const l = await read($, live)
   const m = await read($, marks).catch(() => null)
   const base: Facts = {
-    turnOpen: (await read($, turnOpen)) === true,
+    // A turn runs, or background work it started still runs: the work is live either way.
+    turnOpen: (await read($, turnOpen)) === true || (await read($, background).catch(() => false)) === true,
     waiting: (await read($, waiting)) === true,
     helpersRunning: (l?.helpers ?? []).some(h => h.status === 'running'),
     hostKey: null,
@@ -105,7 +104,36 @@ export function settleRuns(old: Runs, running: Set<string>, t: number): Runs {
   return changed ? next : old
 }
 
-// After every fact that can change a status: settle the running times. Answers whether anything runs or counts.
+// The pane's state lives in $.state, which an app quit loses, so each change is also saved to $.store under the
+// session's transcript file name (register.tsx takes it back). Saved only from settle, which runs after every change.
+const prRefs = atom({ plugin: 'mission-status', key: 'prRefs' } as const, [] as string[])
+const prBranches = atom({ plugin: 'mission-status', key: 'prBranches' } as const, [] as string[])
+const SAVED_INDEX = 'savedPanes'
+const SAVED_MAX = 20
+export async function savedKey($: EngineInterface): Promise<string | null> {
+  const path = (await $.session.info().catch(() => null))?.transcriptPath ?? ''
+  const name = path.split('/').pop()?.replace(/\.jsonl$/, '') ?? ''
+  return /^[\w-]{8,80}$/.test(name) ? `pane-${name}` : null
+}
+// The last value saved, so a settle with nothing new writes nothing.
+let lastSaved = ''
+export async function savePane($: EngineInterface): Promise<void> {
+  const value = { summary: await read($, summary), tasks: await read($, tasks), prRefs: await read($, prRefs), prBranches: await read($, prBranches), at: Date.now() }
+  if (value.summary === null) return
+  // Checked before the key, so a settle with nothing new does not even ask for the session's file name.
+  const seen = JSON.stringify([value.summary, value.tasks, value.prRefs, value.prBranches])
+  if (seen === lastSaved) return
+  const key = await savedKey($)
+  if (key === null) return
+  lastSaved = seen
+  await $.store.set(key, value)
+  const index = ((await $.store.get(SAVED_INDEX).catch(() => undefined)) as string[] | undefined) ?? []
+  if (index[index.length - 1] === key) return
+  const next = [...index.filter(k => k !== key), key]
+  for (const old of next.slice(0, Math.max(0, next.length - SAVED_MAX))) await $.store.delete(old).catch(() => undefined)
+  await $.store.set(SAVED_INDEX, next.slice(-SAVED_MAX))
+}
+// After every fact that can change a status: settle the running times and save the pane. Answers whether anything runs or counts.
 export async function settle($: EngineInterface): Promise<boolean> {
   try {
     const got = await deriveNow($)
@@ -118,6 +146,7 @@ export async function settle($: EngineInterface): Promise<boolean> {
       })
     }
     const after = await update($, runs, old => settleRuns(old ?? {}, running, t))
+    await savePane($).catch(() => undefined)
     return running.size > 0 || Object.values(after ?? {}).some(r => r.from !== null)
   } catch {
     return false
@@ -129,7 +158,8 @@ export async function settle($: EngineInterface): Promise<boolean> {
 export async function markerRuns($: EngineInterface): Promise<boolean> {
   try {
     if (await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')) return false
-    return ((await read($, marks))?.fails ?? 0) < 3
+    if (await read($, headless)) return false
+    return ((await read($, marks))?.fails ?? 0) < MAX_FAILS
   } catch {
     return false
   }
@@ -166,7 +196,6 @@ export async function tickIfTimer($: EngineInterface): Promise<void> {
 export const FRESH0: Fresh = {
   calls: 0,
   lastAgentAt: null,
-  agentVersion: 0,
   windowFrom: 0,
   steps: 0,
   stale: false,
@@ -197,9 +226,9 @@ async function markOutOfDate($: EngineInterface, f: Fresh): Promise<void> {
   await update($, summary, s => {
     const old = normalize(s)
     if (old === null || old.mayBeOutOfDate === true) return s
-    // normalize leaves the agent's version out, so it is carried over from the stored value.
-    return { ...old, agentVersion: (s as { agentVersion?: number } | null)?.agentVersion, mayBeOutOfDate: true, version: (old.version ?? 0) + 1 } as Summary
+    return { ...old, mayBeOutOfDate: true, version: (old.version ?? 0) + 1 } as Summary
   })
+  await settle($)
 }
 
 // After each main-loop tool call other than the pane's own: counts it, opens the pane at the 5th call with no agent
@@ -224,7 +253,7 @@ export async function afterToolCall($: EngineInterface): Promise<string | null> 
       return { ...x, windowFrom: at, steps: 0, outstanding: 0 }
     }
     if (stored !== null || x.lastAgentAt !== null) {
-      if (at - x.windowFrom >= STALE_MS || x.steps >= STALE_STEPS) {
+      if (at - x.windowFrom >= REMIND_MS || x.steps >= STALE_STEPS) {
         // A reminder still open when the next one falls due was ignored.
         if (x.outstanding >= 0) x = ignore(x)
         out.line = REMINDER
@@ -250,10 +279,13 @@ export async function afterToolCall($: EngineInterface): Promise<string | null> 
     })
     if (done.wrote) {
       await update($, tasks, () => built.steps)
+      await settle($)
       await openPane($, { id: PANE, title: TITLE })
     }
   }
   await markOutOfDate($, f)
+  // A headless session gets no pane and no reminders.
+  if (await read($, headless)) return null
   // Where the marker keeps the steps current, the pane asks the agent for nothing more than its first state.
   if (out.line !== null && out.line !== FIRST_REMINDER && (await markerRuns($))) return null
   return out.line
@@ -275,7 +307,7 @@ export async function atTurnEnd($: EngineInterface, isHeldAlready: boolean): Pro
     out.hold = null
     // An end with a reminder still open: the agent ignored it.
     if (x.outstanding >= 0) x = ignore(x)
-    const due = shown && (at - x.windowFrom >= STALE_MS || x.steps >= STALE_STEPS)
+    const due = shown && (at - x.windowFrom >= REMIND_MS || x.steps >= STALE_STEPS)
     if ((x.stale || due) && !x.held && !isHeldAlready) {
       out.hold = HOLD_TEXT
       return { ...x, stale: true, held: true, outstanding: 0, windowFrom: at, steps: 0, turnCalls: 0, turnUpdated: false }
@@ -310,14 +342,12 @@ export async function noteTurnStart($: EngineInterface): Promise<void> {
 }
 
 // A valid agent update: the state is fresh again and the flags clear.
-export async function agentUpdated($: EngineInterface, version: number | undefined): Promise<void> {
+export async function agentUpdated($: EngineInterface): Promise<void> {
   const at = await nowOf($)
   await update($, fresh, raw => ({
     ...FRESH0,
     ...raw,
     lastAgentAt: at,
-    // Two updates in flight: the stored version never falls.
-    agentVersion: Math.max(version ?? 0, raw?.agentVersion ?? 0),
     windowFrom: at,
     steps: 0,
     stale: false,
@@ -326,8 +356,4 @@ export async function agentUpdated($: EngineInterface, version: number | undefin
     ignored: 0,
     turnUpdated: true,
   }))
-}
-
-export async function agentVersionOf($: EngineInterface): Promise<number> {
-  return (await read($, fresh)).agentVersion ?? 0
 }

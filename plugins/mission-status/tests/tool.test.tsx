@@ -1,6 +1,6 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { brokenRules, derive, type Facts, itemKey, itemRule, mergeItems, NO_FACTS, type NodeStatus, stageRule, timeOf } from '../hooks/machine'
-import { applyPlan, asTemplates, CAP_BYTES, CHECK_MS, FIRST_REMINDER, HOLD_TEXT, prRefsInTranscript, REMINDER, RULE, skillSteps, STALE_MS, templatesLine, TURN_TEXT } from '../hooks/model'
+import { applyPlan, applyUpdate, asTemplates, CAP_BYTES, CHECK_MS, FIRST_REMINDER, HOLD_TEXT, prRefsInTranscript, REMINDER, REMIND_MS, RULE, skillSteps, templatesLine, TURN_TEXT } from '../hooks/model'
 import { settleRuns } from '../hooks/store'
 import { type Item, type Summary, type Task } from '../types'
 
@@ -75,7 +75,8 @@ test('the first state needs project and phase', async ($, on) => {
   const r = await send($, { stage: 'build' })
   expect(r.deny).toMatch(/the first state needs project/)
   expect(r.deny).toMatch(/the first state needs phase/)
-  expect(await state($, 'summary')).toBeUndefined()
+  // A refused write keeps the empty default: no state.
+  expect((await state($, 'summary')) ?? null).toBeNull()
 })
 
 test('every write carries a version; an older agent version never replaces a newer one', async ($, on) => {
@@ -285,6 +286,19 @@ test('an item named as its own stage is refused', async ($, on) => {
   expect((await send($, { project: 'P', phases: ['Plan', 'Close out'], phase: 1, items: [{ phase: 1, name: 'Deep review', status: 'now' }] })).deny).toBeUndefined()
   expect(String((await send($, { patch: [{ op: 'add', id: 'w', phase: 1, name: 'close out', status: 'now' }] })).deny)).toContain("has its stage's own name")
 })
+
+test('applyUpdate: a pure step from the stored state and the arguments to the next state', () => {
+  const first = applyUpdate(null, { project: 'P', template: 'bug-fix', phase: 1, items: [{ id: 'a', phase: 1, name: 'Read logs', status: 'now' }] }, 1000)
+  expect(first.phases).toEqual(['Reproduce', 'Find cause', 'Fix', 'Test', 'Deploy'])
+  expect(first.template).toBe('bug-fix')
+  expect(first.items[0]?.since).toBe(1000)
+  expect(first.starts[1]).toBe(1000)
+  const next = applyUpdate(first, { phase: 2, version: 3 }, 2000)
+  expect(next.items[0]?.since).toBe(1000)
+  expect(next.ends[1]).toBe(2000)
+  expect(next.version).toBe(first.version + 1)
+  expect(next.agentVersion).toBe(3)
+})
 }
 
 // ---- was triggers.test.ts
@@ -373,7 +387,7 @@ test('the pane does not open by itself when the agent already sent state, and he
 test('stale after 10 minutes of tool calls: a one-line reminder rides on the next step', { timeoutMs: 20_000 }, async ($, on) => {
   const { clock } = await start($, on)
   await send($, BASE)
-  await clock.advance(STALE_MS - 1000)
+  await clock.advance(REMIND_MS - 1000)
   expect(ctx(await bash($))).toEqual([])
   await clock.advance(1000)
   expect(ctx(await bash($))).toEqual([REMINDER])
@@ -385,11 +399,11 @@ test('the time between turns does not count: after the person is away, the stale
   on('prompt.submit', (_: unknown, e: { text: string }) => ({ text: e.text }))
   const { clock } = await start($, on)
   await send($, BASE)
-  await clock.advance(STALE_MS - 2000)
+  await clock.advance(REMIND_MS - 2000)
   expect(ctx(await bash($))).toEqual([])
   await $.turn.complete({ reason: 'answer', answer: 'Done.' } as never)
   // The person is away longer than the window; the next turn is not stale at once.
-  await clock.advance(STALE_MS)
+  await clock.advance(REMIND_MS)
   await $.prompt.submit({ text: 'go on' } as never)
   expect(ctx(await bash($))).toEqual([])
   await clock.advance(2000)
@@ -412,7 +426,7 @@ test('a turn end while stale is held once with a request for an update', { timeo
   const { clock } = await start($, on)
   await send($, BASE)
   expect((await $.classic.Stop({ stop_hook_active: false })).block).toBeUndefined()
-  await clock.advance(STALE_MS)
+  await clock.advance(REMIND_MS)
   expect((await $.classic.Stop({ stop_hook_active: false })).block).toBe(HOLD_TEXT)
   expect((await $.classic.Stop({ stop_hook_active: true })).block).toBeUndefined()
   expect((await $.classic.Stop({ stop_hook_active: false })).block).toBeUndefined()
@@ -421,7 +435,7 @@ test('a turn end while stale is held once with a request for an update', { timeo
 test('after 2 ignored reminders the state is marked May be out of date; an agent update clears it', { timeoutMs: 20_000 }, async ($, on) => {
   const { clock } = await start($, on)
   await send($, BASE)
-  await clock.advance(STALE_MS)
+  await clock.advance(REMIND_MS)
   expect(ctx(await bash($))).toEqual([REMINDER])
   for (let k = 0; k < 3; k++) await bash($) // reminder 1 ignored
   expect((await state($, 'summary')).mayBeOutOfDate).toBe(false)
@@ -469,7 +483,7 @@ test('where the marker runs, no stale reminder and no held turn end; where traff
   on('env.get', () => ({ value: undefined }))
   const { clock } = await start($, on)
   await send($, BASE)
-  await clock.advance(STALE_MS + 1000)
+  await clock.advance(REMIND_MS + 1000)
   expect(ctx(await bash($))).toEqual([])
   expect(((await $.classic.Stop({ stop_hook_active: false } as never)) as { block?: string }).block).toBeUndefined()
 })
@@ -478,7 +492,7 @@ test('with nonessential traffic off the marker is off, so the stale reminder sti
   on('env.get', (_: unknown, e: { name: string }) => ({ value: e.name === 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC' ? '1' : undefined }))
   const { clock } = await start($, on)
   await send($, BASE)
-  await clock.advance(STALE_MS + 1000)
+  await clock.advance(REMIND_MS + 1000)
   expect(ctx(await bash($))).toEqual([REMINDER])
 })
 }
@@ -1046,5 +1060,29 @@ test('spacing: items are blocks with one gap; no row draws a spacer or a line pi
   const lines = svgs.filter((x: any) => x.props?.alt === 'Wait line').map((x: any) => Number(x.props?.height ?? 0))
   expect(lines.length > 0 && lines.every((hgt: number) => hgt >= 1000)).toBe(true)
   await ui.unmount()
+})
+
+test('save: the first state the pane builds by itself and a skill runbook are saved for an app restart', async ($, on) => {
+  const slot = 'pane-test-session-0002'
+  const store = new Map<string, unknown>()
+  on('store.get', (_: unknown, e: { key: string }) => ({ value: store.get(e.key) }))
+  on('store.set', (_: unknown, e: { key: string; value: unknown }) => {
+    store.set(e.key, JSON.parse(JSON.stringify(e.value)))
+    return { value: undefined }
+  })
+  on('store.delete', (_: unknown, e: { key: string }) => {
+    store.delete(e.key)
+    return { value: undefined }
+  })
+  on('session.info', () => ({ value: { transcriptPath: '/x/projects/p/test-session-0002.jsonl' } }))
+  on('fs.read', () => ({ value: '## Steps\n1. Read the code\n2. Write the fix\n' }))
+  on('tool.call', { tool: 'Skill' }, () => ({ result: 'Base directory for this skill: /skills/demo\n' }))
+  await start($, on)
+  const saved = () => (store.get(slot) as { summary?: { project?: string; runbooks?: { id: string }[] } } | undefined)?.summary
+  // No agent state: after a few tool calls the pane builds its own first state.
+  for (let k = 0; k < 6; k++) await $.tool.call({ tool: 'Read', file_path: '/a' } as never)
+  expect(saved()?.project).toBe('This session')
+  await $.tool.call({ tool: 'Skill', skill: 'demo' } as never)
+  expect((saved()?.runbooks ?? []).map(r => r.id)).toContain('skill-demo')
 })
 }

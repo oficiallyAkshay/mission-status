@@ -1,17 +1,19 @@
 #!/bin/bash
 # Runs the three checks on the plugin: validate, type-check, tests. Output streams and is kept in /tmp.
-# CC_TYPES: the engine's claude-code.d.ts (the plugin-authoring skill prints its path when it loads).
+# CC_TYPES: the engine's claude-code.d.ts (the plugin-authoring skill prints its path when it loads). Without it, the
+# types the engine lays beside a loaded dev copy are used when present (.claude-plugin/types/claude-code/index.d.ts).
 # CLAUDE_BIN: the claude engine to validate and test with; use the desktop app's own engine, for the same API.
 CLAUDE="${CLAUDE_BIN:-$(ls -d "$HOME"/Library/Application\ Support/Claude/claude-code/*/*/claude.app/Contents/MacOS/claude 2>/dev/null | sort -V | tail -1)}"
 [ -x "$CLAUDE" ] || CLAUDE=claude
 set -o pipefail
 cd "$(dirname "$0")/../plugins/mission-status" || exit 2
+[ -z "$CC_TYPES" ] && [ -f .claude-plugin/types/claude-code/index.d.ts ] && CC_TYPES="$PWD/.claude-plugin/types/claude-code/index.d.ts"
 LOG=/tmp/mission-status-check-$(date +%s).log
 {
   echo "[$(date -u +%FT%TZ)] engine $("$CLAUDE" --version 2>/dev/null)"; echo "[$(date -u +%FT%TZ)] validate"; "$CLAUDE" plugin validate . 2>&1 | grep -E "✘|✔|❯" 
   if [ -n "$CC_TYPES" ] && [ -f "$CC_TYPES" ]; then
     TMP=$(mktemp -d); FILES=$(ls hooks/*.ts hooks/*.tsx types/index.d.ts | sed "s#^#\"$PWD/#; s#\$#\"#" | paste -sd, -)
-    printf '{"compilerOptions":{"target":"es2023","lib":["es2023"],"types":[],"module":"esnext","moduleResolution":"bundler","strict":true,"noUncheckedIndexedAccess":true,"noEmit":true,"skipLibCheck":true,"jsx":"react","jsxFactory":"h","jsxFragmentFactory":"Fragment"},"files":["%s",%s]}' "$CC_TYPES" "$FILES" > "$TMP/tsconfig.json"
+    printf '{"compilerOptions":{"target":"es2023","lib":["es2023"],"types":[],"module":"esnext","moduleResolution":"bundler","strict":true,"noUncheckedIndexedAccess":true,"noUnusedLocals":true,"noEmit":true,"skipLibCheck":true,"jsx":"react","jsxFactory":"h","jsxFragmentFactory":"Fragment"},"files":["%s",%s]}' "$CC_TYPES" "$FILES" > "$TMP/tsconfig.json"
     echo "[$(date -u +%FT%TZ)] type-check"; npx -y -p typescript@5.6.3 tsc -p "$TMP" 2>&1 && echo "type-check clean"
   else echo "type-check skipped: set CC_TYPES"; fi
   # One test run at a time on this machine, across all worktrees: each run starts a copy of Claude Code per test file, up to one per core.

@@ -1,8 +1,8 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { badgeSvg, exitSvg, LIGHT, needsBadgeSvg, stepPulseSvg, stripSvg, trackSvg, waitsLineSvg } from '../hooks/bars'
 import { brokenRules, derive, type Facts, mergeItems, NO_FACTS } from '../hooks/machine'
-import { actionOf, age, applyPlan, cap, clockOf, normalize, secondsOf } from '../hooks/model'
-import { prOf, prRecordOf } from '../hooks/readers'
+import { age, applyPlan, cap, normalize } from '../hooks/model'
+import { prRecordOf } from '../hooks/readers'
 import { agoOf, timeOfDay } from '../hooks/view'
 import { type Item, type Summary } from '../types'
 
@@ -1080,19 +1080,6 @@ test('the same input draws the same source, so an unchanged bar does not flicker
   expect(ids(one).filter(x => other.includes(x))).toEqual([])
 })
 
-test('the live line uses the chat status words', () => {
-  expect(actionOf({ tool: 'Bash', command: 'x', description: 'Run the pane tests' })).toBe('Running a command')
-  expect(actionOf({ tool: 'Edit', file_path: '/a/b/register.tsx' })).toBe('Editing a file')
-  expect(actionOf({ tool: 'mcp__mission-status__update' })).toBeNull()
-  expect(secondsOf(12_400)).toBe('12s')
-  expect(secondsOf(65_000)).toBe('1m 5s')
-})
-
-test('the stage timer reads MM:SS, and H:MM:SS past an hour', () => {
-  expect(clockOf(65_000)).toBe('01:05')
-  expect(clockOf(3_725_000)).toBe('1:02:05')
-})
-
 test('task-list steps slot into the stage in progress when they first appear, and keep it', () => {
   const one = applyPlan([], { items: [{ content: 'Read the API', status: 'in_progress' }, { content: 'Build it', status: 'pending' }] }, 1)
   expect(one.map(x => [x.name, x.status, x.phase])).toEqual([['Read the API', 'now', 1], ['Build it', 'next', 1]])
@@ -1112,7 +1099,7 @@ test('a small badge stays small', () => {
 })
 
 test('a pull request reads its CI as one word', () => {
-  const pr = prOf(prRecordOf('o/r#7', { number: 7, state: 'OPEN', url: 'u', title: 't', statusCheckRollup: [{ conclusion: 'SUCCESS' }, { status: 'IN_PROGRESS' }] }, 0))
+  const pr = prRecordOf('o/r#7', { number: 7, state: 'OPEN', url: 'u', title: 't', statusCheckRollup: [{ conclusion: 'SUCCESS' }, { status: 'IN_PROGRESS' }] }, 0)
   expect(pr.ci).toBe('running')
 })
 

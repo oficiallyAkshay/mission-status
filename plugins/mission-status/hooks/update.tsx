@@ -59,6 +59,8 @@ let isInTurn = false
 let isRunning = false
 // True when a check found a newer release that has not been tried yet. A failure waits for the next check.
 let isDue = false
+// The 6 h check timer; a new session.start cancels it before it registers again.
+let checkTimer: { cancel: () => void } | null = null
 
 const samePath = (a: string, b: string) => {
   const norm = (p: string) => p.replaceAll('\\', '/').replace(/\/+$/, '')
@@ -265,7 +267,8 @@ export function registerUpdate(on: On): void {
     install = null
     await settle($).catch(() => {})
     void autoCheck($).catch(() => {})
-    $.clock.every(CHECK_EVERY_MS, () => void autoCheck($).catch(() => {}))
+    checkTimer?.cancel()
+    checkTimer = $.clock.every(CHECK_EVERY_MS, () => void autoCheck($).catch(() => {}))
     return r
   })
   on('turn.start', async ($, e, next) => {

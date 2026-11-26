@@ -1,16 +1,5 @@
-import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, StepEntry, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket, Runbook, RunbookStatus, RunbookStep } from '../types'
+import type { CardLink, Count, Hypothesis, HypothesisState, Item, ItemStatus, StepEntry, StageKey, Summary, Task, Ticket, Runbook, RunbookStatus, RunbookStep } from '../types'
 
-
-// The stage bar of each kind of work: the stages it passes through, in order.
-export const PHASES: Record<StageKey, string[]> = {
-  plan: ['Plan', 'Build', 'Test', 'Deploy', 'Learn'],
-  build: ['Plan', 'Build', 'Test', 'Deploy', 'Learn'],
-  review: ['Plan', 'Build', 'Test', 'Deploy', 'Learn'],
-  ship: ['Plan', 'Build', 'Test', 'Deploy', 'Learn'],
-  fix: ['Reproduce', 'Find cause', 'Fix', 'Test', 'Deploy'],
-  cause: ['Reproduce', 'Test causes', 'Confirm cause', 'Fix', 'Learn'],
-}
-export const STAGE_KEYS = Object.keys(PHASES) as StageKey[]
 
 // Templates: quick choices of stage lists. The model picks one that fits the session, or writes its own stages
 // when none fits, and changes them whenever the work changes.
@@ -26,6 +15,11 @@ export const TEMPLATES: Record<string, string[]> = {
   migration: ['Plan', 'Dry run', 'Migrate', 'Verify', 'Clean up'],
   'plan-review': ['Intake', 'Draft', 'Review waves', 'Your rows', 'Hand off'],
 }
+// The old stage field, kept for one release and replaced by template: each value picks a template's stages.
+export const STAGE_KEYS: StageKey[] = ['plan', 'build', 'review', 'ship', 'fix', 'cause']
+const CAUSE_STAGES = ['Reproduce', 'Test causes', 'Confirm cause', 'Fix', 'Learn']
+export const templateOf = (stage: StageKey): string | null => (stage === 'fix' ? 'bug-fix' : stage === 'cause' ? null : 'feature')
+export const stagesOf = (stage: StageKey): string[] => (stage === 'cause' ? CAUSE_STAGES : (TEMPLATES[templateOf(stage) ?? 'feature'] ?? CAUSE_STAGES))
 // The most sub-phases one item's line holds.
 export const MAX_SUB = 8
 export const HYPOTHESIS_STATES: readonly HypothesisState[] = ['open', 'testing', 'ruled out', 'confirmed']
@@ -67,28 +61,7 @@ export function applyPlan(list: Task[], args: Record<string, unknown>, phase: nu
 
 
 
-export const base = (path: unknown) => (typeof path === 'string' ? (path.split('/').pop() ?? path) : '')
 export const clip = (text: string, max = 70) => (text.length > max ? `${text.slice(0, max - 1)}…` : text)
-
-// The chat's own status words for a tool call; null for the pane's own calls.
-export function actionOf(e: Record<string, unknown>): string | null {
-  const tool = String(e.tool ?? '')
-  if (tool.startsWith('mcp__mission-status__') || tool.startsWith('mcp__ccd_') || tool === 'ToolSearch') return null
-  if (tool === 'Bash') return 'Running a command'
-  if (tool === 'Read') return 'Reading a file'
-  if (tool === 'Edit' || tool === 'MultiEdit') return 'Editing a file'
-  if (tool === 'Write') return 'Writing a file'
-  if (tool === 'Grep' || tool === 'Glob') return 'Searching'
-  if (tool === 'Agent' || tool === 'Task') return 'Running a helper'
-  if (tool === 'WebSearch') return 'Searching the web'
-  if (tool === 'WebFetch') return 'Reading a web page'
-  if (tool === 'AskUserQuestion') return 'Waiting for your answer'
-  if (tool === 'Skill') return 'Loading a skill'
-  if (tool === 'SendMessage') return 'Sending a message'
-  return 'Using a tool'
-}
-
-
 
 export const ITEM_STATES: readonly ItemStatus[] = ['done', 'now', 'next', 'failed', 'needs']
 
@@ -394,7 +367,12 @@ export function normalize(raw: Summary): Summary {
     phases,
     phase: typeof r.phase === 'number' ? r.phase : 0,
     active: Array.isArray(r.active) ? (r.active as number[]) : [],
-    template: typeof r.template === 'string' ? r.template : null,
+    template:
+      typeof r.template === 'string'
+        ? r.template
+        : typeof r.stage === 'string' && STAGE_KEYS.includes(r.stage as StageKey) && stagesOf(r.stage as StageKey).join() === phases.join()
+          ? templateOf(r.stage as StageKey)
+          : null,
     symptom: typeof r.symptom === 'string' ? r.symptom : null,
     hypotheses: Array.isArray(r.hypotheses) ? (r.hypotheses as Hypothesis[]) : [],
     waitingOn: typeof r.waitingOn === 'string' ? r.waitingOn : null,
@@ -451,26 +429,6 @@ export function asHypothesis(raw: unknown): Hypothesis | undefined {
   return { text: cap(text), state: HYPOTHESIS_STATES.find(x => x === o.state) ?? 'open' }
 }
 
-// The chat's own elapsed form: 12s, then 1m 5s.
-export function secondsOf(ms: number): string {
-  const sec = Math.max(0, Math.floor(ms / 1000))
-  return sec < 60 ? `${sec}s` : `${Math.floor(sec / 60)}m ${sec % 60}s`
-}
-
-// A stage timer: MM:SS, or H:MM:SS past an hour.
-export function clockOf(ms: number): string {
-  const sec = Math.max(0, Math.floor(ms / 1000))
-  const h = Math.floor(sec / 3600)
-  const m = Math.floor((sec % 3600) / 60)
-  const ss = String(sec % 60).padStart(2, '0')
-  return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${String(m).padStart(2, '0')}:${ss}`
-}
-
-export function since(from: number, to: number): string {
-  const sec = Math.floor(Math.max(0, to - from) / 1000)
-  return sec < 60 ? `${sec} s ago` : `${age(from, to)} ago`
-}
-
 export function age(from: number, to: number): string {
   const min = Math.floor(Math.max(0, to - from) / 60_000)
   if (min < 1) return 'now'
@@ -498,7 +456,7 @@ export function asLink(raw: unknown): CardLink | undefined {
 export const CAP_BYTES = 32 * 1024
 // The freshness triggers (product plan, "How the state stays current").
 export const AUTO_OPEN_CALLS = 5 // the pane opens by itself at the 5th tool call with no agent state
-export const STALE_MS = 10 * 60_000 // 10 minutes of tool calls with no agent update
+export const REMIND_MS = 10 * 60_000 // 10 minutes of tool calls with no agent update
 export const STALE_STEPS = 3 // or 3 task-list steps started with no agent update
 export const IGNORED_AFTER = 3 // a reminder is ignored when 3 tool calls pass, or the turn ends, with no update
 export const IGNORED_LIMIT = 2 // after 2 ignored reminders the state is marked "May be out of date"
@@ -540,18 +498,7 @@ export const idOf = (name: string): string =>
 
 // The UTF-8 size of a value as JSON, without TextEncoder (the hooks module has no web globals).
 export function bytesOf(value: unknown): number {
-  const text = JSON.stringify(value) ?? ''
-  let n = 0
-  for (let k = 0; k < text.length; k++) {
-    const c = text.charCodeAt(k)
-    if (c < 0x80) n += 1
-    else if (c < 0x800) n += 2
-    else if (c >= 0xd800 && c <= 0xdbff) {
-      n += 4
-      k += 1
-    } else n += 3
-  }
-  return n
+  return byteLength(JSON.stringify(value) ?? '')
 }
 
 
@@ -716,7 +663,7 @@ export function checkUpdate(args: Record<string, unknown>, old: Summary, agentVe
       : picked !== undefined
         ? picked
         : typeof args.stage === 'string' && STAGE_KEYS.includes(args.stage as StageKey) && args.stage !== old?.stage
-          ? PHASES[args.stage as StageKey]
+          ? stagesOf(args.stage as StageKey)
           : (old?.phases ?? [])
     const same = (name: unknown, phase: unknown) =>
       typeof name === 'string' && typeof phase === 'number' && (stages[Math.round(phase)] ?? '').trim().toLowerCase() === name.trim().toLowerCase()
@@ -910,4 +857,109 @@ export function autoSummary(steps: Task[], at: number, project = AUTO_PROJECT): 
 // How many steps a task-list call started: steps that are now in progress and were not before.
 export function stepsStarted(before: Task[], after: Task[]): number {
   return after.filter(x => x.status === 'now' && before.find(y => y.name === x.name)?.status !== 'now').length
+}
+
+// One update from the agent applied to the stored state: pure, so the same old state and arguments give the same state.
+export function applyUpdate(old: Summary, args: Record<string, unknown>, at: number, personal: Record<string, string[]> = {}): NonNullable<Summary> {
+  const seen = old?.agentVersion ?? 0
+  const stage = STAGE_KEYS.find(k => k === args.stage) ?? old?.stage ?? 'build'
+  const custom = (Array.isArray(args.phases) ? args.phases : []).map(str).filter((x): x is string => x !== null).map(cap)
+  const picked = typeof args.template === 'string' ? (TEMPLATES[args.template] ?? personal[args.template]) : undefined
+  const phases =
+    custom.length >= 2 && custom.length <= 8
+      ? custom
+      : picked !== undefined
+        ? picked
+        : args.phases === undefined && old !== null && (args.stage === undefined || args.stage === old.stage)
+          ? old.phases
+          : stagesOf(stage)
+  const template = custom.length >= 2 ? null : typeof args.template === 'string' && picked !== undefined ? args.template : args.stage !== undefined && args.stage !== old?.stage ? templateOf(stage) : (old?.template ?? null)
+  const active = (Array.isArray(args.active) ? args.active : old?.active ?? [])
+    .map(num)
+    .filter((k): k is number => k !== undefined && k >= 0 && k < phases.length)
+    .map(k => Math.round(k))
+  const phase = Math.max(0, Math.min(phases.length, Math.round(num(args.phase) ?? old?.phase ?? 0)))
+  const counts =
+    args.counts === undefined
+      ? (old?.counts ?? [])
+      : (Array.isArray(args.counts) ? args.counts : []).map(asCount).filter((c): c is Count => c !== undefined)
+  const movedPair = counts
+    .map(c => ({ c, was: old?.counts.find(x => x.label === c.label) }))
+    .find(({ c, was }) => was !== undefined && figureOf(was) !== figureOf(c))
+  // Agent items only: the task list's steps are the pane's own items, kept in tasks, so no agent write deletes them.
+  const patched = new Set((Array.isArray(args.patch) ? (args.patch as unknown[]) : []).map(p => str((p as { id?: unknown } | null)?.id) ?? idOf(str((p as { name?: unknown } | null)?.name) ?? '')))
+  const items = linkRefs(
+    Array.isArray(args.patch)
+      ? applyPatch(old?.items ?? [], args.patch)
+      : args.items === undefined
+        ? (old?.items ?? [])
+        : (Array.isArray(args.items) ? args.items : []).map(asItem).filter((x): x is Item => x !== undefined)
+  )
+    // An item in progress keeps the time it went in progress, for its runtime timer; a full list and a patch alike.
+    .map(x => {
+      const was = old?.items.find(y => (y.id ?? idOf(y.name)) === (x.id ?? idOf(x.name)))
+      // A done item keeps the time it was first seen done; an item sent already done gets the time of this update.
+      const doneAt = x.status === 'done' ? (was?.status === 'done' ? (was.doneAt ?? at) : at) : null
+      // When the agent last named the item: a whole list names every item it holds, a patch only the items it adds or
+      // changes. A merged pull request closes an item only when the agent has not named it since the merge.
+      const named = Array.isArray(args.items) || patched.has(x.id ?? idOf(x.name))
+      const touchedAt = named ? at : (was?.touchedAt ?? null)
+      return { ...x, since: x.status === 'now' ? (was?.status === 'now' ? (was.since ?? at) : at) : null, doneAt, touchedAt }
+    })
+  // An update that leaves waitingOn out keeps the wait; null clears it.
+  const waitingRaw = args.waitingOn === undefined ? (old?.waitingOn ?? null) : str(args.waitingOn)
+  // Stage times: a stage starts when the phase first reaches it and ends when the phase passes it. Stages passed
+  // before the pane first saw the work have no times.
+  const starts = phases.map((_, k) => old?.starts?.[k] ?? null)
+  const ends = phases.map((_, k) => old?.ends?.[k] ?? null)
+  if (old === null || old.phases.join('|') !== phases.join('|')) {
+    starts.fill(null)
+    ends.fill(null)
+  }
+  for (let k = 0; k < phases.length; k++) {
+    if ((k === phase || active.includes(k)) && starts[k] === null) starts[k] = at
+    if (k < phase && ends[k] === null && starts[k] !== null) ends[k] = at
+    if (k >= phase || active.includes(k)) ends[k] = null
+    if (k > phase && !active.includes(k)) starts[k] = null
+  }
+  const ticketRaw = args.ticket as Record<string, unknown> | null | undefined
+  const ticket: Ticket | null =
+    ticketRaw === undefined
+      ? (old?.ticket ?? null)
+      : ticketRaw === null || str(ticketRaw.ref) === null
+        ? null
+        : { ref: str(ticketRaw.ref) ?? '', title: str(ticketRaw.title), url: str(ticketRaw.url) }
+  return {
+    active,
+    template,
+    ticket,
+    links:
+      args.links === undefined
+        ? (old?.links ?? [])
+        : (Array.isArray(args.links) ? args.links : []).map(asLink).filter((x): x is CardLink => x !== undefined),
+    starts,
+    ends,
+    project: str(args.project) ?? old?.project ?? 'Project',
+    repo: args.repo === undefined ? (old?.repo ?? null) : str(args.repo),
+    runbooks: Array.isArray(args.runbooks) ? mergeRunbooks(old?.runbooks ?? [], args.runbooks) : (old?.runbooks ?? []),
+    goalLine: args.goalLine === undefined ? (old?.goalLine ?? null) : str(args.goalLine),
+    stage,
+    phases,
+    phase,
+    symptom: args.symptom === undefined ? (old?.symptom ?? null) : str(args.symptom),
+    hypotheses:
+      args.hypotheses === undefined
+        ? (old?.hypotheses ?? [])
+        : (Array.isArray(args.hypotheses) ? args.hypotheses : []).map(asHypothesis).filter((x): x is Hypothesis => x !== undefined),
+    waitingOn: waitingRaw,
+    waitingSince: waitingRaw !== null && waitingRaw === old?.waitingOn ? old.waitingSince : at,
+    counts,
+    items,
+    change: movedPair !== undefined && movedPair.was !== undefined ? { label: movedPair.c.label, from: figureOf(movedPair.was), at } : (old?.change ?? null),
+    at,
+    version: (old?.version ?? 0) + 1,
+    waitingForAgent: false,
+    mayBeOutOfDate: false,
+    agentVersion: Math.max(seen, num(args.version) ?? 0),
+  } as NonNullable<Summary>
 }

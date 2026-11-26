@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { CONFIRM_MS, QUIET_MS, resetMarker } from '../hooks/marker'
+import { CONFIRM_MS, QUIET_MS, RECORD_LINES, resetMarker } from '../hooks/marker'
 import { branchesIn, prRefsInTranscript } from '../hooks/model'
-import { ciNamed, ciOf, GIT_MS, prRecordOf, summaryOf } from '../hooks/readers'
+import { ciNamed, ciOf, prRecordOf, summaryOf } from '../hooks/readers'
 import { unionRefs } from '../hooks/register'
 
 // Each block below was one test file. The blocks keep their own helpers and state; one file runs in one child.
@@ -108,17 +108,8 @@ const send = async ($: any, clock: { settle: () => Promise<void> }, args: Record
 }
 
 
-// The poll tick: the plugin polls every 5 s; git and GitHub keep their own, longer turns.
+// The poll tick: the plugin polls every 5 s; GitHub keeps its own, longer turn.
 const TICK = 5_000
-
-test('poll timing: git every 15 s while the pane is open', async ($, on) => {
-  const { clock, calls } = await boot($, on, { gh: 'ok', prs: [OPEN_PR] })
-  const git0 = calls.gitStatus
-  for (let k = 0; k < 12; k++) await clock.advance(TICK)
-  // 12 polls 5 s apart, 60 s in all: a git read every 15 s, 4 more.
-  expect(git0).toBe(1)
-  expect(calls.gitStatus).toBe(5)
-})
 
 test('state: stale after 15 minutes with no update shows the age in amber', { timeoutMs: 20_000 }, async ($, on) => {
   const { clock } = await boot($, on, { git: 'norepo' })
@@ -222,9 +213,12 @@ type World = {
   branch?: string
   // A pane that is not placed: the pane is closed.
   closed?: boolean
+  headless?: boolean
   // What the Bash tool answers.
   bash?: (command: string) => string
   limited?: boolean
+  // Every gh call fails as an expired login does.
+  authFail?: boolean
 }
 
 const pr = (ref: string, o: Record<string, unknown> = {}) => {
@@ -254,6 +248,7 @@ async function boot($: any, on: any, w: World, extra: (on: any) => void = () => 
     if (a[0] === 'gh') {
       gh.push(a)
       if (w.limited) return ok('', 1, 'API rate limit exceeded for user')
+      if (w.authFail) return ok('', 1, 'HTTP 401: Bad credentials')
       if (a[2] === 'list') return ok(JSON.stringify(w.mine ?? []))
       if (a[2] === 'view') {
         const ref = `${a[a.indexOf('-R') + 1]}#${a[3]}`
@@ -268,6 +263,10 @@ async function boot($: any, on: any, w: World, extra: (on: any) => void = () => 
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.panes', () => ({ value: w.closed ? [] : [{ id: 'progress', title: 'Progress', isShown: true, isFocused: false, isPlaced: true }] }))
   on('tool.call', { tool: 'Bash' }, (_: unknown, e: { command?: string }) => ({ result: w.bash?.(String(e.command ?? '')) ?? '' }))
+  if (w.headless)
+    on('state.get', async (_: unknown, e: { plugin: string; key: string }, next: (e: unknown) => unknown) =>
+      e.plugin === 'mission-status' && e.key === 'headless' ? { value: { value: true, version: 1 } } : next(e),
+    )
   extra(on)
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
@@ -314,6 +313,14 @@ test('one record: one read feeds the item chip, the PRs tab and the Deploy count
   await deploy.unmount()
 })
 
+test('headless: a headless session makes no gh call at all', async ($, on) => {
+  const w: World = { prs: { 'acme/app#9': pr('acme/app#9') }, headless: true, bash: () => 'https://github.com/acme/app/pull/9\n' }
+  const { clock, gh } = await boot($, on, w)
+  await bash($, 'gh pr create --fill')
+  await run(clock, 3 * 60_000)
+  expect(gh).toEqual([])
+})
+
 test('a merged pull request is not read again; an open one is read once a minute', async ($, on) => {
   const w: World = {
     prs: { 'acme/app#1': pr('acme/app#1', { state: 'MERGED', mergedAt: '2026-11-25T02:00:00Z' }), 'acme/app#2': pr('acme/app#2') },
@@ -353,6 +360,36 @@ test('a rate-limited reply stops the reads for a while and keeps the last record
   await run(clock, 55_000)
   expect(gh.length).toBe(atLimit)
   expect(await tabPrs($, clock)).toContain('PR 9')
+})
+
+// The tab stays on PRs once pressed: later mounts read it as drawn.
+const shown = async ($: any, clock: any) => {
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  await clock.settle()
+  const out = await texts(ui)
+  await ui.unmount()
+  return out
+}
+
+test('a failed GitHub read says so in the PRs tab, and the last record stays', async ($, on) => {
+  const w: World = { prs: { 'acme/app#9': pr('acme/app#9') }, bash: () => 'https://github.com/acme/app/pull/9\n' }
+  const { clock } = await boot($, on, w)
+  await send($)
+  await bash($, 'gh pr create --fill')
+  await run(clock, 10_000)
+  const fresh = await tabPrs($, clock)
+  expect(fresh).toContain('PR 9')
+  expect(fresh.some(t => t.startsWith('GitHub not read'))).toBe(false)
+  w.authFail = true
+  await run(clock, 70_000)
+  const stale = await shown($, clock)
+  expect(stale).toContain('PR 9')
+  // Since the last good read, on the pane's own clock: 70 s of failed reads.
+  expect(stale.some(t => /^GitHub not read since 1m ago/.test(t))).toBe(true)
+  // A good read clears it.
+  w.authFail = false
+  await run(clock, 70_000)
+  expect((await shown($, clock)).some(t => t.startsWith('GitHub not read'))).toBe(false)
 })
 
 test('a Marga job that opens a pull request in another repository is caught, live and in the transcript', async ($, on) => {
@@ -448,6 +485,78 @@ test('a pull request card reads repository and number, then its icon and title, 
   // A period inside a version or a file name never ends a sentence.
   expect(summaryOf('The pane ships 0.12.0 today (see machine.ts). It runs live.')).toBe('The pane ships 0.12.0 today (see machine.ts). It runs live.')
 })
+
+test('a tool call that makes no pull request is not turned into text', async ($, on) => {
+  let texts = 0
+  const big = { toJSON: () => ((texts += 1), 'x') }
+  const w: World = { prs: {} }
+  await boot($, on, w, o => o('tool.call', { tool: 'Read' }, () => ({ result: big })))
+  await $.tool.call({ tool: 'Read', file_path: 'a.ts' } as never)
+  await bash($, 'ls')
+  expect(texts).toBe(0)
+})
+
+test('an idle session reads no GitHub until its next turn', { timeoutMs: 30_000 }, async ($, on) => {
+  const w: World = { prs: { 'acme/app#9': pr('acme/app#9') }, bash: () => 'https://github.com/acme/app/pull/9\n' }
+  const turns = (o: any) => {
+    o('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+    o('turn.complete', () => ({ text: '' }))
+  }
+  const { clock, gh, views } = await boot($, on, w, turns)
+  await send($)
+  await bash($, 'gh pr create --fill')
+  await $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 't0' } as never)
+  await run(clock, 11 * 60_000)
+  // More than 10 minutes with no turn and no CI running: no gh call at all.
+  const quiet = gh.length
+  await run(clock, 3 * 60_000)
+  expect(gh.length).toBe(quiet)
+  // The next turn reads again.
+  const before = views('acme/app#9')
+  await $.turn.start({ text: 'go', turnId: 't1' } as never)
+  await run(clock, 10_000)
+  expect(views('acme/app#9')).toBe(before + 1)
+})
+
+// The plugin's live record as each write stores it.
+const liveOf = (o: any, into: { live?: any }) =>
+  o('state.set', (_: unknown, e: { plugin: string; key: string; value: unknown }, next: any) => {
+    const v = e.value as any
+    if (e.plugin === 'mission-status' && e.key === 'live') into.live = v !== null && typeof v === 'object' && 'shape' in v && 'value' in v ? v.value : v
+    return next(e)
+  })
+
+test('the summary is made from the description, and the stored record keeps no copy of it', async ($, on) => {
+  const body = 'This change adds a tab. It lists every pull request.\n\nMore detail follows here.'
+  const w: World = { prs: { 'acme/app#9': pr('acme/app#9', { body }) }, bash: () => 'https://github.com/acme/app/pull/9\n' }
+  const asks: string[] = []
+  const into: { live?: any } = {}
+  const { clock } = await boot($, on, w, o => {
+    liveOf(o, into)
+    o('env.get', () => ({ value: undefined }))
+    o('model.complete', (_: unknown, e: { prompt: string }) => (asks.push(e.prompt), { value: { isAnswered: true, text: 'Adds a tab. Lists the pull requests.', usage: {} } }))
+  })
+  await send($)
+  await bash($, 'gh pr create --fill')
+  await run(clock, 10_000)
+  expect(asks.some(a => a.includes('More detail follows here.'))).toBe(true)
+  const rec = into.live?.prRecords?.['acme/app#9']
+  expect(rec?.summary).toBe('Adds a tab. Lists the pull requests.')
+  expect(JSON.stringify(rec)).not.toContain('More detail follows here.')
+})
+
+test('the live record keeps each pull request once, in its record', async ($, on) => {
+  const w: World = { prs: { 'acme/app#9': pr('acme/app#9') }, bash: () => 'https://github.com/acme/app/pull/9\n' }
+  const into: { live?: any } = {}
+  const { clock } = await boot($, on, w, o => liveOf(o, into))
+  await send($)
+  await bash($, 'gh pr create --fill')
+  await run(clock, 10_000)
+  expect(Object.keys(into.live?.prRecords ?? {})).toEqual(['acme/app#9'])
+  expect(into.live?.prs).toBeUndefined()
+  expect(into.live?.sessionPrs).toBeUndefined()
+  expect(await tabPrs($, clock)).toContain('PR 9')
+})
 }
 
 // ---- was data.test.tsx
@@ -476,19 +585,18 @@ type World = {
 
 // A fake host: git and gh answer from the world; what the plugin asked is recorded.
 function host(on: any, w: World) {
-  const calls = { gitStatus: 0, gh: 0, mergeBase: [] as string[], top: 0, inFlight: 0, maxInFlight: 0 }
-  on('agent.list', () => ({ value: [] }))
+  const calls = { gitStatus: 0, gh: 0, mergeBase: [] as string[], lists: 0, inFlight: 0, maxInFlight: 0 }
+  on('agent.list', async () => {
+    calls.lists++
+    calls.inFlight++
+    calls.maxInFlight = Math.max(calls.maxInFlight, calls.inFlight)
+    await new Promise(r => setTimeout(r, w.delay ?? 0))
+    calls.inFlight--
+    return { value: [] }
+  })
   on('process.run', async (_: unknown, e: { argv?: string[] }) => {
     const a = e.argv ?? []
     const ok = (stdout: string, exitCode = 0) => ({ value: { exitCode, stdout, stderr: exitCode === 0 ? '' : 'HTTP 502', isStdoutTruncated: false, isStderrTruncated: false } })
-    if (a[0] === 'git' && a[2] === '--show-toplevel') {
-      calls.top++
-      calls.inFlight++
-      calls.maxInFlight = Math.max(calls.maxInFlight, calls.inFlight)
-      await new Promise(r => setTimeout(r, w.delay ?? 0))
-      calls.inFlight--
-      return ok('/repo\n')
-    }
     if (a[0] === 'git') {
       if (a[1] === 'branch') return ok(`${w.branch ?? 'feature/x'}\n`)
       if (a[1] === 'symbolic-ref') return ok('', 1)
@@ -591,16 +699,16 @@ test('F9: a failed gh read keeps the pull request the PRs tab already shows', { 
 })
 
 test('F11: polls do not overlap; the card never goes back to an older read', async ($, on) => {
-  const { clock, calls, stored } = await boot($, on, { gh: 'ok', prs: [OPEN_PR], delay: 20 })
+  const { clock, calls } = await boot($, on, { gh: 'ok', prs: [OPEN_PR], delay: 20 })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await clock.settle()
-  const before = stored.live?.reads ?? 0
+  const before = calls.lists
   // Three agent updates at once: each asks for a forced poll while one runs.
   await Promise.all([send($), send($), send($)])
   await clock.settle()
   await new Promise(r => setTimeout(r, 200))
   expect(calls.maxInFlight).toBe(1)
-  expect(stored.live.reads).toBeGreaterThan(before)
+  expect(calls.lists).toBeGreaterThan(before)
   await ui.unmount()
 })
 
@@ -675,18 +783,6 @@ test('F27: a second session.start cancels the clocks of the first', async ($, on
   expect(t.reads).toBe(1)
 })
 
-test('F30: a default branch that was not verified is looked for again', async ($, on) => {
-  const w: World = { mainRefs: false }
-  const { clock, calls } = await boot($, on, w)
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await clock.settle()
-  expect(calls.mergeBase.at(-1)).toBe('main')
-  w.mainRefs = true
-  await run(clock, GIT_MS + 5_000)
-  expect(calls.mergeBase.at(-1)).toBe('origin/main')
-  await ui.unmount()
-})
-
 test('F30: the CI of a pull request no item names is dropped', () => {
   const ci = { 'a/b#1': { state: 'passing' as const, start: null, end: null }, 'a/b#2': { state: 'running' as const, start: null, end: null } }
   expect(Object.keys(ciNamed(ci, ['a/b#2']))).toEqual(['a/b#2'])
@@ -698,20 +794,6 @@ test('F30: the pull request list keeps the newest 30, the earlier first', () => 
   expect(out.length).toBe(30)
   expect(out.slice(-3)).toEqual(['a/b#30', 'a/b#31', 'a/b#32'])
   expect(out[0]).toBe('a/b#3')
-})
-
-test('cut: with the pane closed git is not read; open, git is read every 15 s', { timeoutMs: 20_000 }, async ($, on) => {
-  const { clock, calls } = await boot($, on, { gh: 'ok', prs: [] })
-  await run(clock, 60_000)
-  expect(calls.gitStatus).toBe(0)
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  await clock.settle()
-  const first = calls.gitStatus
-  expect(first).toBe(1)
-  await run(clock, 60_000)
-  expect(calls.gitStatus - first).toBe(4)
-  expect(GIT_MS).toBe(15_000)
-  await ui.unmount()
 })
 
 test('cut: the 1 s clock writes only while a stage, item or helper is in progress', async ($, on) => {
@@ -735,6 +817,37 @@ test('cut: the 1 s clock writes only while a stage, item or helper is in progres
   await clock.advance(3_000)
   expect((writes.now ?? 0) - idle).toBeLessThanOrEqual(0)
 })
+
+// Background work the turn started (a shell job, a subagent) keeps the work live after the turn ends.
+test('background work still in flight at a turn end keeps the pane live; none leaves it idle', async ($, on) => {
+  const { clock } = await boot($, on, {})
+  await send($, { items: [{ id: 'fix', phase: 1, name: 'Fix it', status: 'now' }] })
+  const live = async () => {
+    const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+    await clock.settle()
+    const out = (await ui.findAll({ type: 'Text' })).some((x: any) => String(x.text ?? '') === 'Live')
+    await ui.unmount()
+    return out
+  }
+  const endTurn = async (id: string, tasks: unknown[]) => {
+    await $.turn.start({ turnId: id } as never)
+    await $.classic.Stop({ stop_hook_active: false, background_tasks: tasks } as never)
+    await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: id, reason: 'answer' } as never)
+  }
+  await endTurn('t1', [{ id: 'b1', type: 'shell', status: 'running', description: 'Run four helpers' }])
+  expect(await live()).toBe(true)
+  await endTurn('t2', [])
+  expect(await live()).toBe(false)
+})
+
+test('cut: the 5 s tick writes live only when the helpers change', async ($, on) => {
+  // GitHub fails the same way each pass, so the PR reads write nothing new either.
+  const { clock } = await boot($, on, { gh: 'fail' })
+  await run(clock, 20_000)
+  const before = writes.live ?? 0
+  await run(clock, 60_000)
+  expect(writes.live ?? 0).toBe(before)
+})
 }
 
 // ---- was marker.test.tsx
@@ -747,8 +860,11 @@ const SECRET = 'SECRET-FILE-TEXT-42'
 
 type World = {
   env?: Record<string, string>
+  headless?: boolean
   // The model's replies, one per call; 'timeout' answers aborted.
   replies: string[]
+  // Holds the first model reply until the test resolves it (a check still running).
+  gate?: Promise<void>
 }
 
 let useId = 0
@@ -772,6 +888,10 @@ async function boot($: any, on: any, w: World) {
     if (e.plugin === 'mission-status') stored[e.key] = v !== null && typeof v === 'object' && 'shape' in v && 'value' in v ? v.value : v
     return next(e)
   })
+  if (w.headless === true)
+    on('state.get', async (_: unknown, e: { plugin: string; key: string }, next: (e: unknown) => unknown) =>
+      e.plugin === 'mission-status' && e.key === 'headless' ? { value: { value: true, version: 1 } } : next(e),
+    )
   on('tool.register', () => ({ value: {} }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
@@ -788,8 +908,13 @@ async function boot($: any, on: any, w: World) {
   on('fs.exists', (_: unknown, e: { path: string }) => ({ value: files.has(e.path) }))
   on('fs.read', (_: unknown, e: { path: string }) => ({ value: files.get(e.path) ?? '' }))
   on('fs.write', (_: unknown, e: { path: string; text: string }) => (files.set(e.path, e.text), { value: undefined }))
-  on('model.complete', (_: unknown, e: any) => {
+  on('model.complete', async (_: unknown, e: any) => {
     asks.push(e)
+    if (w.gate !== undefined) {
+      const g = w.gate
+      w.gate = undefined
+      await g
+    }
     const r = w.replies.shift() ?? 'timeout'
     return { value: r === 'timeout' ? { isAnswered: false, reason: 'aborted', usage: { ...USAGE, input_tokens: 0, output_tokens: 0 } } : { isAnswered: true, text: r, usage: USAGE } }
   })
@@ -813,10 +938,10 @@ async function boot($: any, on: any, w: World) {
     await $.tool.call({ tool: 'Bash', command: 'true' } as never)
     await clock.advance(QUIET_MS)
   }
-  return { clock, rows, asks, files, stored, check, marks: () => stored.marks as { marks: Record<string, { status: string }>; places: unknown[]; fails: number } | undefined }
+  return { clock, rows, asks, files, stored, check, marks: () => stored.marks as { marks: Record<string, { status: string }>; fails: number } | undefined }
 }
 
-const DONE = JSON.stringify({ marks: [{ id: 'tests', status: 'done' }], places: [] })
+const DONE = JSON.stringify({ marks: [{ id: 'tests', status: 'done' }] })
 
 test('two agreeing answers keep a mark; one answer does not', async ($, on) => {
   const w = await boot($, on, { replies: [DONE, DONE] })
@@ -865,6 +990,12 @@ test('no call with the traffic variable set', async ($, on) => {
   expect(w.asks.length).toBe(0)
 })
 
+test('no marker call in a headless session', async ($, on) => {
+  const w = await boot($, on, { headless: true, replies: [DONE] })
+  await w.check()
+  expect(w.asks.length).toBe(0)
+})
+
 test('no call without new tool calls; a first answer is confirmed 5 s later on the same lines, then nothing more', async ($, on) => {
   const w = await boot($, on, { replies: [DONE, DONE] })
   await w.clock.advance(60_000)
@@ -903,7 +1034,7 @@ test('an agent update clears the marks for the items it sends', async ($, on) =>
 test('the record line has usage and no tool lines', async ($, on) => {
   const w = await boot($, on, { replies: [DONE] })
   await w.check(row('Bash', { description: 'Run the unit suite' }, 'all good\n'))
-  const text = w.files.get('/home/u/.claude/mission-status/marker/s1.jsonl') ?? ''
+  const text = w.files.get('/home/u/.claude/mission-status/marker.jsonl') ?? ''
   const lines = text.trim().split('\n')
   expect(lines.length).toBe(1)
   const line = JSON.parse(lines[0] ?? '{}')
@@ -921,5 +1052,46 @@ test('a Read or Edit result text never reaches the prompt', async ($, on) => {
   expect(prompt).toContain('Read: a.ts -> ok')
   expect(prompt).toContain('Edit: b.ts -> ok')
   expect(prompt).not.toContain(SECRET)
+})
+
+test('a turn end during a running check is not dropped: it checks once the running one ends', async ($, on) => {
+  const NONE = JSON.stringify({ marks: [] })
+  let release = () => {}
+  const w = await boot($, on, { replies: [NONE, NONE], gate: new Promise<void>(r => (release = r)) })
+  w.rows.push(row('Bash', { description: 'Build' }, 'ok\n'))
+  await $.tool.call({ tool: 'Bash', command: 'true' } as never)
+  await w.clock.advance(QUIET_MS)
+  expect(w.asks.length).toBe(1)
+  // The turn's last tool call and its end arrive while the first check still waits on the model.
+  w.rows.push(row('Bash', { description: 'Run the tests' }, '12 passed\n'))
+  await $.tool.call({ tool: 'Bash', command: 'true' } as never)
+  await $.turn.complete({ reason: 'answer', answer: '', durationMs: 1, isAborted: false, turnId: 't1' } as never)
+  await w.clock.advance(0)
+  expect(w.asks.length).toBe(1)
+  release()
+  await w.clock.settle()
+  await w.clock.advance(0)
+  expect(w.asks.length).toBe(2)
+})
+
+test('an item the machine shows done, or a task-list step, is not sent to haiku', async ($, on) => {
+  const w = await boot($, on, { replies: [DONE] })
+  // The step binds to Write tests by name and closes it; Lint has no item and stays a step.
+  await $.tool.call({ tool: 'mcp__ccd_turn__update_plan', items: [{ content: 'Write tests', status: 'completed' }, { content: 'Lint', status: 'in_progress' }] } as never)
+  await w.check()
+  const prompt = JSON.parse(String(w.asks[0]?.prompt))
+  expect(prompt.openItems.map((x: { id: string }) => x.id)).toEqual(['docs'])
+  expect(String(w.asks[0]?.system)).not.toContain('places')
+})
+
+test('the record file keeps the newest lines only', async ($, on) => {
+  const w = await boot($, on, { replies: [DONE] })
+  const path = '/home/u/.claude/mission-status/marker.jsonl'
+  w.files.set(path, `${Array.from({ length: RECORD_LINES }, (_, i) => JSON.stringify({ old: i })).join('\n')}\n`)
+  await w.check()
+  const lines = (w.files.get(path) ?? '').trim().split('\n')
+  expect(lines.length).toBe(RECORD_LINES)
+  expect(JSON.parse(lines[0] ?? '{}').old).toBe(1)
+  expect(JSON.parse(lines.at(-1) ?? '{}').session).toBe('s1')
 })
 }

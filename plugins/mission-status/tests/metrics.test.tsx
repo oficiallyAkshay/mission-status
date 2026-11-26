@@ -217,6 +217,21 @@ test('session_real_work: sent at the 5th tool call, not before', async ($, on) =
   expect(named(w, 'session_real_work').length).toBe(1)
 })
 
+test('metricsSession: past real work a tool call writes nothing, unless the pane showed since the last write', async ($, on) => {
+  const w = await start($, on, { store: consented })
+  const writes = () => w.state.filter(x => x.key === 'metricsSession')
+  await work($, 5)
+  const at = writes().length
+  await work($, 3)
+  expect(writes().length).toBe(at)
+  expect((writes().at(-1)?.value as { calls: number }).calls).toBe(5)
+  await tool($, 'mcp__mission-status__update', { project: 'P', stage: 'build', phase: 0 })
+  const ui = await $.ui.mount({ plugin: 'mission-status', component: 'Pane', requestId: 'progress', surface: 'desktop', props: { title: 'Progress', isFocused: false, bodyColumns: 50, placement: 'dock', scroll: { offset: 0, bodyRows: 40 }, view: {} } })
+  await ui.unmount()
+  await work($, 1)
+  expect((writes().at(-1)?.value as { paneSent?: boolean }).paneSent).toBe(true)
+})
+
 test('progress_ask: prompts are sorted on the device, held until real work, then sent as yes or no', async ($, on) => {
   const w = await start($, on, { store: consented })
   await prompt($, 'Fix the login bug in /Users/someone/app/login.ts')
@@ -400,6 +415,20 @@ test('batching: at most one request a minute, all events of the minute in it', a
   expect(w.bodies.length).toBe(1)
   await minute(w)
   expect(w.bodies.length).toBe(2)
+})
+
+test('batching: a second session start leaves one flush timer, not two', async ($, on) => {
+  let ticks = 0
+  on('clock.every', { ms: FLUSH_MS }, (_: unknown, e: unknown, next: any) => {
+    ticks += 1
+    return next(e)
+  })
+  const w = await start($, on, { store: consented })
+  await $.session.start({ cwd: '/Users/someone/private-repo', surface: 'desktop', isInteractive: true })
+  await w.clock.settle()
+  ticks = 0
+  await w.clock.advance(3 * FLUSH_MS)
+  expect(ticks <= 4).toBe(true)
 })
 
 test('batching: a failed send is dropped, never sent again, and never holds up a tool call', async ($, on) => {

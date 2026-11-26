@@ -1,22 +1,21 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Git, Helper, ItemCi, Live, Pr, PrRecord, Summary } from '../types'
+import type { Helper, ItemCi, Live, PrRecord, Summary } from '../types'
 import { nowOf } from './store'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const live = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
 
-// Git is read every 15 s while the pane is open. Each pull request is read at most once a minute, whether the pane
-// shows or not; a merged or closed one is not read again. A rate-limited reply stops every GitHub read for a while:
+// Each pull request is read at most once a minute, whether the pane shows or not; a merged or closed one is not read
+// again. A rate-limited reply stops every GitHub read for a while:
 // 60 s after one, 120 s after two, and so on, up to 10 minutes.
-export const GIT_MS = 15_000
 export const PR_MS = 60_000
 export const GH_MAX_MS = 10 * 60_000
-// The pane counts as open when it was drawn within this long; git is read only then.
+// The pane counts as open when it was drawn within this long.
 export const PANE_OPEN_MS = 30_000
 
-// The Merge card's own facts, kept on the live state beside the fields the types name.
-export type MergeLive = Live
+// A session with no open turn and nothing seen for this long, and no CI running, is idle: its tick reads no GitHub. The next turn's tick reads again.
+export const IDLE_MS = 10 * 60_000
 
 // The backoff keeps its own 30 s base: one rate-limited reply waits 60 s, then 120 s, never more than 10 minutes.
 const BACKOFF_BASE_MS = 30_000
@@ -35,12 +34,26 @@ const SAFE_GIT: Record<string, string> = {
   GIT_CONFIG_VALUE_2: '/dev/null',
 }
 
-// The folder the Merge card reads: the repository the agent named for the work, else the session's own folder.
+// The folder the PR reads run in: the repository the agent named for the work, else the session's own folder.
 let repoDir: string | null = null
 const prRefsAtom = atom({ plugin: 'mission-status', key: 'prRefs' } as const, [] as string[])
 // The branches this session's own tool inputs name (git push, git checkout -b and the like); register.tsx keeps them.
 const prBranchesAtom = atom({ plugin: 'mission-status', key: 'prBranches' } as const, [] as string[])
 const summaryAtom = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
+// A headless run (claude -p, an SDK host, a helper job): no person sees a pane (metrics.tsx writes it at session start).
+const headless = atom({ plugin: 'mission-status', key: 'headless' } as const, false as boolean)
+const turnOpenAtom = atom({ plugin: 'mission-status', key: 'turnOpen' } as const, false as boolean)
+const seenAtAtom = atom({ plugin: 'mission-status', key: 'seenAt' } as const, 0)
+
+// Idle: no turn is open, something was seen but not within IDLE_MS, and no pull request's CI runs. A session that has
+// seen nothing yet is new, not idle.
+async function idleAt($: EngineInterface, t: number): Promise<boolean> {
+  if ((await read($, turnOpenAtom).catch(() => true)) !== false) return false
+  const seen = (await read($, seenAtAtom).catch(() => 0)) ?? 0
+  if (seen === 0 || t - seen <= IDLE_MS) return false
+  const recs = (await read($, live).catch(() => null))?.prRecords ?? {}
+  return !Object.values(recs).some(r => r.ci === 'running' && !prFinal(r))
+}
 
 // One command; null when it exits with an error, 'missing' when it cannot start.
 async function runText($: EngineInterface, argv: string[], timeoutMs = 10_000): Promise<string | null | 'missing'> {
@@ -64,20 +77,15 @@ async function runGh($: EngineInterface, argv: string[]): Promise<{ out: string 
   }
 }
 
-// The repository's top folder, or null when git is missing or the folder is not a git repository.
-export async function repoTop($: EngineInterface): Promise<string | null> {
-  const top = await runText($, ['git', 'rev-parse', '--show-toplevel'])
-  return top === null || top === 'missing' || top === '' ? null : top
-}
-
 // The folder the agent named for the work, from the stored summary.
 async function syncRepo($: EngineInterface): Promise<Summary> {
   const sum = await read($, summaryAtom).catch(() => null)
   const named = (sum as { repo?: string | null } | null)?.repo ?? null
+  // A new folder has its own pull requests: its list is read at once.
   if (named !== repoDir) {
     repoDir = named
-    defaultBranch = null
     slugRead = false
+    listAt = 0
   }
   return sum
 }
@@ -106,8 +114,7 @@ export function prRecordOf(ref: string, o: Record<string, unknown>, at: number):
     mergedAt: Number.isFinite(merged) ? merged : null,
     at,
     summary: summaryOf(typeof o.body === 'string' ? o.body : ''),
-    // The description the generated summary is made from, cut short, and its key: a new key means a new summary.
-    bodyText: (typeof o.body === 'string' ? o.body : '').slice(0, 4000),
+    // The key of the title and description the generated summary is made from: a new key means a new summary.
     summaryKey: keyOf(`${String(o.title ?? '')}\n${typeof o.body === 'string' ? o.body : ''}`),
     v: REC_V,
     // The newest 10 commits, newest first, and each check by name with its state, for the card's tabs.
@@ -148,15 +155,6 @@ export function summaryOf(body: string): string {
 }
 // What the item chip shows of a record.
 export const itemCiOf = (r: PrRecord): ItemCi => ({ state: r.ci, start: r.ciStart ?? null, end: r.ciEnd ?? null, mergedAt: r.mergedAt, pr: r.state, url: r.url === '' ? null : r.url })
-// What the Deploy count reads of a record.
-export const prOf = (r: PrRecord): Pr => ({
-  number: r.number,
-  state: r.state === 'merged' ? 'MERGED' : r.state === 'closed' ? 'CLOSED' : 'OPEN',
-  url: r.url,
-  title: r.title,
-  isDraft: r.state === 'draft',
-  ci: r.ci,
-})
 // A merged or closed pull request does not change again: it is not read again.
 // The record's shape version: a record from an older version is read once more, even when merged or closed, so it gains
 // the fields added since (summary, commits, checks).
@@ -223,8 +221,8 @@ async function listMine($: EngineInterface): Promise<{ refs: string[]; fail?: 'l
   }
 }
 
-// One pass of the PR reads, apart from the git poll: every pull request due is read at once, in parallel.
-// A failed read keeps the last record.
+// One pass of the PR reads, apart from the helpers poll: every pull request due is read at once, in parallel.
+// No gh call at all in a headless session. A failed read keeps the last record.
 // force: a new pull request or an agent update came; the pass runs now, and still reads each one at most once a minute.
 export async function pollPrs($: EngineInterface, force = false): Promise<void> {
   if (prBusy) {
@@ -248,8 +246,9 @@ export async function pollPrs($: EngineInterface, force = false): Promise<void> 
 
 async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
   const t = await nowOf($)
-  if (!force && t < prNextAt) return
+  if (!force && (t < prNextAt || (await idleAt($, t)))) return
   prNextAt = t + PR_MS
+  if (await read($, headless).catch(() => true)) return
   const sum = await syncRepo($)
   const limited = t < holdUntil
   let made = await read($, prRefsAtom).catch(() => [] as string[])
@@ -280,7 +279,9 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
       const r = await runGh($, ['gh', 'pr', 'view', String(num), ...(repo ? ['-R', repo] : []), '--json', PR_FIELDS])
       if ('fail' in r) return { k, fail: r.fail }
       try {
-        return { k, rec: prRecordOf(k, JSON.parse(r.out) as Record<string, unknown>, t) }
+        const o = JSON.parse(r.out) as Record<string, unknown>
+        // The description, cut short, stays in this pass: only the summary made from it is stored.
+        return { k, rec: prRecordOf(k, o, t), body: (typeof o.body === 'string' ? o.body : '').slice(0, 4000) }
       } catch {
         return { k, fail: 'failed' as const }
       }
@@ -293,7 +294,12 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
     holdUntil = t + (fails.includes('limited') ? backoffMs(limits) : GH_MAX_MS)
   } else limits = 0
   const recs: Record<string, PrRecord> = { ...before }
-  for (const g of got) if ('rec' in g && g.rec !== undefined) recs[g.k] = g.rec
+  const bodies = new Map<string, string>()
+  for (const g of got)
+    if ('rec' in g && g.rec !== undefined) {
+      recs[g.k] = g.rec
+      bodies.set(g.k, g.body)
+    }
   // Each card's two-sentence summary, written by Haiku inside Claude Code from the title and the description: once per
   // pull request, and again only when either changes. Until then, and where traffic is off, the first two sentences.
   // In parallel, and each text tried once per load, so a failing call never repeats every minute.
@@ -306,10 +312,11 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
         recs[k] = { ...rec, summary: old.summary, summaryBy: 'model' }
         return
       }
+      const body = bodies.get(k)
       const tag = `${k}:${rec.summaryKey ?? ''}`
-      if (summaryTried.has(tag)) return
+      if (body === undefined || summaryTried.has(tag)) return
       summaryTried.add(tag)
-      const made = await summarize($, rec.title, rec.bodyText ?? '')
+      const made = await summarize($, rec.title, body)
       if (made !== null) recs[k] = { ...rec, summary: made, summaryBy: 'model' }
     }),
   )
@@ -317,24 +324,28 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
   // The next pass: when the list or a pull request not yet merged or closed is due, and not inside a backoff.
   prNextAt = Math.max(holdUntil, Math.min(listAt + PR_MS, ...keys.filter(k => !prFinal(kept[k])).map(k => (tried.get(k) ?? t) + PR_MS)))
   const ci = Object.fromEntries(itemRefs.filter(r => kept[keyOf(r)] !== undefined).map(r => [r, itemCiOf(kept[keyOf(r)] as PrRecord)]))
-  const mine = made.map(r => kept[r]).filter((x): x is PrRecord => x !== undefined)
-  // The PRs tab and the Deploy count: the same records of the session's pull requests.
-  const fields = { prRecords: kept, ci, sessionPrs: mine, prs: mine.map(prOf), prsUnread: t < holdUntil }
+  // The PRs tab and the Deploy count read the session's pull requests from these records, in the order of prRefs.
+  // Unread: any GitHub read of this pass failed (auth, permission, rate limit, no gh) or a backoff holds the reads.
+  // prsReadAt: the last pass that read GitHub with no failure, so the view can say since when it is not read.
+  const unread = t < holdUntil || fails.length > 0
+  const readOk = !unread && (due.length > 0 || listAt === t)
+  const fields = { prRecords: kept, ci, prsUnread: unread, prsReadAt: readOk ? t : (prev?.prsReadAt ?? null) }
   // Nothing new: no write, so the pane does not draw again for nothing.
   if ((Object.keys(fields) as (keyof typeof fields)[]).every(f => JSON.stringify(prev?.[f]) === JSON.stringify(fields[f]))) return
   try {
-    await update($, live, now => ({ ...(now ?? { helpers: [], at: t, reads: 0, git: null }), ...fields }) as Live)
+    await update($, live, now => ({ ...(now ?? { helpers: [] }), ...fields }) as Live)
   } catch {
     // The session or the reload ended while the read ran: the next tick writes again.
   }
 }
 
-// One summary from Haiku; null when traffic is off, or when the call fails (the card then keeps
+// One summary from Haiku; null when traffic is off, in a headless session, or when the call fails (the card then keeps
 // the description's first sentences). A short call: 30 s at most, a small reply.
 const summaryTried = new Set<string>()
 async function summarize($: EngineInterface, title: string, body: string): Promise<string | null> {
   try {
     if (await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')) return null
+    if (await read($, headless)) return null
     const r = await $.model.complete({
       model: 'haiku',
       system: 'You summarize a GitHub pull request for a progress pane. Answer with exactly two short plain sentences, present tense, no markdown, no lists, no file names unless essential: what the change does for the person who uses it, then the most important detail.',
@@ -350,10 +361,10 @@ async function summarize($: EngineInterface, title: string, body: string): Promi
   }
 }
 
-// The pane's last draw or opening: git is read only while the pane is open, that is seen within PANE_OPEN_MS.
+// The pane's last draw or opening.
 // A flag the Pane render and each ui.open set, the least machinery that needs no event for a closed pane.
 let paneAt = 0
-// The pane was drawn or opened. After a closed spell a draw starts a read, so the card has facts soon.
+// The pane was drawn or opened. After a closed spell a draw starts a read, so the helpers are fresh soon.
 export async function paneSeen($: EngineInterface, drawn = false): Promise<void> {
   const t = await nowOf($)
   const cold = t - paneAt > PANE_OPEN_MS
@@ -365,7 +376,7 @@ export async function paneSeen($: EngineInterface, drawn = false): Promise<void>
 let current: Promise<void> | null = null
 let pollAgain = false
 
-// One poll, every 5 s from register.tsx: the helpers, git while the pane shows, and a pass of the PR reads, which
+// One poll, every 5 s from register.tsx: the helpers, and a pass of the PR reads, which
 // runs apart from it.
 // force: an agent update just came. One poll runs at a time; a forced poll that arrives meanwhile makes one more run
 // after it. The answer settles when the runs are done.
@@ -391,15 +402,6 @@ export function poll($: EngineInterface, force = false): Promise<void> {
 }
 
 async function pollOnce($: EngineInterface): Promise<void> {
-  const t = await nowOf($)
-  // With the pane closed nothing shows git, so it is not read; the helpers still are. The app's own list of
-  // panes says whether it is open; where that list cannot be read, the last draw within PANE_OPEN_MS stands in.
-  const listed = await Promise.resolve()
-    .then(() => $.ui.panes())
-    .then(list => list.some(x => x.id === 'progress' && x.isPlaced))
-    .catch(() => null)
-  const shown = listed ?? t - paneAt <= PANE_OPEN_MS
-  await syncRepo($)
   let helpers: Helper[] = []
   try {
     helpers = (await $.agent.list()).map(a => ({
@@ -410,71 +412,13 @@ async function pollOnce($: EngineInterface): Promise<void> {
       startTime: a.startTime,
     }))
   } catch {}
-  const repo = shown ? await pollRepo($, t).catch(() => undefined) : undefined
+  // The same helpers as stored: no write, so an idle pane does not draw again every tick.
+  const prev = await read($, live).catch(() => null)
+  if (prev != null && JSON.stringify(prev.helpers) === JSON.stringify(helpers)) return
   try {
     // Built from the value in the store when the write runs, so the PR reads' fields are kept.
-    await update($, live, before => {
-      const base = before ?? ({ prs: [], prsUnread: false, at: t, reads: 0, git: null } as Omit<Live, 'helpers'>)
-      // The pane is closed, or the git read broke: the git facts stay as they were.
-      if (repo === undefined) return { ...base, helpers } as Live
-      return { ...base, helpers, at: t, reads: (before?.reads ?? 0) + 1, git: repo.git } as Live
-    })
+    await update($, live, before => ({ ...(before ?? { prsUnread: false }), helpers }) as Live)
   } catch {
     // The session or the reload ended while the read ran: the next tick writes again.
   }
-}
-
-// The repository's git facts, read again once GIT_MS has passed. With no repository (git missing, or not a git
-// folder) the card has nothing to show.
-let gitAt = 0
-let gitOf: { repo: string; git: Git } | null = null
-export async function pollRepo($: EngineInterface, t: number): Promise<{ repo: string | null; git: Git }> {
-  const repo = await repoTop($)
-  if (repo === null) return { repo: null, git: null }
-  if (gitOf === null || gitOf.repo !== repo || t - gitAt >= GIT_MS) {
-    gitOf = { repo, git: await readGit($).catch(() => (gitOf?.repo === repo ? gitOf.git : null)) }
-    gitAt = t
-  }
-  return gitOf
-}
-
-let defaultBranch: string | null = null
-
-// The branch against main: commits ahead, files and lines changed, and files not yet committed.
-export async function readGit($: EngineInterface): Promise<Git> {
-  const run = async (argv: string[]) => {
-    const r = await runText($, argv)
-    return r === 'missing' ? null : r
-  }
-  let branch = await run(['git', 'branch', '--show-current'])
-  if (branch === null) return null
-  // A detached head names its commit.
-  if (branch === '') {
-    const sha = await run(['git', 'rev-parse', '--short', 'HEAD'])
-    if (sha === null || sha === '') return null
-    branch = `detached at ${sha}`
-  }
-  // The default branch: the remote's HEAD, else main or master, on the remote first. Kept once it is verified: the
-  // answer does not change in a session.
-  // Only a verified answer is kept; with none, main is used for this read and the next read looks again.
-  let main = defaultBranch
-  if (main === null) {
-    const head = await run(['git', 'symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'])
-    let found: string | null = head !== null && head !== '' ? head : null
-    if (found === null)
-      for (const c of ['origin/main', 'origin/master', 'main', 'master'])
-        if (await run(['git', 'rev-parse', '--verify', '--quiet', c])) {
-          found = c
-          break
-        }
-    defaultBranch = found
-    main = found ?? 'main'
-  }
-  const base = await run(['git', 'merge-base', 'HEAD', main])
-  const ahead = base === null ? 0 : Number((await run(['git', 'rev-list', '--count', `${base}..HEAD`])) ?? 0)
-  const behind = Number((await run(['git', 'rev-list', '--count', `HEAD..${main}`])) ?? 0)
-  const stat = base === null ? '' : ((await run(['git', 'diff', '--shortstat', '--no-ext-diff', '--no-textconv', base])) ?? '')
-  const pick = (re: RegExp) => Number(stat.match(re)?.[1] ?? 0)
-  const dirty = ((await run(['git', 'status', '--porcelain'])) ?? '').split('\n').filter(Boolean).length
-  return { branch, ahead, behind, files: pick(/(\d+) files? changed/), added: pick(/(\d+) insertions?/), removed: pick(/(\d+) deletions?/), dirty }
 }

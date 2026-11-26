@@ -1,11 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, SessionMessage } from 'claude-code'
-import type { ItemStatus, Marks, Summary, Task } from '../types'
-import { UPDATE_TOOL, cap, idOf, normalize } from './model'
+import type { Item, ItemStatus, Marks, Summary } from '../types'
+import { UPDATE_TOOL, idOf } from './model'
+import { deriveNow } from './store'
 
 // The marker: between agent updates, Haiku (through the session's own client) reads the newest main-loop tool calls
-// and marks which open items are now done, in progress or failed, and places a parentless item under another. A mark
-// or a place is kept only when two checks in a row agree; the agent's own update clears the marks for the items it
+// and marks which open items are now done, in progress or failed. A mark is kept only when two checks in a row agree; the agent's own update clears the marks for the items it
 // sends. Only item names and one short line per tool call go to the model: never file contents.
 
 // Event timing, not a clock: a check 5 s after the last main-loop tool call (a new call restarts the wait), one at every
@@ -20,12 +20,14 @@ export const MAX_FAILS = 3
 // How many of the newest transcript rows a check reads, and how many tool lines the prompt holds.
 const ROWS = 60
 const LINES = 30
+// How many of the newest record lines the record file keeps.
+export const RECORD_LINES = 500
 
 const marksAtom = atom({ plugin: 'mission-status', key: 'marks' } as const, null as Marks | null)
-const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
-const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
+// A headless run (claude -p, an SDK host, a helper job): no person sees a pane (metrics.tsx writes it at session start).
+const headless = atom({ plugin: 'mission-status', key: 'headless' } as const, false as boolean)
 
-export const EMPTY: Marks = { marks: {}, places: [], fails: 0 }
+export const EMPTY: Marks = { marks: {}, fails: 0 }
 
 // ---------------------------------------------------------------- pure parts
 
@@ -64,32 +66,29 @@ export function callLine(tool: string, input: Record<string, unknown>): string |
 const lastLine = (text: string): string => flat(text.split('\n').map(l => l.trim()).filter(Boolean).at(-1) ?? '')
 const flat = (t: string) => t.replace(/\s+/g, ' ').slice(0, 200)
 
-// The items the pane shows: the agent's items, then the task-list steps the agent does not name (as the view merges them).
-export type Open = { id: string; name: string; status: ItemStatus; parent: string | null }
-export function openItems(s: Summary, steps: Task[]): { all: Open[]; open: Open[] } {
-  const own = (s?.items ?? []).map(x => ({ id: x.id ?? idOf(x.name), name: x.name, phase: x.phase, status: x.status, parent: x.parent }))
-  const fromTasks = steps
-    .filter(t => !own.some(y => y.phase === t.phase))
-    .filter(t => !own.some(y => y.name.toLowerCase() === t.name.toLowerCase()))
-    .map(t => ({ id: `task:${idOf(cap(t.name))}`, name: cap(t.name), phase: t.phase, status: t.status as ItemStatus, parent: null }))
-  const all = [...own, ...fromTasks].map(({ id, name, status, parent }) => ({ id, name, status, parent }))
-  return { all, open: all.filter(x => x.status !== 'done') }
+// The agent's items the machine shows open: the only items a mark can change. The machine's merge keeps the agent's
+// items first and in order, with their status after bound steps, merged pull requests and kept marks.
+export type Open = { id: string; name: string; status: ItemStatus }
+export function openItems(s: NonNullable<Summary>, items: Item[]): Open[] {
+  return items
+    .slice(0, s.items.length)
+    .filter(x => x.status !== 'done')
+    .map(x => ({ id: x.id ?? idOf(x.name), name: x.name, status: x.status }))
 }
 
 export const SYSTEM =
   'You keep a progress list current from what a coding session does. You get the open items and the newest tool ' +
   'calls, one line each, oldest first. Mark an item only when the tool calls clearly show it: done when its work is ' +
-  'finished, now when its work is under way, failed when its work failed and nothing fixed it after. Place an item ' +
-  'that has no parent under another item only when it is clearly a part of that item. When unsure, leave it out. ' +
-  'Answer with JSON only, no other text: {"marks":[{"id":"...","status":"done|now|failed"}],"places":[{"name":"...","parent_id":"..."}]}'
+  'finished, now when its work is under way, failed when its work failed and nothing fixed it after. ' +
+  'When unsure, leave it out. Answer with JSON only, no other text: {"marks":[{"id":"...","status":"done|now|failed"}]}'
 
 export function buildPrompt(open: Open[], lines: string[]): string {
   return JSON.stringify({ openItems: open, recentToolCalls: lines })
 }
 
-// Reads the model's answer. A bad or cut reply gives null (no answer); marks and places that name no open item are dropped.
-export type Answer = { marks: Record<string, Exclude<ItemStatus, 'next'>>; places: { name: string; parent: string }[] }
-export function readAnswer(text: string, open: Open[], all: Open[]): Answer | null {
+// Reads the model's answer. A bad or cut reply gives null (no answer); marks that name no open item are dropped.
+export type Answer = { marks: Record<string, Exclude<ItemStatus, 'next'>> }
+export function readAnswer(text: string, open: Open[]): Answer | null {
   const from = text.indexOf('{')
   const to = text.lastIndexOf('}')
   if (from < 0 || to <= from) return null
@@ -100,29 +99,22 @@ export function readAnswer(text: string, open: Open[], all: Open[]): Answer | nu
     return null
   }
   if (json === null || typeof json !== 'object') return null
-  const { marks: rawMarks, places: rawPlaces } = json as { marks?: unknown; places?: unknown }
-  if ((rawMarks !== undefined && !Array.isArray(rawMarks)) || (rawPlaces !== undefined && !Array.isArray(rawPlaces))) return null
+  const rawMarks = (json as { marks?: unknown }).marks
+  if (rawMarks !== undefined && !Array.isArray(rawMarks)) return null
   const marks: Answer['marks'] = {}
   for (const m of (rawMarks ?? []) as { id?: unknown; status?: unknown }[]) {
     const x = open.find(y => y.id === m?.id)
     const st = m?.status
     if (x !== undefined && (st === 'done' || st === 'now' || st === 'failed') && st !== x.status) marks[x.id] = st
   }
-  const places: Answer['places'] = []
-  for (const p of (rawPlaces ?? []) as { name?: unknown; parent_id?: unknown }[]) {
-    const x = open.find(y => y.name === p?.name && y.parent === null)
-    const parent = all.find(y => y.id === p?.parent_id)
-    if (x !== undefined && parent !== undefined && parent.id !== x.id && !places.some(q => q.name === x.name)) places.push({ name: x.name, parent: parent.id })
-  }
-  return { marks, places }
+  return { marks }
 }
 
 // What two answers in a row agree on.
 export function agreed(a: Answer, b: Answer | null): Answer {
-  if (b === null) return { marks: {}, places: [] }
   const marks: Answer['marks'] = {}
-  for (const [id, st] of Object.entries(a.marks)) if (b.marks[id] === st) marks[id] = st
-  return { marks, places: a.places.filter(p => b.places.some(q => q.name === p.name && q.parent === p.parent)) }
+  if (b !== null) for (const [id, st] of Object.entries(a.marks)) if (b.marks[id] === st) marks[id] = st
+  return { marks }
 }
 
 // ---------------------------------------------------------------- the loop
@@ -132,6 +124,8 @@ let live = false
 // A first answer that named a mark the last one did not: the next check may ask again on the same tool lines.
 let pending = false
 let busy = false
+// A check asked for while one runs (a turn end, say): it runs once the running check ends, never dropped.
+let again = false
 let stopped = false
 let cleared = false
 let lastId = ''
@@ -140,13 +134,14 @@ let previous: Answer | null = null
 function reset(): void {
   pending = false
   busy = false
+  again = false
   stopped = false
   lastId = ''
   previous = null
 }
 
 const off = async ($: EngineInterface): Promise<boolean> =>
-  Boolean(await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC').catch(() => undefined))
+  Boolean(await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC').catch(() => undefined)) || (await read($, headless).catch(() => false))
 
 // Schedule one check after a wait; a later schedule replaces an earlier one (the debounce).
 export function schedule($: EngineInterface, ms: number): void {
@@ -157,21 +152,25 @@ export function schedule($: EngineInterface, ms: number): void {
 
 // One check: only after new main-loop tool calls (or to confirm a first answer), one at a time.
 export async function markTick($: EngineInterface): Promise<void> {
-  if (busy || stopped) return
+  if (stopped) return
+  if (busy) {
+    again = true
+    return
+  }
   busy = true
   try {
     if (await off($)) return
-    const s = normalize(await read($, summary))
-    if (s === null) return
+    const machine = await deriveNow($)
+    if (machine === null) return
     const rows = await $.session.messages({ last: ROWS })
     if (!Array.isArray(rows)) return
     const calls = toolCalls(rows)
     if (calls.lastId === '' || (calls.lastId === lastId && !pending)) return
-    const { all, open } = openItems(s, await read($, tasks))
+    const open = openItems(machine.s, machine.items)
     if (open.length === 0) return
     lastId = calls.lastId
     const r = await $.model.complete({ model: MODEL, prompt: buildPrompt(open, calls.lines), system: SYSTEM, maxTokens: MAX_TOKENS, effort: 'low', timeoutMs: TIMEOUT_MS }).catch(() => null)
-    const got = r !== null && r.isAnswered ? readAnswer(r.text, open, all) : null
+    const got = r !== null && r.isAnswered ? readAnswer(r.text, open) : null
     const now = await $.clock.now()
     const both = got === null ? null : agreed(got, previous)
     // A first answer with a mark not yet agreed: confirm it on the same lines in 5 s, not at the next event.
@@ -183,10 +182,11 @@ export async function markTick($: EngineInterface): Promise<void> {
       if (both === null) return { ...was, fails: was.fails + 1 }
       const marks: Marks['marks'] = {}
       // A kept mark stays while its item is open and still shows another status.
-      for (const [id, m] of Object.entries(was.marks)) if (open.some(x => x.id === id && x.status !== m.status)) marks[id] = m
+      // A kept mark stays while the agent's item is open and the agent still gives it another status.
+      for (const [id, m] of Object.entries(was.marks))
+        if (machine.s.items.some(x => (x.id ?? idOf(x.name)) === id && x.status !== 'done' && x.status !== m.status)) marks[id] = m
       for (const [id, status] of Object.entries(both.marks)) marks[id] = { status, at: now }
-      const places = [...was.places.filter(p => !both.places.some(q => q.name === p.name)), ...both.places]
-      return { marks, places, fails: 0 }
+      return { marks, fails: 0 }
     })
     if ((st?.fails ?? 0) >= MAX_FAILS) stopped = true
     if (pending) schedule($, CONFIRM_MS)
@@ -194,9 +194,9 @@ export async function markTick($: EngineInterface): Promise<void> {
       at: now,
       answered: got !== null,
       reason: r === null ? 'refused' : r.isAnswered ? (got === null ? 'bad-reply' : null) : r.reason,
+      session: await $.session.id(),
       marks: got?.marks ?? null,
-      places: got?.places ?? null,
-      agreed: both !== null && (Object.keys(both.marks).length > 0 || both.places.length > 0),
+      agreed: both !== null && Object.keys(both.marks).length > 0,
       kept: both ?? null,
       usage: r?.usage ?? null,
     })
@@ -204,17 +204,23 @@ export async function markTick($: EngineInterface): Promise<void> {
     // A check that fails changes nothing; the next tick tries again.
   } finally {
     busy = false
+    if (again && !stopped) {
+      again = false
+      schedule($, 0)
+    }
   }
 }
 
-// One JSON line per model call in ~/.claude/mission-status/marker/<session id>.jsonl; never a tool line.
+// One JSON line per model call in ~/.claude/mission-status/marker.jsonl, for all sessions, the newest RECORD_LINES
+// only (the engine has no append, so each line rewrites a file of bounded size); never a tool line.
 async function record($: EngineInterface, line: Record<string, unknown>): Promise<void> {
   try {
     const home = (await $.env.get('HOME').catch(() => undefined)) ?? ''
     if (home === '') return
-    const path = `${home}/.claude/mission-status/marker/${await $.session.id()}.jsonl`
+    const path = `${home}/.claude/mission-status/marker.jsonl`
     const was = (await $.fs.exists(path).catch(() => false)) ? await $.fs.read(path).catch(() => '') : ''
-    await $.fs.write(path, `${typeof was === 'string' ? was : ''}${JSON.stringify(line)}\n`)
+    const lines = [...(typeof was === 'string' ? was : '').split('\n').filter(Boolean), JSON.stringify(line)]
+    await $.fs.write(path, `${lines.slice(-RECORD_LINES).join('\n')}\n`)
   } catch {
     // A record that cannot be written leaves the marks as they are.
   }
