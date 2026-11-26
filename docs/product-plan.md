@@ -37,6 +37,17 @@ Terminal and VS Code views. Tickets and ticket readers. User settings beyond the
 
 ## Backlog
 - Summarize and Status buttons on each stage card and item card. A press starts a side chat for the session with one focused question: Summarize explains what the card's work found or changed (how the bug was reproduced, the root cause, what the fix changed); Status says where that card stands now and what it waits on. The person gets a focused answer for any card as it runs, without following the main chat.
+- Live tables. The agent sends a small table (rows, columns, cells) that the pane draws as a card and keeps current: each refresh replaces the cells in place, so the person reads one table that changes instead of asking again and getting a new one in the chat. Each table names its source (a CI history, a log, a command) and how often it is read again; a cell may show a count of a whole ("5 of 10"), a dash for no value yet, or a short note. Example: a session that measures CI run time before and after a change to two repositories keeps this table live while the runs land:
+
+  | | Repo A | Repo B |
+  |---|---|---|
+  | Runs since merge | 5 of 10 | 5 of 10 |
+  | Before (mean) | 391 s | 170 s |
+  | After (mean) | 216 s | 142 s |
+  | After (p50 / max) | 213 s / 268 s | 185 s / 195 s |
+  | Newest run | — | 56 s |
+  | Failed runs | 1 of 5 (a real finding in that pull request's code) | 0 of 5 |
+  | Reruns | 0 | 0 |
 
 ## How the state stays current
 | Trigger | Who acts | What changes |
