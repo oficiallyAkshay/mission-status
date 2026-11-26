@@ -100,6 +100,27 @@ const WATCH_NAME = /^\s*(watch(ing)?|monitor(ing)?|wait(ing)?\s+(for|on|until)|p
 export const isWatchItem = (x: Item, all: readonly Item[]): boolean =>
   WATCH_NAME.test(x.name) && !all.some(y => y !== x && y.phase === x.phase && y.parent != null && (y.parent === x.id || y.parent === x.name))
 
+// ---- Names ----
+// A job with no description is named from its command, which may open with variable settings and a cd: those are
+// dropped, and what runs is named in a few words ("gh pr checks 53"). A plain description passes through.
+const ASSIGN = /^\s*(export\s+)?[A-Za-z_][A-Za-z0-9_]*=("[^"]*"|'[^']*'|[^\s;&|]*)\s*(;|&&|\s)\s*/
+const CD = /^\s*cd\s+("[^"]*"|'[^']*'|[^\s;&|]+)\s*(;|&&)\s*/
+const isShellText = (s: string) => /^\s*((export\s+)?[A-Za-z_][A-Za-z0-9_]*=|cd\s)/.test(s) || /(&&|\|\||;\s|\$\(|\/(private|tmp|Users)\/)/.test(s)
+export function jobName(raw: string, kind?: string | null): string {
+  let s = raw.trim()
+  if (!isShellText(s)) return s
+  for (let k = 0; k < 20; k++) {
+    const m = ASSIGN.exec(s) ?? CD.exec(s)
+    if (m === null) break
+    s = s.slice(m[0].length)
+  }
+  // The first command of a pipe or a chain, its words without paths or quotes, at most five.
+  const first = s.split(/\s*(?:&&|\|\||;|\|)\s*/)[0] ?? ''
+  const words = first.split(/\s+/).filter(w => w !== '' && !/[\/"'$=<>&]/.test(w) && !/^-/.test(w)).slice(0, 5)
+  const name = words.join(' ').slice(0, 60)
+  return name !== '' ? name : kind === 'monitor' ? 'Background monitor' : 'Background shell'
+}
+
 // ---- What the strip draws ----
 export type WatchRow = {
   id: string
@@ -129,7 +150,7 @@ export function watchRows(p: { jobs: Job[]; helpers: Helper[]; agent: AgentWatch
     const said = byJob.get(j.id)
     rows.push({
       id: `job-${j.id}`,
-      name: said?.name ?? j.description,
+      name: said?.name ?? jobName(j.description, j.kind),
       source: 'job',
       shape: said?.shape ?? j.shape ?? null,
       kind: j.kind,

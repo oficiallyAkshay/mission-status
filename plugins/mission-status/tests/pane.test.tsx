@@ -62,7 +62,6 @@ test('build: each card ends with its exit clause, and its figure follows the cla
   await send($, { ...base, counts: counts(11) })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await text(ui, /^Checkout redesign$/)).toBe('Checkout redesign')
-  for (const stage of ['Plan', 'Build', 'Test', 'Deploy', 'Learn']) expect(await text(ui, new RegExp(`^${stage}$`))).toBe(stage)
   // exit clauses read as conditions, met ones checked
   // A done stage folds to one line that names its met gate.
   expect(await text(ui, /^✓ you pick the pane form$/)).toBe('✓ you pick the pane form')
@@ -72,21 +71,21 @@ test('build: each card ends with its exit clause, and its figure follows the cla
   expect(await text(ui, /^\d+s$/)).toBeTruthy()
   expect(await text(ui, /^Met$/)).toBeUndefined()
   expect(await text(ui, /^11 of 11$/)).toBeUndefined()
-  expect(await svgAlt(ui, /Helper scan tests: running/)).toBeTruthy()
-  expect(await text(ui, /^✓ Plan$/)).toBeTruthy()
+  // Helpers show on the Watches tab, not on Progress.
+  expect(await svgAlt(ui, /Helper scan tests: running/)).toBeFalsy()
   await ui.unmount()
 })
 
-test('the stage bar shows every stage at any width, in order, with no window and no buttons to move it', async ($, on) => {
+test('no stage bar: the tabs stand under the header, and the open tab is filled to its own width', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', phases: ['Plan', 'Repo setup', 'Build', 'Website', 'Review', 'Fix findings', 'Deploy'], phase: 5 })
-  for (const bodyColumns of [30, 40, 140]) {
-    const ui = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns }, surface: 'desktop' })
-    // Done stages carry a check, the current one its plain name, the stages ahead their names: all seven, every time.
-    for (const name of ['✓ Plan', '✓ Repo setup', '✓ Build', '✓ Website', '✓ Review', 'Deploy']) expect(await text(ui, new RegExp(`^${name}$`))).toBeTruthy()
-    expect((await ui.findAll({ type: 'Button' })).some(x => x.key === 'bar-left' || x.key === 'bar-right')).toBe(false)
-    await ui.unmount()
-  }
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await svgAlt(ui, /^Stage \d+ of \d+/)).toBeFalsy()
+  const tabs = await ui.findAll({ type: 'Box' })
+  const box = (k: string) => tabs.find((x: any) => x.key === `tab:${k}`) as any
+  expect(box('tab-progress')?.props?.backgroundColor).toBe('#2A2A2A')
+  expect(box('tab-prs')?.props?.backgroundColor).toBeUndefined()
+  await ui.unmount()
 })
 
 test('a done stage folds to one line; its + opens the full card again', async ($, on) => {
@@ -227,6 +226,8 @@ test('a state the agent left stale shows May be out of date; a fresh one does no
   await send($, { project: 'P', stage: 'build', phase: 0 })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await text(ui, /^May be out of date$/)).toBe('May be out of date')
+  // One state in the header's corner: out of date replaces Live, never beside it.
+  expect(await text(ui, /^Live$/)).toBeUndefined()
   await ui.unmount()
   stale = false
   const ui2 = await $.ui.mount({ ...PANE, surface: 'desktop' })
@@ -307,7 +308,6 @@ test('done: every stage passed', async ($, on) => {
   await send($, { project: 'P', stage: 'ship', phase: 5 })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   expect(await text(ui, /cards are done/)).toBeUndefined()
-  expect(await text(ui, /^✓ /)).toBeTruthy()
   await ui.unmount()
 })
 
@@ -358,9 +358,11 @@ test('runbooks: one runbook is a Runbook tab beside Progress; each step carries 
   expect((await send($, { project: 'P', stage: 'build', phase: 1, runbooks: [runbook] })).deny).toBeUndefined()
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const buttons = await ui.findAll({ type: 'Button' })
-  // The open tab is a chip, not a button: Progress is open, so only the other tabs are buttons.
-  expect(buttons.some(x => x.key === 'tab-progress')).toBe(false)
-  expect(buttons.some(x => x.key === 'tab-release' && x.props?.label === '☰  Runbook')).toBe(true)
+  // Every tab is the same native button; the open one is the primary button.
+  const boxes = (await ui.findAll({ type: 'Box' })) as any[]
+  expect(boxes.find(x => x.key === 'tab:tab-progress')?.props?.backgroundColor).toBe('#2A2A2A')
+  expect(boxes.find(x => x.key === 'tab:tab-release')?.props?.backgroundColor).toBeUndefined()
+  expect(buttons.some(x => x.key === 'tab-release' && String(x.props?.label).trim() === '☰ Runbook')).toBe(true)
   expect(await text(ui, /^P$/)).toBe('P')
   await ui.press({ key: 'tab-release' })
   expect(await text(ui, /^1 of 3 done  ·  1 need you  ·  now: Rewrite the history$/)).toBeTruthy()
@@ -368,7 +370,8 @@ test('runbooks: one runbook is a Runbook tab beside Progress; each step carries 
   expect(await text(ui, /^Needs you( |$)/)).toBeUndefined()
   expect(await text(ui, /^2  Rewrite the history$/)).toBe('2  Rewrite the history')
   expect(await text(ui, /^Needs your yes$/)).toBe('Needs your yes')
-  expect(await text(ui, /^P$/)).toBeUndefined()
+  // The header heads every tab, so the project title shows here too.
+  expect(await text(ui, /^P$/)).toBe('P')
   await ui.press({ key: 'tab-progress' })
   expect(await text(ui, /^P$/)).toBe('P')
   await ui.unmount()
@@ -457,7 +460,7 @@ test('PRs tab: a pull request the session makes is listed with its state, and it
   expect(await svgAlt(ui, /^Merged$/)).toBeTruthy()
   await ui.press({ key: 'open-pr-acme/app#9' })
   // An open card shows two tabs, Commits first; no Details tab.
-  expect(await text(ui, /^●  Commits \d+$/)).toBeTruthy()
+  expect(((await ui.findAll({ type: 'Box' })) as any[]).some(x => /^tab:.*-b-commits$/.test(String(x.key)) && x.props?.backgroundColor === '#2A2A2A')).toBe(true)
   expect((await ui.findAll({ type: 'Button' })).some(x => String(x.key).endsWith('-b-details'))).toBe(false)
   await ui.unmount()
 })
@@ -558,12 +561,15 @@ test('PRs tab: a pull request whose checks run shows CI with its time so far on 
   await ui.unmount()
 })
 
-test('running helpers show in the Watching strip above the stage cards, not inside an item', async ($, on) => {
+test('running helpers show only on the Watches tab, never on Progress or inside an item', async ($, on) => {
   await start($, on, [{ id: 'h1', description: 'reader taste', status: 'running', taskStatus: 'running', model: 'haiku', startTime: Date.now() }])
   await send($, { project: 'P', phases: ['Plan', 'Close out'], phase: 1, items: [{ phase: 1, name: 'Deep review', status: 'now' }, { phase: 1, name: 'Merge wait', status: 'next' }] })
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const order = (await ui.findAll({ type: 'Svg' })).map(x => String((x as any).props?.alt ?? '')).filter(a => /^(Deep review|Merge wait): |^Helper /.test(a))
-  expect(order).toEqual(['Helper reader taste: running', 'Deep review: in progress', 'Merge wait: not started'])
+  const order = async () => (await ui.findAll({ type: 'Svg' })).map(x => String((x as any).props?.alt ?? '')).filter(a => /^(Deep review|Merge wait): |^Helper /.test(a))
+  expect(await order()).toEqual(['Deep review: in progress', 'Merge wait: not started'])
+  expect(await text(ui, /^Watching \(Beta\)$/)).toBeFalsy()
+  await ui.press({ key: 'tab-watches' })
+  expect(await order()).toEqual(['Helper reader taste: running'])
   expect(await text(ui, /^Watching \(Beta\)$/)).toBeTruthy()
   await ui.unmount()
 })
@@ -574,34 +580,69 @@ test('a background shell job shows in the Watching section while it runs, and st
   await send($, { project: 'P', phases: ['Build', 'Ship'], phase: 0, items: [{ phase: 0, name: 'Code', status: 'now' }, { phase: 0, name: 'Watch CI on the pull request', status: 'now' }] })
   await $.tool.call({ tool: 'Bash', command: 'gh pr checks 53 --watch', description: 'Watch CI checks', run_in_background: true } as never)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // The watch item left the stage card: only Code is a card row, and Progress shows no watch.
+  expect(await svgAlt(ui, /^Watch CI on the pull request: in progress$/)).toBeFalsy()
+  expect(await svgAlt(ui, /^Watch CI checks: running$/)).toBeFalsy()
+  await ui.press({ key: 'tab-watches' })
   expect(await text(ui, /^Watching \(Beta\)$/)).toBeTruthy()
-  expect(await text(ui, /^Progress$/)).toBeTruthy()
   expect(await text(ui, /^2 running$/)).toBeTruthy()
   expect(await svgAlt(ui, /^Watch CI checks: running$/)).toBeTruthy()
-  // The watch item left the stage card: only Code is a card row.
-  expect(await svgAlt(ui, /^Watch CI on the pull request: in progress$/)).toBeFalsy()
   await ui.unmount()
   await $.prompt.submit({ text: '<task-notification><task-id>bjob1234</task-id><status>completed</status></task-notification>' } as never).catch(() => undefined)
   const after = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // The Watches tab stays open across mounts.
   expect(await text(after, /^1 running · 1 ended$/)).toBeTruthy()
   expect(await svgAlt(after, /^Watch CI checks: complete /)).toBeTruthy()
+  // An ended watch can be removed; it leaves the tab.
+  await after.press({ key: 'watch-remove-job-bjob1234' })
+  expect(await svgAlt(after, /^Watch CI checks: complete /)).toBeFalsy()
+  expect(await text(after, /^1 running$/)).toBeTruthy()
   await after.unmount()
 })
 
-test('Progress shows at most 3 watch cards with See all beside the heading; the Watches tab shows every watch', async ($, on) => {
+test('Progress shows no watch cards; the Watches tab shows every watch, and Remove ended clears the ended ones', async ($, on) => {
   on('tool.call', { tool: 'Bash' }, (_: unknown, e: { description: string }) => ({ result: `Command running in background with ID: ${e.description}. Output is being written to: /tmp/x` }))
   await start($, on)
   await send($, { project: 'P', phases: ['Build', 'Ship'], phase: 0, items: [{ phase: 0, name: 'Code', status: 'now' }] })
   for (const id of ['wa001', 'wa002', 'wa003', 'wa004']) await $.tool.call({ tool: 'Bash', command: 'watch', description: id, run_in_background: true } as never)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const shown = async (u: any) => (await u.findAll({ type: 'Svg' })).map((x: any) => String(x.props?.alt ?? '')).filter((a: string) => /^wa00\d: running$/.test(a))
-  expect((await shown(ui)).length).toBe(3)
+  const shown = async (u: any, re = /^wa00\d: running$/) => (await u.findAll({ type: 'Svg' })).map((x: any) => String(x.props?.alt ?? '')).filter((a: string) => re.test(a))
+  expect((await shown(ui)).length).toBe(0)
   const labels = (await ui.findAll({ type: 'Button' })).map((x: any) => String(x.props?.label ?? ''))
   expect(labels.some((l: string) => /Watches 4/.test(l))).toBe(true)
-  expect(labels).toContain('See all 4')
-  await ui.press({ key: 'act-watching' })
+  expect(labels.some((l: string) => /^See all/.test(l))).toBe(false)
+  await ui.press({ key: 'tab-watches' })
   expect((await shown(ui)).length).toBe(4)
+  // No Remove on a running watch.
+  expect((await ui.findAll({ type: 'Button' })).some((x: any) => x.props?.label === 'Remove')).toBe(false)
   await ui.unmount()
+  for (const id of ['wa001', 'wa002']) await $.prompt.submit({ text: `<task-notification><task-id>${id}</task-id><status>completed</status></task-notification>` } as never).catch(() => undefined)
+  const after = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // The Watches tab stays open across mounts.
+  expect((await shown(after, /^wa00\d: complete /)).length).toBe(2)
+  await after.press({ key: 'act-watches-all' })
+  expect((await shown(after, /^wa00\d: complete /)).length).toBe(0)
+  expect((await shown(after)).length).toBe(2)
+  await after.unmount()
+})
+
+test('a pane the person closed stays closed through agent updates, and /mission-status opens it again', async ($, on) => {
+  const opened: string[] = []
+  const closed = { value: false }
+  on('state.get', { plugin: 'mission-status', key: 'closedByPerson' }, () => ({ value: { value: closed.value, version: 1 } }))
+  on('state.set', { plugin: 'mission-status', key: 'closedByPerson' }, (_: unknown, e: { value: boolean }) => ((closed.value = e.value), { value: { version: 2 } }))
+  on('ui.open', { id: 'progress' }, (_: unknown, e: { id: string }) => (opened.push(e.id), { value: { isPlaced: true } }))
+  await start($, on)
+  await send($, { project: 'P', phases: ['Build', 'Ship'], phase: 0 })
+  expect(opened.filter(x => x === 'progress').length).toBeGreaterThan(0)
+  // The person's close (the app's close mark) is recorded as this flag by the ui.close hook.
+  closed.value = true
+  opened.length = 0
+  await send($, { project: 'P', phases: ['Build', 'Ship'], phase: 1 })
+  expect(opened.filter(x => x === 'progress')).toEqual([])
+  await $.command.run({ command: 'mission-status' } as never).catch(() => undefined)
+  expect(opened.filter(x => x === 'progress').length).toBe(1)
+  expect(closed.value).toBe(false)
 })
 
 test('badges and trunk lines draw at a fixed 16 px width, so a column never stretches them', async ($, on) => {
@@ -1214,3 +1255,4 @@ test('a running helper strip keeps one source while time passes', () => {
   expect(strip()).toBe(strip())
   expect(strip()).not.toContain('min')
 })
+

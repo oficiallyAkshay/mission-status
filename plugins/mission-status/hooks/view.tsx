@@ -4,7 +4,7 @@ import type { ElementConstructor, RenderChildren, RenderInput, SvgProps } from '
 import type { Count, Item, ItemStatus, Job, Live, PrRecord, Runs, Wakeup } from '../types'
 import { prIconSvg, badgeSvg, failedBadgeSvg, needsBadgeSvg, waitsLineSvg } from './bars'
 import { findRef, workOrder } from './model'
-import { deriveNow } from './store'
+import { deriveNow, FRESH0 } from './store'
 import { type NodeStatus, type Timing, itemKey, stageKey, timeOf } from './machine'
 import { openDoc } from './doc'
 import { isWatchItem, watchRows } from './watches'
@@ -19,7 +19,11 @@ const runsAtom = atom({ plugin: 'mission-status', key: 'runs' } as const, {} as 
 const seenAtom = atom({ plugin: 'mission-status', key: 'seenAt' } as const, 0)
 const wakeupsAtom = atom({ plugin: 'mission-status', key: 'wakeups' } as const, [] as Wakeup[])
 const jobsAtom = atom({ plugin: 'mission-status', key: 'jobs' } as const, [] as Job[])
+// The freshness record (store.ts): when the running turn began.
+const freshAtom = atom({ plugin: 'mission-status', key: 'fresh' } as const, FRESH0)
 const watchOpenAtom = atom({ plugin: 'mission-status', key: 'watchOpen' } as const, [] as string[])
+// Ended watches the person removed: they no longer show.
+const watchGoneAtom = atom({ plugin: 'mission-status', key: 'watchGone' } as const, [] as string[])
 // The pane's open tab: null is Progress, else a runbook's id.
 const tabAtom = atom({ plugin: 'mission-status', key: 'tab' } as const, null as string | null)
 // The open tab inside each pull request card, by its reference.
@@ -153,6 +157,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const running = helpersAll.filter(x => x.status === 'running')
     // Watches (watches.ts): background jobs (the helper list holds only subagents), subagents, the agent's own
     // reports, the items that name watching or waiting, and scheduled wakeups.
+    const gone = (await safe(read($, watchGoneAtom), [])) ?? []
     const watches = watchRows({
       jobs: (await safe(read($, jobsAtom), [])) ?? [],
       helpers: helpersAll,
@@ -160,7 +165,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
       items: s.items.filter(x => isWatchItem(x, s.items)),
       wakeups: (await safe(read($, wakeupsAtom), [])) ?? [],
       at: t,
-    })
+    }).filter(w => w.endedAt === null || !gone.includes(w.id))
     // The session's pull requests: the newest 20 it made, each from its one record.
     const sessionPrs = ((await safe(read($, prRefsAtom), [])) ?? [])
       .slice(-20)
@@ -323,7 +328,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const hostKey = facts.hostKey
     // A root is an item no item holds in the machine's tree, so an item in a parent loop still shows.
     const isRoot = (x: Item) => !allItems.some(y => machine.kids(y).includes(x))
-    const stage: StageState = { s, machine, allItems, opened, measures, isDone, t, running, watches, watchOpen: (await safe(read($, watchOpenAtom), [])) ?? [], seeAll: () => void update($, tabAtom, () => 'watches'), toggleWatch: (id: string) => update($, watchOpenAtom, list => ((list ?? []).includes(id) ? (list ?? []).filter(x => x !== id) : [...(list ?? []), id].slice(-20))), hostKey, stageState, stageTimeText, badgeFor, needsWord, toggle, itemCards, isRoot }
+    const stage: StageState = { s, machine, allItems, opened, measures, isDone, t, running, watches, watchOpen: (await safe(read($, watchOpenAtom), [])) ?? [], removeWatches: (ids: string[]) => update($, watchGoneAtom, list => [...(list ?? []), ...ids.filter(x => !(list ?? []).includes(x))].slice(-200)), toggleWatch: (id: string) => update($, watchOpenAtom, list => ((list ?? []).includes(id) ? (list ?? []).filter(x => x !== id) : [...(list ?? []), id].slice(-20))), hostKey, stageState, stageTimeText, badgeFor, needsWord, toggle, itemCards, isRoot }
 
     // Tabs: Progress, then one tab for each runbook the session follows. A press switches the view.
     const runbooks = s.runbooks ?? []
@@ -351,7 +356,17 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
         })),
       ],
     })
-    const region: Region = { Box, Text, Link, Button, B, svg, hasSvg: Svg !== undefined, linkRow, tabRow }
+    // Every tab opens with the header, then the tab strip: the tabs stand where the stage bar was.
+    const head = header($, { Box, Text, Link, Button, B, svg, hasSvg: Svg !== undefined, linkRow, tabRow: null }, { s, turnOpen: facts.turnOpen, staleFrom: Math.max(s.at, ((await safe(read($, freshAtom), FRESH0)) ?? FRESH0).turnStartAt ?? 0), t, seen, clock, upd, auto, isDone, readFailed, askUpdate })
+    const region: Region = {
+      Box, Text, Link, Button, B, svg, hasSvg: Svg !== undefined, linkRow,
+      tabRow: (
+        <Box key="head-and-tabs" width="100%" flexDirection="column" gap={2}>
+          {head}
+          {tabRow}
+        </Box>
+      ),
+    }
     if (onPrs) {
       const prTabs = (await safe(read($, prTabAtom), {} as Record<string, string>)) ?? {}
       return prsTab($, region, { sessionPrs, prTabs, prsStale, prsReadAt, clock, nowOrRead, isOpenKey, toggleKey })
@@ -359,5 +374,5 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     if (book !== null) return runbookTab(region, book)
     if (onWatches) return watchesTab(region, stage)
 
-    return progressTab(region, stage, header($, region, { s, turnOpen: facts.turnOpen, t, seen, clock, upd, auto, isDone, readFailed, askUpdate }))
+    return progressTab(region, stage)
 }

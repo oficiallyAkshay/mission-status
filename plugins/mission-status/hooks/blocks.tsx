@@ -3,6 +3,10 @@ import { ACCENT } from './store'
 import { pulseWidth, stepPulseSvg, stripSvg } from './bars'
 import { cap } from './model'
 
+// The app's own button hover grey, read from the desktop app in dark mode (25 under it becomes 42). The open tab is
+// filled with it, and a hover fills the others with it.
+const TAB_HOVER = '#2A2A2A'
+
 // The pane's building blocks. Every region of the pane is drawn from these, so every row lines up by construction:
 // one badge column, one title column that grows, one meta column on the right (times, CI, the PR chip) and one
 // control column (+ or −). The spacing lives here and nowhere else.
@@ -191,13 +195,36 @@ export function blocks(els: Els, draw: Draw) {
 
   // Tabs: one chip per tab, an icon before each label; the open tab a solid purple chip, the others quiet grey chips
   // that switch the view on a press. The app's own grey button is kept for links that open in Claude itself.
-  const Tabs = (p: { id: string; tabs: { key: string; label: string; icon: string; on: boolean; onPress: () => void }[] }) =>
-    ChipRow({
-      id: p.id,
-      children: p.tabs.map(t =>
-        Chip({ id: t.key, buttonKey: t.key, label: `${t.icon}  ${t.label}`, tone: t.on ? 'on' : 'quiet', onPress: t.on ? undefined : t.onPress }),
-      ),
-    })
+  // Tabs: a tab strip. Each tab is a plain button in a keyed Box whose hover fills a square behind it; the open tab
+  // is full strength with an accent underline, the others dim. A drawn hairline under the strip runs the full width
+  // (a bordered empty Box draws a box on the desktop, not a line).
+  const Tabs = (p: { id: string; tabs: { key: string; label: string; icon: string; on: boolean; onPress: () => void }[] }) => (
+    <Box key={p.id} width="100%" flexDirection="column" gap={0}>
+      {/* No gap: the tabs' hovers touch. */}
+      <Box key={`${p.id}:row`} width="100%" flexDirection="row" flexWrap="wrap" alignItems="flex-end" gap={0}>
+        {p.tabs.map(t => {
+          // En spaces on each side widen the button, so its hover covers the whole tab: the app's button takes no
+          // padding, size or corner setting. Plain spaces may be trimmed.
+          const label = `\u2002\u2002${t.icon} ${t.label}\u2002\u2002`
+          return (
+            <Box key={`tab:${t.key}`} flexShrink={0} flexDirection="column" alignItems="center" backgroundColor={t.on ? TAB_HOVER : undefined} hover={{ backgroundColor: TAB_HOVER }}>
+              {/* The open tab is the filled square, so its mark is exactly the tab's width (a drawn underline could
+                  only guess the button's width). A square hover fills the other tabs, padding above and below the
+                  button included; the app's own rounded highlight still draws on top of the button. */}
+              <Box key={`tab-pad:${t.key}`} paddingY="sm">
+                <Button key={t.key} label={label} plain dimColor={!t.on} onPress={t.on ? () => undefined : t.onPress} />
+              </Box>
+            </Box>
+          )
+        })}
+      </Box>
+      {/* The divider reaches past the content as far as the app lets the pane draw: the app pads the pane's body and
+          clips 8 px beyond the content (a margin of -4 and of -20 both stopped there), so no mod setting reaches the edge. */}
+      <Box key={`${p.id}:line`} marginLeft={-4} marginRight={-4} flexDirection="column">
+        {draw(`<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="1"><rect width="100%" height="1" fill="#808080" fill-opacity=".35"/></svg>`, 'Tab divider', 1, `${p.id}:line-svg`)}
+      </Box>
+    </Box>
+  )
 
   // A line that fills its cell whatever the cell's height: the cell stretches with its row and clips a drawing taller
   // than any row, so a wrapped name, a note or open children never leave a gap and no height is guessed.

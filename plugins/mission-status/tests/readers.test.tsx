@@ -116,9 +116,26 @@ test('state: stale after 15 minutes with no update shows the age in amber', { ti
   await send($, clock)
   await clock.advance(23 * 60_000)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
-  const line = await ui.find({ type: 'Text', text: /^No update from the agent for 2[23] min\./ })
+  const line = await ui.find({ type: 'Text', text: /^No update from the agent for 2[23] min of work\./ })
   expect(line?.props?.color).toBe('warning')
   await ui.unmount()
+})
+
+test("state: time between turns, the person's, never makes the state stale; the next turn counts from its start", { timeoutMs: 20_000 }, async ($, on) => {
+  const { clock } = await boot($, on, { git: 'norepo' })
+  await send($, clock)
+  await $.turn.complete({ answer: 'ok', durationMs: 1, isAborted: false, turnId: 'turn-1', reason: 'answer' } as never)
+  await clock.settle()
+  // The person reads for 40 minutes: no turn runs, so no stale line.
+  await clock.advance(40 * 60_000)
+  expect(await mountText($, /^No update from the agent/)).toBeUndefined()
+  // A new turn starts: its first 14 minutes are fresh.
+  await $.turn.start({ text: 'next', turnId: 'turn-2' } as never)
+  await clock.settle()
+  await clock.advance(14 * 60_000)
+  expect(await mountText($, /^No update from the agent/)).toBeUndefined()
+  await clock.advance(2 * 60_000)
+  expect(await mountText($, /^No update from the agent for 16 min of work\./)).toBeTruthy()
 })
 
 test('state: fresh within 15 minutes shows no stale line', { timeoutMs: 20_000 }, async ($, on) => {
