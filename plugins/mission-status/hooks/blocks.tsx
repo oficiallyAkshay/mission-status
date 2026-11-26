@@ -69,9 +69,9 @@ export function blocks(els: Els, draw: Draw) {
     </Text>
   )
   // Note: a caption that wraps, under a name. It stops short of the control column, as the name does.
-  const Note = (p: { children: RenderChildren; color?: string; key?: string }) => (
+  const Note = (p: { children: RenderChildren; color?: string; key?: string; maxLines?: number }) => (
     <Box key={p.key} paddingRight={CHEV} minWidth={0}>
-      <Text size="caption" color={p.color ?? NOTE} wrap="wrap">
+      <Text size="caption" color={p.color ?? NOTE} wrap="wrap" maxLines={p.maxLines}>
         {p.children}
       </Text>
     </Box>
@@ -198,7 +198,8 @@ export function blocks(els: Els, draw: Draw) {
   // Tabs: a tab strip. Each tab is a plain button in a keyed Box whose hover fills a square behind it; the open tab
   // is full strength with an accent underline, the others dim. A drawn hairline under the strip runs the full width
   // (a bordered empty Box draws a box on the desktop, not a line).
-  const Tabs = (p: { id: string; tabs: { key: string; label: string; icon: string; on: boolean; onPress: () => void }[] }) => (
+  // inset: tabs inside a card; the divider stays within the card's content instead of reaching the pane's edges.
+  const Tabs = (p: { id: string; inset?: boolean; tabs: { key: string; label: string; icon: string; on: boolean; onPress: () => void }[] }) => (
     <Box key={p.id} width="100%" flexDirection="column" gap={0}>
       {/* No gap: the tabs' hovers touch. */}
       <Box key={`${p.id}:row`} width="100%" flexDirection="row" flexWrap="wrap" alignItems="flex-end" gap={0}>
@@ -220,7 +221,7 @@ export function blocks(els: Els, draw: Draw) {
       </Box>
       {/* The divider reaches past the content as far as the app lets the pane draw: the app pads the pane's body and
           clips 8 px beyond the content (a margin of -4 and of -20 both stopped there), so no mod setting reaches the edge. */}
-      <Box key={`${p.id}:line`} marginLeft={-4} marginRight={-4} flexDirection="column">
+      <Box key={`${p.id}:line`} marginLeft={p.inset ? 0 : -4} marginRight={p.inset ? 0 : -4} flexDirection="column">
         {draw(`<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="1"><rect width="100%" height="1" fill="#808080" fill-opacity=".35"/></svg>`, 'Tab divider', 1, `${p.id}:line-svg`)}
       </Box>
     </Box>

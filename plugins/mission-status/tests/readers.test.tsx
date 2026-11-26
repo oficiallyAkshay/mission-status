@@ -562,6 +562,28 @@ test('the summary is made from the description, and the stored record keeps no c
   expect(JSON.stringify(rec)).not.toContain('More detail follows here.')
 })
 
+test('a new pull request is stored before its summary is written; the prompt asks for one short sentence', async ($, on) => {
+  const body = 'This change adds a tab. It lists every pull request.'
+  const w: World = { prs: { 'acme/app#9': pr('acme/app#9', { body }) }, bash: () => 'https://github.com/acme/app/pull/9\n' }
+  const into: { live?: any } = {}
+  const systems: string[] = []
+  let release: (v: unknown) => void = () => undefined
+  const { clock } = await boot($, on, w, o => {
+    liveOf(o, into)
+    o('env.get', () => ({ value: undefined }))
+    o('model.complete', (_: unknown, e: { system: string }) => (systems.push(e.system), new Promise(r => (release = r)).then(() => ({ value: { isAnswered: true, text: 'Adds a tab.', usage: {} } }))))
+  })
+  await send($)
+  await bash($, 'gh pr create --fill')
+  await run(clock, 10_000)
+  // The summary call is still open, and the record is already there with the description's own first sentences.
+  expect(into.live?.prRecords?.['acme/app#9']?.summary).toBe('This change adds a tab. It lists every pull request.')
+  expect(systems.some(x => /one plain sentence of at most 18 words/.test(x))).toBe(true)
+  release(undefined)
+  await run(clock, 1_000)
+  expect(into.live?.prRecords?.['acme/app#9']?.summary).toBe('Adds a tab.')
+})
+
 test('the live record keeps each pull request once, in its record', async ($, on) => {
   const w: World = { prs: { 'acme/app#9': pr('acme/app#9') }, bash: () => 'https://github.com/acme/app/pull/9\n' }
   const into: { live?: any } = {}
