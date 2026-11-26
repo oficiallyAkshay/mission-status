@@ -8,7 +8,7 @@ import type { deriveNow } from './store'
 import { type NodeStatus, stageKey } from './machine'
 import { updateText } from './update-line'
 import { setAutoUpdate, updateNow } from './update'
-import { blocks, durationOf, INDENT, SUBTEXT, ACCENT_TEXT } from './blocks'
+import { blocks, CHEV, durationOf, INDENT, SUBTEXT, ACCENT_TEXT } from './blocks'
 
 // The regions of the pane, each drawn from the state renderPane (view.tsx) gathers.
 
@@ -143,15 +143,11 @@ export function prsTab($: EngineInterface, r: Region, p0: PrsState) {
   // CI on the closed row only while it runs (with its time so far) or after it failed; passed CI stays inside the card.
   const ciShort = (p: (typeof sessionPrs)[number]) =>
     p.ci === 'running' ? `CI ${p.ciStart != null ? durationOf(nowOrRead() - p.ciStart) : ''}`.trim() : p.ci === 'failing' && p.state !== 'merged' ? 'CI failed' : null
-  const counts = (['merged', 'open', 'draft', 'conflict', 'closed'] as const)
-    .map(st => [st, sessionPrs.filter(p => p.state === st).length] as const)
-    .filter(([, n]) => n > 0)
-    .map(([st, n]) => `${n} ${word[st].toLowerCase()}`)
-    .join('  ·  ')
   return (
     <Box flexDirection="column" gap={1} paddingBottom={1}>
       {tabRow}
-      <Text color={SUBTEXT}>{sessionPrs.length === 0 ? 'This session has made no pull request yet.' : counts}</Text>
+      {/* Each card says its own state, so no count line repeats it. */}
+      {sessionPrs.length === 0 ? <Text color={SUBTEXT}>This session has made no pull request yet.</Text> : null}
       {prsStale && sessionPrs.length > 0 ? <Text color={SUBTEXT}>{prsReadAt === null ? 'GitHub not read: these may be out of date' : `GitHub not read since ${agoOf(clock - prsReadAt)}: these may be out of date`}</Text> : null}
       <Box flexDirection="column" gap={1}>
         {[...sessionPrs].reverse().map(p => {
@@ -178,44 +174,51 @@ export function prsTab($: EngineInterface, r: Region, p0: PrsState) {
                 ],
                 control: B.Control({ id: key, open: isOpen, onPress: () => void toggleKey(key) }),
               }),
-              // Line 2: the state icon and the title, whole; line 3: what it does, in two sentences, open or closed.
+              // Line 2: the state icon and the title, whole; line 3: what it does, at most two lines, open or closed.
               B.Row({
                 id: `${key}-title`,
                 badge: svg(prIconSvg(p.state), `${word[p.state]}`, 16, `${key}-icon`, undefined, 16) ?? <Text>{word[p.state][0]}</Text>,
                 title: <Text wrap="wrap" dimColor={p.state === 'merged' || p.state === 'closed'}>{p.title}</Text>,
                 body: [
-                  (p.summary ?? '') !== '' && B.Note({ key: `${key}-summary`, children: p.summary }),
+                  (p.summary ?? '') !== '' && B.Note({ key: `${key}-summary`, maxLines: 2, children: p.summary }),
                   // Inside an open card: two tabs, Commits and CI; the choice is kept per pull request.
                   isOpen && (
-                    <Box key={`${key}-open`} flexDirection="column" gap={0} marginTop={1}>
+                    <Box key={`${key}-open`} flexDirection="column" gap={1} marginTop={1}>
                       {B.Tabs({
                         id: `${key}-tabs`,
+                        inset: true,
                         tabs: [
-                          { key: `${key}-b-commits`, icon: '●', label: `Commits ${commits.length}`, on: which === 'commits', onPress: pickTab('commits') },
+                          { key: `${key}-b-commits`, icon: '•', label: `Commits ${commits.length}`, on: which === 'commits', onPress: pickTab('commits') },
                           { key: `${key}-b-ci`, icon: '✓', label: checks.length > 0 ? `CI ${checks.filter(c => c.state === 'passing').length}/${checks.length}` : 'CI', on: which === 'ci', onPress: pickTab('ci') },
                         ],
                       })}
+                      {/* The tab's content sits one row under the divider, in rows of the same shape: a dim key on
+                          the left (the commit's short hash, or the check's state), the name after it. */}
                       {which === 'commits' &&
-                        (commits.length === 0
-                          ? B.Caption({ children: 'No commits read yet.' })
-                          : commits.map(c => (
-                              <Box key={`${key}-c-${c.sha}`} flexDirection="row" gap={1} minWidth={0}>
-                                {B.Caption({ children: c.sha })}
+                        (commits.length === 0 ? (
+                          B.Caption({ children: 'No commits read yet.' })
+                        ) : (
+                          <Box key={`${key}-commits`} flexDirection="column" gap={0} paddingRight={CHEV}>
+                            {commits.map(c => (
+                              <Box key={`${key}-c-${c.sha}`} flexDirection="row" gap={2} minWidth={0}>
+                                <Box flexShrink={0}>{B.Caption({ children: c.sha })}</Box>
                                 <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                                  <Text size="caption" wrap="truncate-end">{c.title}</Text>
+                                  <Text size="caption" color={SUBTEXT} wrap="truncate-end">{c.title}</Text>
                                 </Box>
                               </Box>
-                            )))}
+                            ))}
+                          </Box>
+                        ))}
                       {which === 'ci' && (
-                        <Box flexDirection="column" gap={0}>
+                        <Box key={`${key}-checks`} flexDirection="column" gap={0} paddingRight={CHEV}>
                           {B.Caption({
                             color: p.ci === 'failing' ? 'error' : undefined,
                             children: `${ciWord[p.ci]}${p.ciStart != null ? `  ·  ${durationOf((p.ciEnd ?? clock) - p.ciStart)}` : ''}`,
                           })}
                           {checks.map((c, j) => (
-                            <Box key={`${key}-k-${j}`} flexDirection="row" gap={1} minWidth={0}>
+                            <Box key={`${key}-k-${j}`} flexDirection="row" gap={2} minWidth={0}>
                               <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                                <Text size="caption" wrap="truncate-end">{c.name}</Text>
+                                <Text size="caption" color={SUBTEXT} wrap="truncate-end">{c.name}</Text>
                               </Box>
                               {B.Caption({
                                 color: c.state === 'failing' ? 'error' : c.state === 'running' ? ACCENT_TEXT : undefined,

@@ -119,8 +119,9 @@ export function prRecordOf(ref: string, o: Record<string, unknown>, at: number):
     mergedAt: Number.isFinite(merged) ? merged : null,
     at,
     summary: summaryOf(typeof o.body === 'string' ? o.body : ''),
-    // The key of the title and description the generated summary is made from: a new key means a new summary.
-    summaryKey: keyOf(`${String(o.title ?? '')}\n${typeof o.body === 'string' ? o.body : ''}`),
+    // The key of the title and description the generated summary is made from: a new key means a new summary. The
+    // prompt's version is in the key, so a new prompt writes each summary again once.
+    summaryKey: keyOf(`${SUMMARY_V}\n${String(o.title ?? '')}\n${typeof o.body === 'string' ? o.body : ''}`),
     v: REC_V,
     // The newest 10 commits, newest first, and each check by name with its state, for the card's tabs.
     commits: (Array.isArray(o.commits) ? (o.commits as Record<string, unknown>[]) : [])
@@ -144,6 +145,8 @@ export function keyOf(text: string): string {
 // The summary until Haiku's is ready, and where the marker is off: the description's first two sentences, as plain
 // text. A sentence ends at . ! or ? followed by a space and a capital letter or the end, so "0.12.0" or "machine.ts"
 // never cut one. Headings, lists, links, code and the attribution line go.
+// The summary prompt's version: 2 asks for one short sentence.
+const SUMMARY_V = 2
 export function summaryOf(body: string): string {
   const text = body
     .split('\n')
@@ -302,11 +305,15 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
   const bodies = new Map<string, string>()
   for (const g of got)
     if ('rec' in g && g.rec !== undefined) {
-      recs[g.k] = g.rec
+      // A model summary of the same title and description carries over, so the first write never flickers it back.
+      const old = before[g.k]
+      recs[g.k] = old?.summaryKey === g.rec.summaryKey && old?.summaryBy === 'model' && old.summary ? { ...g.rec, summary: old.summary, summaryBy: 'model' } : g.rec
       bodies.set(g.k, g.body)
     }
-  // Each card's two-sentence summary, written by Haiku inside Claude Code from the title and the description: once per
-  // pull request, and again only when either changes. Until then, and where traffic is off, the first two sentences.
+  // The records go out first, so a new pull request shows at once; the model summaries follow in a second write.
+  await writePrs($, prev, keys, recs, itemRefs, keyOf, t, fails, due.length)
+  // Each card's one-sentence summary, written by Haiku inside Claude Code from the title and the description: once per
+  // pull request, and again only when either changes. Until then, and where traffic is off, the description's first sentences (the card shows two lines).
   // In parallel, and each text tried once per load, so a failing call never repeats every minute.
   await Promise.all(
     keys.map(async k => {
@@ -325,6 +332,11 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
       if (made !== null) recs[k] = { ...rec, summary: made, summaryBy: 'model' }
     }),
   )
+  await writePrs($, await read($, live).catch(() => prev), keys, recs, itemRefs, keyOf, t, fails, due.length)
+}
+
+// Writes the pass's records, CI and freshness to the live state; nothing new writes nothing.
+async function writePrs($: EngineInterface, prev: Live | null, keys: string[], recs: Record<string, PrRecord>, itemRefs: string[], keyOf: (ref: string) => string, t: number, fails: string[], dueCount: number): Promise<void> {
   const kept = Object.fromEntries(keys.filter(k => recs[k] !== undefined).map(k => [k, recs[k] as PrRecord]))
   // The next pass: when the list or a pull request not yet merged or closed is due, and not inside a backoff.
   prNextAt = Math.max(holdUntil, Math.min(listAt + PR_MS, ...keys.filter(k => !prFinal(kept[k])).map(k => (tried.get(k) ?? t) + PR_MS)))
@@ -333,7 +345,7 @@ async function prsOnce($: EngineInterface, force: boolean): Promise<void> {
   // Unread: any GitHub read of this pass failed (auth, permission, rate limit, no gh) or a backoff holds the reads.
   // prsReadAt: the last pass that read GitHub with no failure, so the view can say since when it is not read.
   const unread = t < holdUntil || fails.length > 0
-  const readOk = !unread && (due.length > 0 || listAt === t)
+  const readOk = !unread && (dueCount > 0 || listAt === t)
   const fields = { prRecords: kept, ci, prsUnread: unread, prsReadAt: readOk ? t : (prev?.prsReadAt ?? null) }
   // Nothing new: no write, so the pane does not draw again for nothing.
   if ((Object.keys(fields) as (keyof typeof fields)[]).every(f => JSON.stringify(prev?.[f]) === JSON.stringify(fields[f]))) return
@@ -353,9 +365,9 @@ async function summarize($: EngineInterface, title: string, body: string): Promi
     if (await read($, headless)) return null
     const r = await $.model.complete({
       model: 'haiku',
-      system: 'You summarize a GitHub pull request for a progress pane. Answer with exactly two short plain sentences, present tense, no markdown, no lists, no file names unless essential: what the change does for the person who uses it, then the most important detail.',
+      system: 'You summarize a GitHub pull request for a narrow progress pane. Answer with one plain sentence of at most 18 words, present tense, no markdown, no file names: what the change does for the person who uses it.',
       prompt: `Title: ${title}\n\nDescription:\n${body}`,
-      maxTokens: 160,
+      maxTokens: 60,
       effort: 'low',
       timeoutMs: 30_000,
     })

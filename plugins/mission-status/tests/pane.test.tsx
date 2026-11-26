@@ -458,6 +458,8 @@ test('PRs tab: a pull request the session makes is listed with its state, and it
   await ui.press({ key: 'tab-prs' })
   expect(await text(ui, /^Add the tab$/)).toBe('Add the tab')
   expect(await svgAlt(ui, /^Merged$/)).toBeTruthy()
+  // Each card says its own state: no count line such as "1 merged" above the cards.
+  expect(await text(ui, /^\d+ (merged|open|draft|conflict|closed)/)).toBeUndefined()
   await ui.press({ key: 'open-pr-acme/app#9' })
   // An open card shows two tabs, Commits first; no Details tab.
   expect(((await ui.findAll({ type: 'Box' })) as any[]).some(x => /^tab:.*-b-commits$/.test(String(x.key)) && x.props?.backgroundColor === '#2A2A2A')).toBe(true)
