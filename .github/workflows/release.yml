@@ -37,6 +37,16 @@ jobs:
           version=$(node -p 'require("./plugins/mission-status/.claude-plugin/plugin.json").version')
           tag="v${version}"
           if gh release view "${tag}" >/dev/null 2>&1; then
+            # Two changes can claim one version. If the plugin differs from the
+            # released one, fail so the change is not silently left unshipped.
+            git fetch --depth=1 origin "refs/tags/${tag}:refs/tags/${tag}" || {
+              echo "[$(date -u +%FT%TZ)] could not fetch ${tag} to compare it"
+              exit 1
+            }
+            if ! git diff --quiet "refs/tags/${tag}" "${SHA}" -- plugins/mission-status; then
+              echo "[$(date -u +%FT%TZ)] plugin differs from the released ${tag}: raise the version"
+              exit 1
+            fi
             echo "[$(date -u +%FT%TZ)] ${tag} already exists: nothing to release"
             exit 0
           fi
