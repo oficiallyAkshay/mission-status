@@ -1,10 +1,10 @@
 import { openPane } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
-import type { Summary, Task, Wakeup } from '../types'
+import type { Job, Summary, Task, Wakeup } from '../types'
 import { RULE, UPDATE_TOOL, applyGoal, goalOf, CAP_BYTES, applyPlan, applyUpdate, argsOf, bytesOf, checkUpdate, idOf, normalize, parentLoops, refusalOf, stepsStarted, PR_MAKERS, prRefsIn, prRefsInLines, branchesIn, unionRefs, byteLength, skillSteps, TEMPLATES_KEY, asTemplates, templatesLine } from './model'
 import { paneSeen, poll } from './readers'
-import { CLOCK_MS, PANE, savedKey, TICK_MS, TITLE, afterToolCall, agentUpdated, applyWakeup, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, settle, heldReasons, noteEvent, tick, tickIfTimer } from './store'
+import { CLOCK_MS, PANE, savedKey, TICK_MS, TITLE, afterToolCall, agentUpdated, addJob, applyWakeup, endJobs, jobsAtTurnEnd, atTurnEnd, noteSteps, noteTurnEnd, noteTurnStart, settle, heldReasons, noteEvent, tick, tickIfTimer } from './store'
 import { renderPane } from './view'
 import { UPDATE_SCHEMA } from './update-schema'
 import { registerMetrics } from './metrics'
@@ -19,6 +19,8 @@ const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 // Wakeups the session scheduled: the Watching strip shows each until it is due.
 const wakeups = atom({ plugin: 'mission-status', key: 'wakeups' } as const, [] as Wakeup[])
+// Background jobs in flight: the Watching strip shows them.
+const jobs = atom({ plugin: 'mission-status', key: 'jobs' } as const, [] as Job[])
 // The live facts the state machine reads (store.ts declares the same keys).
 const turnOpen = atom({ plugin: 'mission-status', key: 'turnOpen' } as const, false as boolean)
 // Background work (a shell job, a subagent, a workflow) still in flight when the last turn ended: the work goes on.
@@ -116,6 +118,21 @@ export async function restorePane($: EngineInterface): Promise<boolean> {
     void poll($, true)
   }
   return true
+}
+
+// A background job the session starts (a Bash call in the background, a Monitor) joins the Watching strip; a TaskStop
+// takes it out. Main-loop calls only.
+async function trackJob($: EngineInterface, e: { tool: unknown; agentId?: string }, result: unknown): Promise<void> {
+  try {
+    const args = e as unknown as Record<string, unknown>
+    if (e.agentId !== undefined) return
+    if (String(e.tool) === 'TaskStop') {
+      const id = String(args.task_id ?? args.shell_id ?? '')
+      await update($, jobs, list => (list ?? []).filter(j => j.id !== id))
+    } else {
+      await update($, jobs, list => addJob(list ?? [], String(e.tool), args, JSON.stringify(result ?? ''), Date.now()))
+    }
+  } catch {}
 }
 
 export const register: Register = on => {
@@ -263,6 +280,24 @@ export const register: Register = on => {
     return next(e)
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
+  // A background job the session starts (a Bash call in the background, a Monitor) joins the Watching strip; a
+  // TaskStop takes it out.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    const result = await next(e)
+    await trackJob($, e, result)
+    return result
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+  on('tool.call', { tool: 'Monitor' }, async ($, e, next) => {
+    const result = await next(e)
+    await trackJob($, e, result)
+    return result
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+  on('tool.call', { tool: 'TaskStop' }, async ($, e, next) => {
+    const result = await next(e)
+    await trackJob($, e, result)
+    return result
+  }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
+
   // A wakeup the session schedules shows in the Watching strip until it is due.
   on('tool.call', { tool: 'ScheduleWakeup' }, async ($, e, next) => {
     try {
@@ -285,6 +320,8 @@ export const register: Register = on => {
     const result = await next(e)
     const inFlight = ((e as { background_tasks?: unknown[] }).background_tasks ?? []).length > 0
     await update($, background, () => inFlight).catch(() => undefined)
+    const tasks = (e as { background_tasks?: { id?: unknown; type?: unknown; description?: unknown; command?: unknown }[] }).background_tasks ?? []
+    await update($, jobs, list => jobsAtTurnEnd(list ?? [], tasks, Date.now())).catch(() => undefined)
     if (result.block !== undefined || (await read($, headless))) return result
     const hold = await atTurnEnd($, e.stop_hook_active)
     return hold === null ? result : { ...result, block: hold }
@@ -303,6 +340,8 @@ export const register: Register = on => {
 
   on('prompt.submit', async ($, e, next) => {
     await noteTurnStart($).catch(() => undefined)
+    // A task notification that names a job as ended takes it out of the Watching strip.
+    await update($, jobs, list => endJobs(list ?? [], String((e as unknown as { text?: unknown }).text ?? ''))).catch(() => undefined)
     // A /goal starts the pane with that goal, or sets the goal line of the one that runs.
     try {
       const ev = e as unknown as { text?: unknown; command?: unknown }

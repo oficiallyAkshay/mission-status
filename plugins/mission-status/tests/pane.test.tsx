@@ -568,6 +568,21 @@ test('running helpers show in the Watching strip above the stage cards, not insi
   await ui.unmount()
 })
 
+test('a background shell job shows in the Watching strip while it runs, and leaves when its notification says it completed', async ($, on) => {
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'Command running in background with ID: bjob1234. Output is being written to: /tmp/x' }))
+  await start($, on)
+  await send($, { project: 'P', phases: ['Build', 'Ship'], phase: 0, items: [{ phase: 0, name: 'Code', status: 'now' }] })
+  await $.tool.call({ tool: 'Bash', command: 'gh pr checks 53 --watch', description: 'Watch CI checks', run_in_background: true } as never)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await text(ui, /^Watching · 1$/)).toBeTruthy()
+  expect(await svgAlt(ui, /^Helper Watch CI checks: running$/)).toBeTruthy()
+  await ui.unmount()
+  await $.prompt.submit({ text: '<task-notification><task-id>bjob1234</task-id><status>completed</status></task-notification>' } as never).catch(() => undefined)
+  const after = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await text(after, /^Watching/)).toBeFalsy()
+  await after.unmount()
+})
+
 test('badges and trunk lines draw at a fixed 16 px width, so a column never stretches them', async ($, on) => {
   await start($, on)
   await send($, { project: 'P', stage: 'build', phase: 1, items: [{ phase: 1, name: 'One', status: 'done' }, { phase: 1, name: 'Two', status: 'now' }] })

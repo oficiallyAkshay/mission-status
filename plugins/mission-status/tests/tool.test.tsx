@@ -1,7 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 import { brokenRules, derive, type Facts, itemKey, itemRule, mergeItems, NO_FACTS, type NodeStatus, stageRule, timeOf } from '../hooks/machine'
 import { applyGoal, applyPlan, applyUpdate, goalOf, asTemplates, CAP_BYTES, CHECK_MS, FIRST_REMINDER, HOLD_TEXT, prRefsInTranscript, REMINDER, REMIND_MS, RULE, skillSteps, templatesLine, TURN_TEXT } from '../hooks/model'
-import { applyWakeup, settleRuns } from '../hooks/store'
+import { addJob, applyWakeup, endJobs, jobsAtTurnEnd, settleRuns } from '../hooks/store'
 import { type Item, type Summary, type Task } from '../types'
 
 // Each block below was one test file. The blocks keep their own helpers and state; one file runs in one child.
@@ -834,6 +834,27 @@ test('the owner\'s Plan and Build cards: a task-list step slotted in an earlier 
   const merged = mergeItems(s, steps, { ...NO_FACTS, turnOpen: true })
   expect(merged.filter(x => /site/i.test(x.name)).map(x => x.name)).toEqual(['Site update'])
   expect(merged.filter(x => /watches/i.test(x.name)).map(x => x.name)).toEqual(['Watches strip'])
+})
+
+test('jobs: a background Bash call and a Monitor join the strip by the id their result names; a foreground call does not', () => {
+  const res = 'Command running in background with ID: b2aw45xp4. Output is being written to: /tmp/x'
+  const one = addJob([], 'Bash', { command: 'gh pr checks 53 --watch', description: 'Watch CI checks', run_in_background: true }, res, 1000)
+  expect(one).toEqual([{ id: 'b2aw45xp4', kind: 'shell', description: 'Watch CI checks', at: 1000 }])
+  expect(addJob([], 'Bash', { command: 'ls' }, res, 1000)).toEqual([])
+  expect(addJob(one, 'Bash', { description: 'again', run_in_background: true }, res, 2000)).toBe(one)
+  expect(addJob([], 'Monitor', { description: 'Deploy log' }, 'Monitor started (ID: mon_1234)', 1000).map(j => j.kind)).toEqual(['monitor'])
+})
+
+test('jobs: the turn-end list replaces the kept one, keeps start times, and leaves subagents to the helper list', () => {
+  const kept = [{ id: 'b1', kind: 'shell', description: 'Watch CI', at: 1000 }, { id: 'gone', kind: 'shell', description: 'Old', at: 500 }]
+  const next = jobsAtTurnEnd(kept, [{ id: 'b1', type: 'shell', description: 'x' }, { id: 'a1', type: 'subagent', description: 'Review' }, { id: 'm1', type: 'monitor', description: 'Deploy log' }], 3000)
+  expect(next).toEqual([{ id: 'b1', kind: 'shell', description: 'Watch CI', at: 1000 }, { id: 'm1', kind: 'monitor', description: 'Deploy log', at: 3000 }])
+})
+
+test('jobs: a task notification that names a job as completed takes it out; a running one stays', () => {
+  const kept = [{ id: 'b1', kind: 'shell', description: 'A', at: 1 }, { id: 'b2', kind: 'shell', description: 'B', at: 1 }]
+  expect(endJobs(kept, '<task-notification><task-id>b1</task-id><status>completed</status></task-notification>').map(j => j.id)).toEqual(['b2'])
+  expect(endJobs(kept, 'no notification here')).toBe(kept)
 })
 
 test('parallel lets an item run beside the one before it; without it, it waits', () => {

@@ -74,6 +74,8 @@ export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: numbe
 export type Runs = Record<string, { ms: number; from: number | null }>
 // A wakeup the session scheduled: why, and when it is due.
 export type Wakeup = { reason: string; due: number; at: number }
+// A background job the session runs (a shell, a Monitor, a workflow): the app's helper list holds only subagents.
+export type Job = { id: string; kind: string; description: string; at: number }
 export type Helper = { id: string; description: string; status: string; model: string | null; startTime: number }
 // One pull request's record, keyed owner/name#number: the one read the item chip, the PRs tab and the Deploy count use.
 export type PrRecord = { ref: string; number: number; title: string; url: string; state: 'open' | 'draft' | 'merged' | 'closed' | 'conflict'; ci: 'running' | 'passing' | 'failing' | 'none'; ciStart?: number | null; ciEnd?: number | null; branch: string | null; mergedAt: number | null; at: number; summary?: string; summaryBy?: 'model' | 'text'; summaryKey?: string; v?: number; commits?: { sha: string; title: string }[]; checks?: { name: string; state: 'running' | 'passing' | 'failing' | 'none' }[] }
@@ -93,7 +95,9 @@ declare module 'claude-code' {
       // The marker's kept marks (marker.ts); the state machine reads them.
       marks: Marks | null
       // Wakeups the session scheduled (ScheduleWakeup); the Watching strip shows the ones still due.
-      wakeups: Wakeup[] }
+      wakeups: Wakeup[]
+      // Background jobs in flight (store.ts addJob, jobsAtTurnEnd, endJobs); the Watching strip shows them.
+      jobs: Job[] }
 
   }
 }

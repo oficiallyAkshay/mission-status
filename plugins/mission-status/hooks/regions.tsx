@@ -1,6 +1,6 @@
 import { atom, update } from 'claude-code'
 import type { EngineInterface, RenderChildren } from 'claude-code'
-import type { Count, HypothesisState, Helper, Item, PrRecord, Runbook, RunbookStep, Wakeup } from '../types'
+import type { Count, HypothesisState, Helper, Item, Job, PrRecord, Runbook, RunbookStep, Wakeup } from '../types'
 import { stepsRailSvg, prIconSvg, badgeSvg, exitSvg, flowLineSvg, waitsLineSvg } from './bars'
 import { age, cap } from './model'
 import type { deriveNow } from './store'
@@ -240,6 +240,7 @@ export type StageState = {
   t: number
   running: Helper[]
   due: Wakeup[]
+  jobs: Job[]
   hostKey: string | null
   stageState: (k: number) => 'done' | 'now' | 'next'
   stageTimeText: (k: number, st: NodeStatus) => string | null
@@ -335,11 +336,12 @@ export function foldedCard(r: Region, c: StageState, name: string, k: number, ga
 // hold the work; the strip holds what waits in the background. Nothing shows when nothing watches.
 export function watchStrip(r: Region, c: StageState): RenderChildren {
   const { Box, Text, B, hasSvg } = r
-  const { running, due, t } = c
-  if (running.length === 0 && due.length === 0) return null
+  const { running, due, jobs, t } = c
+  if (running.length === 0 && due.length === 0 && jobs.length === 0) return null
   const MAX = 6
   const rows = [
     ...running.map(x => ({ id: x.id, description: x.description, model: x.model, time: age(x.startTime, t) })),
+    ...jobs.map(j => ({ id: j.id, description: j.description, model: j.kind, time: age(j.at, t) })),
     ...due.map(w => ({ id: `wake-${w.at}`, description: w.reason, model: 'wakeup', time: `in ${durationOf(Math.max(0, w.due - t))}` })),
   ]
   return (
