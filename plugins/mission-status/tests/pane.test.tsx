@@ -15,6 +15,7 @@ const start = async ($: any, on: any, agents: unknown[] = [], skipProcess = fals
   on('tool.register', () => ({ value: {} }))
   on('command.register', () => ({ value: { command: 'mission-status' } }))
   on('ui.open', () => ({ value: { isPlaced: true } }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
   on('agent.list', () => ({ value: agents }))
   on('clock.every', () => ({ value: () => {} }))
   if (!skipProcess) on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
@@ -611,4 +612,26 @@ test('the header says Live while a turn runs, and after it ends the age of the n
   expect(await text(ui, /^Live$/)).toBeUndefined()
   expect(await text(ui, /^\d+s ago$/)).toBeTruthy()
   await ui.unmount()
+})
+
+test('no surface attached: the pane never asks to open, so the app prints no "no surface" line', async ($, on) => {
+  const asked: string[] = []
+  on('tool.register', () => ({ value: {} }))
+  on('command.register', () => ({ value: { command: 'mission-status' } }))
+  on('ui.open', (_: unknown, e: { id: string }) => (asked.push(e.id), { value: { isPlaced: true } }))
+  on('session.surfaces', () => ({ value: [] }))
+  on('agent.list', () => ({ value: [] }))
+  on('clock.every', () => ({ value: () => {} }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
+  on('turn.start', (_: unknown, e: { turnId: string }) => ({ turnId: e.turnId }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'ok' }))
+  await $.session.start({ cwd: '/', surface: null, isInteractive: false })
+  await $.turn.start({ text: 'go', turnId: 'turn-1' } as never)
+  // The 5th tool call would open the pane by itself; the agent's first update would too.
+  for (let k = 0; k < 6; k++) await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
+  await send($, { project: 'P', phases: ['Plan', 'Build'], phase: 0 })
+  const out = (await $.command.run({ command: 'mission-status', args: '' } as never)) as { text?: string }
+  expect(asked).toEqual([])
+  expect(out?.text ?? '').toMatch(/no app window is attached/)
 })

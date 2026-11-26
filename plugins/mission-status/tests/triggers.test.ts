@@ -9,6 +9,7 @@ const start = async ($: any, on: any) => {
   watch(on)
   on('tool.register', () => ({ value: {} }))
   on('command.register', () => ({ value: { command: 'mission-status' } }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
   on('ui.open', (_: unknown, e: { id: string }) => {
     opened.push(e.id)
     return { value: { isPlaced: true } }

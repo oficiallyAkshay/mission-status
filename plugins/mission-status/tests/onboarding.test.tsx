@@ -23,12 +23,15 @@ const start = async ($: any, on: any, opts: { surface?: string | null; onboarded
   on('ui.close', (_: unknown, e: { id: string }) => (log.closed.push(e.id), { value: undefined }))
   on('theme.set', (_: unknown, e: unknown) => (log.themes.push(e), { value: { isDrawn: true, requestId: 'backdrop' } }))
   on('theme.clear', () => (log.clears++, { value: { isDrawn: false, reason: 'cleared' } }))
-  on('session.surfaces', () => ({ value: opts.surfaces ?? [] }))
+  // The surfaces the session draws on: the one it started on and any that attach later, as the app reports them.
+  const attached: string[] = []
+  const startSurface = opts.surface === undefined ? 'desktop' : opts.surface
+  on('session.surfaces', () => ({ value: opts.surfaces ?? [...(startSurface === null ? [] : [startSurface]), ...attached] }))
   on('agent.list', () => ({ value: [] }))
   on('clock.every', (_: unknown, e: { ms: number }) => (log.clocks.push(e.ms), { value: {} }))
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
-  on('session.attach', (_: unknown, e: { clientId: string }) => ({ clientId: e.clientId }))
+  on('session.attach', (_: unknown, e: { clientId: string; surface: string }) => (attached.push(e.surface), { clientId: e.clientId }))
   // Each write passes through to the store; the test keeps a copy.
   on('state.set', { plugin: 'mission-status' }, (_: unknown, e: { key: string; value: unknown }, next: any) => {
     ;(log.writes[e.key] ??= []).push(e.value)
@@ -260,6 +263,7 @@ const asAccount = async ($: any, on: any, email: string, kept: Record<string, un
   on('tool.register', () => ({ value: {} }))
   on('command.register', () => ({ value: { command: 'x' } }))
   on('ui.open', (_: unknown, e: { id: string }) => (opened.push(e.id), { value: { isPlaced: true } }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
   on('theme.set', () => ({ value: { isDrawn: true, requestId: 'b' } }))
   on('agent.list', () => ({ value: [] }))
   on('clock.every', () => ({ value: {} }))

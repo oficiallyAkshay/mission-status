@@ -1,3 +1,4 @@
+import { openPane } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { Activity, Count, Fresh, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Marks, Pr, Runs, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
@@ -255,7 +256,7 @@ export async function afterToolCall($: EngineInterface): Promise<string | null> 
     })
     if (done.wrote) {
       await update($, tasks, () => built.steps)
-      await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+      await openPane($, { id: PANE, title: TITLE })
     }
   }
   await markOutOfDate($, f)

@@ -10,6 +10,7 @@ test('a local Markdown link opens the document pane, which draws the file as Mar
   const opened: string[] = []
   on('tool.register', () => ({ value: {} }))
   on('command.register', () => ({ value: { command: 'x' } }))
+  on('session.surfaces', () => ({ value: ['desktop'] }))
   on('ui.open', (_: unknown, e: { id: string }) => {
     opened.push(e.id)
     return { value: { isPlaced: true } }
