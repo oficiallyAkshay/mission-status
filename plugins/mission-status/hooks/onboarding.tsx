@@ -1,3 +1,4 @@
+import { openPane } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 import {
@@ -138,7 +139,7 @@ async function begin($: EngineInterface): Promise<void> {
   goTo($, 0)
   startDemo($)
   await setBackdrop($).catch(() => undefined)
-  await $.ui.open({ id: WELCOME_PANE, title: WELCOME_TITLE }).catch(() => undefined)
+  await openPane($, { id: WELCOME_PANE, title: WELCOME_TITLE })
 }
 
 async function finish($: EngineInterface, closePane: boolean): Promise<void> {
@@ -169,20 +170,24 @@ export function registerOnboarding(on: On): void {
     await $.command.register({ name: 'mission-status-welcome', description: 'Show the mission-status welcome again' }).catch(() => undefined)
     // A store that cannot be read leaves the session's own values.
     await hydrate($).catch(() => undefined)
+    // The session starts first, so its surface is attached when the Welcome pane asks to open.
+    const out = await next(e)
     try {
       if (!(await read($, onboarded)) && (await isDesktop($, e.surface))) await begin($)
     } catch {
       // The onboarding is a nicety: a failure never holds up the session.
     }
-    return next(e)
+    return out
   })
 
   // The desktop app can attach after the session starts.
   on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
+    // The attach completes first, so the app lists the new surface when the Welcome pane asks to open.
+    const out = await next(e)
     try {
       if (!isActive && !(await read($, onboarded))) await begin($)
     } catch {}
-    return next(e)
+    return out
   })
 
   on('command.run', { command: 'mission-status-welcome' }, async $ => {

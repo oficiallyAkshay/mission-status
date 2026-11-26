@@ -1,3 +1,4 @@
+import { openPane } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 import type { CardLink, Activity, Count, Git, Helper, Hypothesis, HypothesisState, Item, ItemStatus, Live, Pr, StageKey, StepStatus, Summary, Task, Ticket } from '../types'
@@ -350,7 +351,7 @@ export const register: Register = on => {
     await restorePane($).catch(() => false)
     if ((await read($, summary)) !== null && !(await read($, holdback))) {
       await paneSeen($).catch(() => undefined)
-      void $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+      void openPane($, { id: PANE, title: TITLE })
     }
     return next(e)
   })
@@ -525,7 +526,7 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'mission-status' }, async $ => {
-    await $.ui.open({ id: PANE, title: TITLE })
+    if (!(await openPane($, { id: PANE, title: TITLE }))) return { text: 'The Mission status pane opens in the Claude desktop app; no app window is attached here.' }
     await paneSeen($).catch(() => undefined)
     void poll($)
     return { text: 'The Mission status pane is open.' }
@@ -574,7 +575,7 @@ export const register: Register = on => {
     await tick($)
     // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
     if (!(await read($, holdback))) {
-      await $.ui.open({ id: PANE, title: TITLE }).catch(() => undefined)
+      await openPane($, { id: PANE, title: TITLE })
       await paneSeen($).catch(() => undefined)
     }
     // Each agent update reads GitHub at once: pull requests, CI and merges.

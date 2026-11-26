@@ -1,3 +1,4 @@
+import { openPane } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
@@ -21,7 +22,7 @@ export function isOpenable(path: string, cwd: string, home: string): boolean {
 export async function openDoc($: EngineInterface, title: string, path: string): Promise<void> {
   await update($, doc, () => ({ title, path }))
   // focus asks the app to raise the pane, so the press shows the document at once.
-  await $.ui.open({ id: DOC_PANE, title, focus: true }).catch(() => undefined)
+  await openPane($, { id: DOC_PANE, title, focus: true })
 }
 
 export function registerDoc(on: On): void {
