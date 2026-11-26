@@ -486,6 +486,7 @@ section.hero .chat-head { justify-content: flex-start; }
 /* Ready-made shapes, or your own. */
 .subs-sub { margin: -12px 0 28px; color: var(--muted); font-size: 18px; }
 .subs-grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.sub-tile.wide { grid-column: 1 / -1; }
 .shapes { display: grid; gap: 9px; margin-top: 6px; }
 .own { display: grid; gap: 8px; min-height: 250px; align-content: start; margin-top: 6px; }
 .own-save { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-top: 12px !important; }
