@@ -97,17 +97,34 @@ export function trackSvg(input: TrackInput): string {
   )
 }
 
-export type StripInput = { title: string; detail: string | null; state: 'running' | 'done' | 'failed'; time: string }
+// The time is optional: the pane draws a live timer as text beside the strip, because a timer inside the picture
+// changes its source every second, and every change restarts the spinner.
+// Where a looping animation stands now on the wall clock, as an SVG begin time. The app rebuilds a picture on its
+// redraws, and a rebuilt picture starts its animation at its begin time. A begin taken from the wall clock puts every
+// rebuild at the place the turn or pulse had reached, so it runs on unbroken; a fixed begin made it start over.
+export function phaseBegin(now: number, durMs: number, offsetMs = 0): string {
+  const at = (((now - offsetMs) % durMs) + durMs) % durMs
+  return `-${(at / 1000).toFixed(3)}s`
+}
+
+// The width a shimmering step name needs at 12 px, letter by letter: narrow, wide and capital letters differ, so a
+// flat per-letter guess either clips a name ("Gamma") or leaves wide gaps between names.
+const NARROW = new Set([...'iljtfr.,:;!|\' '])
+const WIDE = new Set([...'mwMW'])
+export const pulseWidth = (name: string) =>
+  Math.ceil([...name].reduce((sum, ch) => sum + 12 * (NARROW.has(ch) ? 0.3 : WIDE.has(ch) ? 0.85 : ch >= 'A' && ch <= 'Z' ? 0.68 : /\d/.test(ch) ? 0.6 : 0.56), 0)) + 2
+
+export type StripInput = { title: string; detail: string | null; state: 'running' | 'done' | 'failed'; time?: string; now?: number }
 
 // One agent strip: a rounded row; a running one carries the dither and a spinner, a finished one a tint and a dot.
-export function stripSvg({ title, detail, state, time }: StripInput): string {
+export function stripSvg({ title, detail, state, time = '', now = 0 }: StripInput): string {
   const H = 22
-  const id = uid(title,detail,state,time)
+  const id = uid(title,detail,state,time,now)
   const tint = state === 'running' ? ACCENT : state === 'done' ? GREEN : '#D67278'
   const mark =
     state === 'running'
-      ? // Turns once every 1.2 s, started at the wall clock's place in that turn, so a redraw does not jump.
-        `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" begin="0s" repeatCount="indefinite"/></circle>`
+      ? // Turns once every 1.2 s, from the wall clock's place in that turn, so a rebuild picks up where the turn was.
+        `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" begin="${phaseBegin(now, 1200)}" repeatCount="indefinite"/></circle>`
       : `<circle cx="12" cy="${H / 2}" r="3.5" fill="${tint}"/>`
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">` +
@@ -117,7 +134,7 @@ export function stripSvg({ title, detail, state, time }: StripInput): string {
     `<g clip-path="url(#${id}r)"><rect width="100%" height="${H}" fill="${tint}" fill-opacity=".14"/>${state === 'running' ? dither(`${id}d`, '70%', H, tint, 0.55, 0) : ''}</g>` +
     mark +
     `<text x="24" y="${H / 2 + 4}" style="font:500 12px ${FONT}"><tspan class="i">${esc(title)}</tspan>${detail ? `<tspan class="d"> (${esc(detail)})</tspan>` : ''}</text>` +
-    `<text x="100%" dx="-10" y="${H / 2 + 4}" text-anchor="end" class="d" style="font:400 11px ${FONT}">${esc(time)}</text>` +
+    (time === '' ? '' : `<text x="100%" dx="-10" y="${H / 2 + 4}" text-anchor="end" class="d" style="font:400 11px ${FONT}">${esc(time)}</text>`) +
     `</svg>`
   )
 }
@@ -153,12 +170,11 @@ export function badgeSvg(state: 'done' | 'now' | 'next' | 'dot', clock: number, 
       `<circle cx="${c}" cy="${c}" r="${c - 1}" fill="url(#${id}g)"/><path d="M${c - S * 0.2125} ${c + S * 0.0125}l${S * 0.15} ${S * 0.15} ${S * 0.275}-${S * 0.3}" fill="none" stroke="#fff" stroke-width="${S / 10}" stroke-linecap="round" stroke-linejoin="round"/></svg>`
     )
   if (state === 'now') {
-    // A circle spinner: a faint ring with a bright arc that turns once a second. Its source never changes, so the app
-    // keeps the same drawing across redraws and the turn runs on unbroken. (A start point taken from the clock changed
-    // the source every second, and every change restarted the drawing: the stutter.)
+    // A circle spinner: a faint ring with a bright arc that turns once a second, from the wall clock's place in
+    // that turn (clock), so a rebuilt picture picks up where the turn was instead of starting over.
     const r = c - 2
     const arc = 2 * Math.PI * r
-    const begin = '0s'
+    const begin = phaseBegin(clock, 1000)
     return (
       `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}}</style>` +
       `<circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".22" stroke-width="2"/>` +
@@ -292,14 +308,26 @@ export function prIconSvg(state: 'merged' | 'open' | 'draft' | 'conflict' | 'clo
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${body}</svg>`
 }
 
-// One sub-step's name, for an item's steps line. A running one pulses its opacity; k delays the pulse by a quarter second
-// a place, so sub-steps that run in parallel pulse together with an offset, never one after another.
-export function stepPulseSvg(name: string, k: number, running: boolean): string {
-  const w = textWidth(name, 12) + 2
-  const pulse = running ? `<animate attributeName="opacity" values="1;.35;1" dur="1.6s" begin="${(k * 0.25).toFixed(2)}s" repeatCount="indefinite"/>` : ''
+// One sub-step's name, for an item's steps line. A running one shimmers: a light band sweeps across it from left to
+// right every 1.6 s. k delays the sweep by a quarter second a place, so names that run in parallel shimmer one after
+// another along the line. The sweep starts at the wall clock's place in its cycle, so a redraw never restarts it.
+export function stepPulseSvg(name: string, k: number, running: boolean, now = 0): string {
+  const w = pulseWidth(name)
+  const style =
+    `<style>.sp{fill:rgba(128,128,128,.75)}.s0{stop-color:rgb(128,128,128);stop-opacity:.75}.s1{stop-color:#F0EEFC;stop-opacity:1}` +
+    `@media (prefers-color-scheme:light){.sp{fill:${LIGHT.grey}}.s0{stop-color:${LIGHT.grey};stop-opacity:1}.s1{stop-color:${LIGHT.ink}}}</style>`
+  if (!running)
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="16">${style}<text class="sp" x="0" y="12" style="font:400 12px ${FONT}">${esc(name)}</text></svg>`
+  // The band is 36 px wide and travels from fully left of the name to fully right of it; outside the band the
+  // gradient's end colour (the plain grey) fills the rest of the name.
+  const B = 36
+  const id = uid('shimmer', name, w)
   return (
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="16">` +
-    `<style>.sp{fill:rgba(128,128,128,.75)}@media (prefers-color-scheme:light){.sp{fill:${LIGHT.grey}}}</style>` +
-    `<text class="sp" x="0" y="12" style="font:400 12px ${FONT}">${esc(name)}${pulse}</text></svg>`
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="16">${style}` +
+    `<defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" x2="${B}" y1="0" y2="0">` +
+    `<stop class="s0" offset="0"/><stop class="s1" offset=".5"/><stop class="s0" offset="1"/>` +
+    `<animateTransform attributeName="gradientTransform" type="translate" values="${-B};${w + B}" dur="1.6s" begin="${phaseBegin(now, 1600, k * 250)}" repeatCount="indefinite"/>` +
+    `</linearGradient></defs>` +
+    `<text x="0" y="12" fill="url(#${id})" style="font:400 12px ${FONT}">${esc(name)}</text></svg>`
   )
 }

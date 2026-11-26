@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, RenderChildren, RenderInput, SvgProps } from 'claude-code'
 import type { Count, Item, ItemStatus, Live, PrRecord, Runs } from '../types'
-import { prIconSvg, badgeSvg, failedBadgeSvg, needsBadgeSvg, stepPulseSvg, textWidth, waitsLineSvg, stripSvg } from './bars'
+import { prIconSvg, badgeSvg, failedBadgeSvg, needsBadgeSvg, stepPulseSvg, pulseWidth, waitsLineSvg, stripSvg } from './bars'
 import { age, cap, findRef, workOrder } from './model'
 import { deriveNow } from './store'
 import { type NodeStatus, type Timing, itemKey, stageKey, timeOf } from './machine'
@@ -131,7 +131,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     // The badge: a spinner only while it runs; open work shows a still dot.
     const badgeOf = (st: NodeStatus): 'done' | 'now' | 'next' | 'dot' => (st === 'running' ? 'now' : st === 'open' || st === 'failed' || st === 'needs' ? 'dot' : st)
     // A node's badge drawing: a failure and a wait on the person each have their own mark.
-    const badgeFor = (st: NodeStatus, size = 16) => (st === 'failed' ? failedBadgeSvg(size) : st === 'needs' ? needsBadgeSvg(size) : badgeSvg(badgeOf(st), 0, size))
+    const badgeFor = (st: NodeStatus, size = 16) => (st === 'failed' ? failedBadgeSvg(size) : st === 'needs' ? needsBadgeSvg(size) : badgeSvg(badgeOf(st), Date.now(), size))
     // The status word for a wait on the person, in the meta column of its row.
     const needsWord = (st: NodeStatus, key: string) => st === 'needs' && B.Caption({ key: `${key}-needs`, color: 'warning', children: 'Needs you' })
 
@@ -289,7 +289,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
               (x.steps ?? []).length > 0 && x.stepsParallel === true && Svg !== undefined &&
                 B.ChipRow({
                   id: `${key}-psteps`,
-                  children: (x.steps ?? []).map((name, j) => svg(stepPulseSvg(name, j, st === 'running'), name, 16, `${key}-pstep-${j}`, undefined, textWidth(name, 12) + 2)),
+                  children: (x.steps ?? []).map((name, j) => svg(stepPulseSvg(name, j, st === 'running', Date.now()), name, 16, `${key}-pstep-${j}`, undefined, pulseWidth(name))),
                 }),
               // Sub-sub-steps in order, on one dot-separated line: the one that runs now in full-opacity body text, the
               // rest faint.
@@ -303,8 +303,12 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
                 }),
               // The helpers the session runs now sit under the item in progress, as its children.
               ...helpers.slice(0, 6).map(helper => (
-                <Box key={`${key}-helper-${helper.id}`} paddingRight={CHEV} minWidth={0}>
-                  {svg(stripSvg({ title: cap(helper.description), detail: helper.model, state: 'running', time: age(helper.startTime, t) }), `Helper ${helper.description}: running`, 22, `strip-${helper.id}`)}
+                // The timer is text beside the strip, so the strip's source never changes and its spinner never restarts.
+                <Box key={`${key}-helper-${helper.id}`} flexDirection="row" alignItems="center" gap={1} paddingRight={CHEV} minWidth={0}>
+                  <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                    {svg(stripSvg({ title: cap(helper.description), detail: helper.model, state: 'running', now: Date.now() }), `Helper ${helper.description}: running`, 22, `strip-${helper.id}`)}
+                  </Box>
+                  {B.Time({ key: `${key}-helper-${helper.id}-time`, children: age(helper.startTime, t) })}
                 </Box>
               )),
               helpers.length > 6 && B.Caption({ key: `${key}-more`, children: `${helpers.length - 6} more helpers run.` }),

@@ -51,15 +51,22 @@ function trackSvg(input) {
   const shimmer = `<defs><pattern id="${id}st" width="15" height="9" patternUnits="userSpaceOnUse"><rect x="3" width="2" height="2" fill="#fff"/><rect x="9" y="3" width="2" height="2" fill="#fff"/><rect y="6" width="2" height="2" fill="#fff"/><rect x="12" y="6" width="2" height="2" fill="#fff"/></pattern></defs>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}">${shimmer}${nameStyle}<defs><clipPath id="${id}k"><rect width="100%" height="${H}" rx="6"/></clipPath></defs><g clip-path="url(#${id}k)"><rect width="100%" height="${H}" fill="#808080" fill-opacity=".16"/><rect width="${pct(fill)}" height="${H}" fill="${color}" fill-opacity=".22"/>${dither(`${id}d`, pct(fill), H, color)}${marks}</g>${label === "" ? "" : pill}` + tips.map((tip, k) => tip === "" ? "" : `<rect x="${pct(at(k))}" width="${pct(span(k))}" height="${H}" fill="#000" fill-opacity="0"><title>${esc(tip)}</title></rect>`).join("") + `</svg>`;
 }
-function stripSvg({ title, detail, state, time }) {
+function phaseBegin(now, durMs, offsetMs = 0) {
+  const at = ((now - offsetMs) % durMs + durMs) % durMs;
+  return `-${(at / 1e3).toFixed(3)}s`;
+}
+const NARROW = /* @__PURE__ */ new Set([..."iljtfr.,:;!|' "]);
+const WIDE = /* @__PURE__ */ new Set([..."mwMW"]);
+const pulseWidth = (name) => Math.ceil([...name].reduce((sum, ch) => sum + 12 * (NARROW.has(ch) ? 0.3 : WIDE.has(ch) ? 0.85 : ch >= "A" && ch <= "Z" ? 0.68 : /\d/.test(ch) ? 0.6 : 0.56), 0)) + 2;
+function stripSvg({ title, detail, state, time = "", now = 0 }) {
   const H = 22;
-  const id = uid(title, detail, state, time);
+  const id = uid(title, detail, state, time, now);
   const tint = state === "running" ? ACCENT : state === "done" ? GREEN : "#D67278";
   const mark = state === "running" ? (
-    // Turns once every 1.2 s, started at the wall clock's place in that turn, so a redraw does not jump.
-    `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" begin="0s" repeatCount="indefinite"/></circle>`
+    // Turns once every 1.2 s, from the wall clock's place in that turn, so a rebuild picks up where the turn was.
+    `<circle cx="12" cy="${H / 2}" r="3.5" fill="none" stroke="${tint}" stroke-width="1.6" stroke-dasharray="14 8"><animateTransform attributeName="transform" type="rotate" from="0 12 ${H / 2}" to="360 12 ${H / 2}" dur="1.2s" begin="${phaseBegin(now, 1200)}" repeatCount="indefinite"/></circle>`
   ) : `<circle cx="12" cy="${H / 2}" r="3.5" fill="${tint}"/>`;
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}"><style>.i{fill:#F0EEFC}.d{fill:#A7A5AE}@media (prefers-color-scheme:light){.i{fill:#222226}.d{fill:#5B5B5E}}</style><defs><clipPath id="${id}r"><rect width="100%" height="${H}" rx="6"/></clipPath></defs><g clip-path="url(#${id}r)"><rect width="100%" height="${H}" fill="${tint}" fill-opacity=".14"/>${state === "running" ? dither(`${id}d`, "70%", H, tint, 0.55, 0) : ""}</g>` + mark + `<text x="24" y="${H / 2 + 4}" style="font:500 12px ${FONT}"><tspan class="i">${esc(title)}</tspan>${detail ? `<tspan class="d"> (${esc(detail)})</tspan>` : ""}</text><text x="100%" dx="-10" y="${H / 2 + 4}" text-anchor="end" class="d" style="font:400 11px ${FONT}">${esc(time)}</text></svg>`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="${H}"><style>.i{fill:#F0EEFC}.d{fill:#A7A5AE}@media (prefers-color-scheme:light){.i{fill:#222226}.d{fill:#5B5B5E}}</style><defs><clipPath id="${id}r"><rect width="100%" height="${H}" rx="6"/></clipPath></defs><g clip-path="url(#${id}r)"><rect width="100%" height="${H}" fill="${tint}" fill-opacity=".14"/>${state === "running" ? dither(`${id}d`, "70%", H, tint, 0.55, 0) : ""}</g>` + mark + `<text x="24" y="${H / 2 + 4}" style="font:500 12px ${FONT}"><tspan class="i">${esc(title)}</tspan>${detail ? `<tspan class="d"> (${esc(detail)})</tspan>` : ""}</text>` + (time === "" ? "" : `<text x="100%" dx="-10" y="${H / 2 + 4}" text-anchor="end" class="d" style="font:400 11px ${FONT}">${esc(time)}</text>`) + `</svg>`;
 }
 function badgeSvg(state, clock, size = 20, up, down) {
   if (up !== void 0 || down !== void 0) {
@@ -78,7 +85,7 @@ function badgeSvg(state, clock, size = 20, up, down) {
   if (state === "now") {
     const r = c - 2;
     const arc = 2 * Math.PI * r;
-    const begin = "0s";
+    const begin = phaseBegin(clock, 1e3);
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>@media (prefers-color-scheme:light){.ba{stroke:${LIGHT.accent}}}</style><circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-opacity=".22" stroke-width="2"/><circle class="ba" cx="${c}" cy="${c}" r="${r}" fill="none" stroke="${ACCENT}" stroke-width="2" stroke-linecap="round" stroke-dasharray="${(arc * 0.28).toFixed(2)} ${arc.toFixed(2)}"><animateTransform attributeName="transform" type="rotate" from="0 ${c} ${c}" to="360 ${c} ${c}" dur="1s" begin="${begin}" repeatCount="indefinite"/></circle></svg>`;
   }
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${S}" height="${S}"><style>.bn{stroke:#A8A69E;stroke-opacity:.55}@media (prefers-color-scheme:light){.bn{stroke:${LIGHT.grey};stroke-opacity:.8}}</style><circle class="bn" cx="${c}" cy="${c}" r="${c - 2.5}" fill="none" stroke-width="1.5"/></svg>`;
@@ -152,10 +159,14 @@ function prIconSvg(state) {
   );
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${body}</svg>`;
 }
-function stepPulseSvg(name, k, running) {
-  const w = textWidth(name, 12) + 2;
-  const pulse = running ? `<animate attributeName="opacity" values="1;.35;1" dur="1.6s" begin="${(k * 0.25).toFixed(2)}s" repeatCount="indefinite"/>` : "";
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="16"><style>.sp{fill:rgba(128,128,128,.75)}@media (prefers-color-scheme:light){.sp{fill:${LIGHT.grey}}}</style><text class="sp" x="0" y="12" style="font:400 12px ${FONT}">${esc(name)}${pulse}</text></svg>`;
+function stepPulseSvg(name, k, running, now = 0) {
+  const w = pulseWidth(name);
+  const style = `<style>.sp{fill:rgba(128,128,128,.75)}.s0{stop-color:rgb(128,128,128);stop-opacity:.75}.s1{stop-color:#F0EEFC;stop-opacity:1}@media (prefers-color-scheme:light){.sp{fill:${LIGHT.grey}}.s0{stop-color:${LIGHT.grey};stop-opacity:1}.s1{stop-color:${LIGHT.ink}}}</style>`;
+  if (!running)
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="16">${style}<text class="sp" x="0" y="12" style="font:400 12px ${FONT}">${esc(name)}</text></svg>`;
+  const B = 36;
+  const id = uid("shimmer", name, w);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="16">${style}<defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="0" x2="${B}" y1="0" y2="0"><stop class="s0" offset="0"/><stop class="s1" offset=".5"/><stop class="s0" offset="1"/><animateTransform attributeName="gradientTransform" type="translate" values="${-B};${w + B}" dur="1.6s" begin="${phaseBegin(now, 1600, k * 250)}" repeatCount="indefinite"/></linearGradient></defs><text x="0" y="12" fill="url(#${id})" style="font:400 12px ${FONT}">${esc(name)}</text></svg>`;
 }
 export {
   DARK_PAGE,
@@ -165,7 +176,9 @@ export {
   failedBadgeSvg,
   flowLineSvg,
   needsBadgeSvg,
+  phaseBegin,
   prIconSvg,
+  pulseWidth,
   stepPulseSvg,
   stepsRailSvg,
   stripSvg,
