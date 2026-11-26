@@ -80,7 +80,7 @@ export type Runs = Record<string, { ms: number; from: number | null }>
 export type Wakeup = { reason: string; due: number; at: number }
 // A background job the session runs (a shell, a Monitor, a workflow): the app's helper list holds only subagents.
 export type WatchShape = 'until' | 'stream' | 'trend'
-export type Job = { id: string; kind: string; description: string; at: number; path?: string | null; read?: number; shape?: WatchShape | null; hits?: number; last?: string | null; lastAt?: number | null; values?: number[]; progress?: string | null; endedAt?: number | null; outcome?: 'hit' | 'done' | 'failed' | null }
+export type Job = { id: string; kind: string; description: string; command?: string | null; at: number; path?: string | null; read?: number; shape?: WatchShape | null; hits?: number; last?: string | null; lastAt?: number | null; values?: number[]; progress?: string | null; endedAt?: number | null; outcome?: 'hit' | 'done' | 'failed' | null }
 // A watch the agent reports through the update tool. job: the background job it names, so that job's row takes
 // this name and shape. status: running, hit (an until watch found what it waited for) or ended.
 export type AgentWatch = { id: string; name: string; shape?: WatchShape | null; status?: 'running' | 'hit' | 'ended'; hits?: number; last?: string | null; lastAt?: number | null; value?: number | null; values?: number[]; progress?: string | null; job?: string | null; at?: number; endedAt?: number | null }

@@ -840,7 +840,7 @@ test('the owner\'s Plan and Build cards: a task-list step slotted in an earlier 
 test('jobs: a background Bash call and a Monitor join by the id their result names, with the output file; a foreground call does not', () => {
   const res = 'Command running in background with ID: b2aw45xp4. Output is being written to: /tmp/x/b2aw45xp4.output'
   const one = addJob([], 'Bash', { command: 'gh pr checks 53 --watch', description: 'Watch CI checks', run_in_background: true }, res, 1000)
-  expect(one).toEqual([{ id: 'b2aw45xp4', kind: 'shell', description: 'Watch CI checks', at: 1000, path: '/tmp/x/b2aw45xp4.output', read: 0 }])
+  expect(one).toEqual([{ id: 'b2aw45xp4', kind: 'shell', description: 'Watch CI checks', command: 'gh pr checks 53 --watch', at: 1000, path: '/tmp/x/b2aw45xp4.output', read: 0 }])
   expect(addJob([], 'Bash', { command: 'ls' }, res, 1000)).toEqual([])
   expect(addJob(one, 'Bash', { description: 'again', run_in_background: true }, res, 2000)).toBe(one)
   expect(addJob([], 'Monitor', { description: 'Deploy log' }, 'Monitor started (ID: mon_1234)', 1000).map(j => j.kind)).toEqual(['monitor'])
@@ -889,7 +889,7 @@ test('watch detection: items that name watching or waiting leave the cards; work
 
 test('watch rows: running first in start order, then ended newest first; a due wakeup and a done watch item show as complete', () => {
   const rows = watchRows({
-    jobs: [{ id: 'b1', kind: 'shell', description: 'CI', at: 30 }, { id: 'b0', kind: 'shell', description: 'Old CI', at: 5, endedAt: 50, outcome: 'hit' }],
+    jobs: [{ id: 'b1', kind: 'shell', description: 'CI', command: 'gh run watch 7', at: 30 }, { id: 'b0', kind: 'shell', description: 'Old CI', command: 'gh pr checks 1 --watch', at: 5, endedAt: 50, outcome: 'hit' }],
     helpers: [{ id: 'h1', description: 'Review', status: 'running', model: 'haiku', startTime: 10 }],
     agent: [{ id: 'v', name: 'Virama alerts', shape: 'stream', status: 'running', hits: 3, at: 20 }],
     items: [it('Wait for deploy', 0, 'done', { doneAt: 60 })],
@@ -897,6 +897,22 @@ test('watch rows: running first in start order, then ended newest first; a due w
     at: 100,
   })
   expect(rows.map(r => [r.name, r.endedAt])).toEqual([['Review', null], ['Virama alerts', null], ['CI', null], ['Wait for deploy', 60], ['Old CI', 50], ['Check again', 40]])
+})
+
+test('watch rows: a background shell that only does work is not a watch; a Monitor, a waiting command, the protocol or an agent name make one', () => {
+  const job = (id: string, command: string, extra = {}) => ({ id, kind: 'shell', description: id, command, at: 1, ...extra })
+  const jobs = [
+    job('build', 'npm run build 2>&1 | tee /tmp/b.log'),
+    job('sed', "sed -i '' s/a/b/ x.ts", { endedAt: 5, outcome: 'done' }),
+    job('kill', 'pkill -f node', { endedAt: 6, outcome: 'failed' }),
+    job('loop', 'until gh pr checks 9; do sleep 30; done'),
+    job('tail', 'tail -f /tmp/deploy.log'),
+    job('proto', 'node feed.mjs', { shape: 'stream' }),
+    job('named', 'node poll.mjs'),
+    { id: 'mon', kind: 'monitor', description: 'Errors', at: 1 },
+  ]
+  const rows = watchRows({ jobs, helpers: [], agent: [{ id: 'a', name: 'Price feed', job: 'named' }], items: [], wakeups: [], at: 10 })
+  expect(rows.map(r => r.id).sort()).toEqual(['job-loop', 'job-mon', 'job-named', 'job-proto', 'job-tail'])
 })
 
 test('parallel lets an item run beside the one before it; without it, it waits', () => {
