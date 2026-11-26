@@ -496,8 +496,13 @@ test('a pull request card reads repository and number, then its icon and title, 
     statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS' }, { name: 'lint', status: 'IN_PROGRESS' }],
   }, 0)
   expect(r.summary).toBe('The pane lists pull requests. Each card opens to its facts.')
-  expect(r.commits?.[0]).toEqual({ sha: '1234567', title: 'Second' })
+  expect(r.commits?.[0]).toEqual({ sha: '1234567', title: 'Second', at: null })
   expect(r.checks?.map(c => c.state)).toEqual(['passing', 'running'])
+  // The card's facts: none given reads as null, never 0 or a wrong word.
+  expect([r.additions, r.deletions, r.files, r.review, r.base, r.openedAt]).toEqual([null, null, null, null, null, null])
+  const f = prRecordOf('acme/app#9', { number: 9, state: 'OPEN', additions: 306, deletions: 853, changedFiles: 40, reviewDecision: 'CHANGES_REQUESTED', baseRefName: 'main', createdAt: '2026-11-26T09:02:44Z', statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS', startedAt: '2026-11-26T09:00:00Z', completedAt: '2026-11-26T09:03:30Z' }] }, 0)
+  expect([f.additions, f.deletions, f.files, f.review, f.base, f.openedAt]).toEqual([306, 853, 40, 'changes', 'main', Date.parse('2026-11-26T09:02:44Z')])
+  expect(f.checks?.[0]?.ms).toBe(210_000)
   expect(summaryOf('')).toBe('')
   // A period inside a version or a file name never ends a sentence.
   expect(summaryOf('The pane ships 0.12.0 today (see machine.ts). It runs live.')).toBe('The pane ships 0.12.0 today (see machine.ts). It runs live.')

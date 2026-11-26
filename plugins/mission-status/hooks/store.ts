@@ -225,7 +225,10 @@ export async function tickIfTimer($: EngineInterface): Promise<void> {
   try {
     // A timer shows the counted time plus the span since its start, so the tick only redraws: it reads one value and
     // writes the clock. Statuses change on events (turns, tool calls, updates) and on the 5 s read, which settle.
-    if (Object.values((await read($, runs)) ?? {}).some(r => r.from !== null)) await tick($)
+    if (Object.values((await read($, runs)) ?? {}).some(r => r.from !== null)) return await tick($)
+    // A pull request whose CI runs: its card's CI time counts up live.
+    const recs = (await read($, live))?.prRecords ?? {}
+    if (Object.values(recs).some(r => r.ci === 'running' && r.state !== 'merged' && r.state !== 'closed')) await tick($)
   } catch {}
 }
 

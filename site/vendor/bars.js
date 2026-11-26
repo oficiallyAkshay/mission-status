@@ -163,6 +163,20 @@ function prIconSvg(state) {
   );
   return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16">${body}</svg>`;
 }
+function checkIconSvg(state) {
+  const color = { passing: "#3FB950", failing: "#F85149", running: "#D29922", none: "#8B949E" }[state];
+  const ring = `<circle cx="6" cy="6" r="5" fill="none" stroke="${color}" stroke-width="1.3"/>`;
+  const mark = state === "passing" ? `<path d="M3.6 6.2l1.6 1.6 3.2-3.4" fill="none" stroke="${color}" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>` : state === "failing" ? `<path d="M4.2 4.2l3.6 3.6M7.8 4.2l-3.6 3.6" fill="none" stroke="${color}" stroke-width="1.4" stroke-linecap="round"/>` : state === "running" ? `<circle cx="6" cy="6" r="1.8" fill="${color}"/>` : "";
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12">${ring}${mark}</svg>`;
+}
+function branchIconSvg() {
+  const s = 'fill="none" stroke="#8B949E" stroke-width="1.2" stroke-linecap="round"';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><circle cx="3.5" cy="2.5" r="1.4" ${s}/><circle cx="3.5" cy="9.5" r="1.4" ${s}/><circle cx="8.5" cy="3.5" r="1.4" ${s}/><path d="M3.5 3.9v4.2M8.5 4.9c0 2-2.5 2.2-5 3.2" ${s}/></svg>`;
+}
+function commitIconSvg() {
+  const s = 'fill="none" stroke="#8B949E" stroke-width="1.2" stroke-linecap="round"';
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><circle cx="6" cy="6" r="2.2" ${s}/><path d="M0.5 6h3.3M8.2 6h3.3" ${s}/></svg>`;
+}
 function stepPulseSvg(name, k, running, now = 0) {
   const w = pulseWidth(name);
   const style = `<style>.sp{fill:rgba(128,128,128,.75)}.s0{stop-color:rgb(128,128,128);stop-opacity:.75}.s1{stop-color:#F0EEFC;stop-opacity:1}@media (prefers-color-scheme:light){.sp{fill:${LIGHT.grey}}.s0{stop-color:${LIGHT.grey};stop-opacity:1}.s1{stop-color:${LIGHT.ink}}}</style>`;
@@ -176,6 +190,9 @@ export {
   DARK_PAGE,
   LIGHT,
   badgeSvg,
+  branchIconSvg,
+  checkIconSvg,
+  commitIconSvg,
   exitSvg,
   failedBadgeSvg,
   flowLineSvg,

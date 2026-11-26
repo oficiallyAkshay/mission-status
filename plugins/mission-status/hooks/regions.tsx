@@ -2,7 +2,7 @@ import { atom, update } from 'claude-code'
 import type { EngineInterface, RenderChildren } from 'claude-code'
 import type { Count, HypothesisState, Helper, Item, PrRecord, Runbook, RunbookStep } from '../types'
 import { type WatchRow, spark, trendWord } from './watches'
-import { stepsRailSvg, prIconSvg, badgeSvg, exitSvg, flowLineSvg, waitsLineSvg } from './bars'
+import { stepsRailSvg, prIconSvg, checkIconSvg, branchIconSvg, commitIconSvg, badgeSvg, exitSvg, flowLineSvg, waitsLineSvg } from './bars'
 import { age, cap } from './model'
 import type { deriveNow } from './store'
 import { type NodeStatus, stageKey } from './machine'
@@ -140,9 +140,53 @@ export function prsTab($: EngineInterface, r: Region, p0: PrsState) {
   const { sessionPrs, prTabs, prsStale, prsReadAt, clock, nowOrRead, isOpenKey, toggleKey } = p0
   const word = { merged: 'Merged', open: 'Open', draft: 'Draft', conflict: 'Conflict', closed: 'Closed' } as const
   const ciWord = { running: 'CI running', passing: 'CI passed', failing: 'CI failed', none: 'No CI' } as const
-  // CI on the closed row only while it runs (with its time so far) or after it failed; passed CI stays inside the card.
-  const ciShort = (p: (typeof sessionPrs)[number]) =>
-    p.ci === 'running' ? `CI ${p.ciStart != null ? durationOf(nowOrRead() - p.ciStart) : ''}`.trim() : p.ci === 'failing' && p.state !== 'merged' ? 'CI failed' : null
+  const ciMark = { running: '●', passing: '✓', failing: '✕', none: '○' } as const
+  const reviewWord = { approved: 'Approved', changes: 'Changes requested', required: 'Review needed' } as const
+  const stateColor = (st: PrRecord['state']) => (st === 'conflict' ? 'warning' : st === 'closed' ? 'error' : st === 'open' ? 'success' : SUBTEXT)
+  // A 12 px icon beside a caption, centred on its line.
+  const icon = (source: string, alt: string, k: string) => <Box key={k} flexShrink={0}>{svg(source, alt, 12, k, undefined, 12) ?? <Text size="caption">{'·'}</Text>}</Box>
+  // The facts under the summary, one line that wraps: lines added and deleted, files, the review, and when it opened or merged.
+  const facts = (p: PrRecord, key: string) => {
+    const parts: RenderChildren[] = []
+    if (p.additions != null || p.deletions != null)
+      parts.push(
+        <Box key={`${key}-diff`} flexDirection="row" gap={1}>
+          <Text size="caption" color="success">{`+${p.additions ?? 0}`}</Text>
+          <Text size="caption" color="error">{`−${p.deletions ?? 0}`}</Text>
+        </Box>,
+      )
+    if (p.files != null) parts.push(B.Caption({ key: `${key}-files`, children: `${p.files} ${p.files === 1 ? 'file' : 'files'}` }))
+    if (p.review != null && p.state !== 'merged' && p.state !== 'closed')
+      parts.push(B.Caption({ key: `${key}-review`, color: p.review === 'approved' ? 'success' : p.review === 'changes' ? 'error' : undefined, children: reviewWord[p.review] }))
+    const at = p.mergedAt ?? p.openedAt ?? null
+    if (at !== null) parts.push(B.Caption({ key: `${key}-age`, children: `${p.mergedAt != null ? 'Merged' : 'Opened'} ${agoOf(clock - at)}` }))
+    if (parts.length === 0) return null
+    return (
+      <Box key={`${key}-facts`} flexDirection="row" flexWrap="wrap" alignItems="center" columnGap={2} paddingRight={CHEV}>
+        {parts.flatMap((x, j) => (j === 0 ? [x] : [<Text key={`${key}-sep-${j}`} size="caption" color={SUBTEXT}>{'·'}</Text>, x]))}
+      </Box>
+    )
+  }
+  // The branch it merges, into its base.
+  const branchLine = (p: PrRecord, key: string) =>
+    p.branch === null ? null : (
+      <Box key={`${key}-branch`} flexDirection="row" alignItems="center" gap={1} minWidth={0} paddingRight={CHEV}>
+        {icon(branchIconSvg(), 'Branch', `${key}-branch-icon`)}
+        <Box flexGrow={1} flexShrink={1} minWidth={0}>
+          <Text size="caption" color={SUBTEXT} wrap="truncate-end">{`${p.branch}${p.base ? `  →  ${p.base}` : ''}`}</Text>
+        </Box>
+      </Box>
+    )
+  // CI live on the card's first line, whatever its state: running with its time so far (it counts up), passed or failed
+  // with how long it ran. A pull request with no CI shows none.
+  const ciShort = (p: (typeof sessionPrs)[number]) => {
+    if (p.ci === 'none') return null
+    const ran = p.ciStart != null ? durationOf((p.ci === 'running' ? nowOrRead() : (p.ciEnd ?? nowOrRead())) - p.ciStart) : ''
+    const done = (p.checks ?? []).filter(c => c.state !== 'running').length
+    const all = (p.checks ?? []).length
+    const head = p.ci === 'running' ? `CI ${all > 0 ? `${done}/${all}` : 'running'}` : ciWord[p.ci]
+    return [head, ran].filter(x => x !== '').join(' · ')
+  }
   return (
     <Box flexDirection="column" gap={1} paddingBottom={1}>
       {tabRow}
@@ -153,7 +197,8 @@ export function prsTab($: EngineInterface, r: Region, p0: PrsState) {
         {[...sessionPrs].reverse().map(p => {
           const key = `pr-${p.ref}`
           const isOpen = isOpenKey(key)
-          const which = prTabs[p.ref] === 'ci' ? 'ci' : 'commits'
+          // CI is the first tab and opens by default; Commits only when the person picked it.
+          const which = prTabs[p.ref] === 'commits' ? 'commits' : 'ci'
           const pickTab = (name: string) => () => void update($, prTabAtom, m => ({ ...(m ?? {}), [p.ref]: name }))
           const checks = p.checks ?? []
           const commits = p.commits ?? []
@@ -169,8 +214,13 @@ export function prsTab($: EngineInterface, r: Region, p0: PrsState) {
                   children: [`${p.ref.includes('#') ? p.ref.split('#')[0] : 'This repository'}  •  `, isWebUrl(p.url) ? <Link key="n" href={p.url}>{`#${p.number}`}</Link> : `#${p.number}`],
                 }),
                 meta: [
-                  ciShort(p) !== null && B.Caption({ key: `${key}-ci`, color: p.ci === 'failing' ? 'error' : undefined, children: ciShort(p) }),
-                  B.Caption({ key: `${key}-state`, color: p.state === 'conflict' ? 'warning' : SUBTEXT, children: word[p.state] }),
+                  ciShort(p) !== null && (
+                    <Box key={`${key}-ci`} flexDirection="row" alignItems="center" gap={1}>
+                      {icon(checkIconSvg(p.ci), ciWord[p.ci], `${key}-ci-icon`)}
+                      {B.Caption({ color: p.ci === 'failing' ? 'error' : p.ci === 'running' ? ACCENT_TEXT : p.ci === 'passing' ? 'success' : undefined, children: ciShort(p) })}
+                    </Box>
+                  ),
+                  B.Caption({ key: `${key}-state`, color: stateColor(p.state), children: word[p.state] }),
                 ],
                 control: B.Control({ id: key, open: isOpen, onPress: () => void toggleKey(key) }),
               }),
@@ -181,15 +231,20 @@ export function prsTab($: EngineInterface, r: Region, p0: PrsState) {
                 title: <Text wrap="wrap" dimColor={p.state === 'merged' || p.state === 'closed'}>{p.title}</Text>,
                 body: [
                   (p.summary ?? '') !== '' && B.Note({ key: `${key}-summary`, maxLines: 2, children: p.summary }),
+                  // Its facts and its branch, a row apart from the summary.
+                  <Box key={`${key}-meta`} flexDirection="column" gap={0} marginTop={1}>
+                    {facts(p, key)}
+                    {branchLine(p, key)}
+                  </Box>,
                   // Inside an open card: two tabs, Commits and CI; the choice is kept per pull request.
                   isOpen && (
-                    <Box key={`${key}-open`} flexDirection="column" gap={1} marginTop={1}>
+                    <Box key={`${key}-open`} flexDirection="column" gap={1} marginTop={1} paddingTop={1}>
                       {B.Tabs({
                         id: `${key}-tabs`,
                         inset: true,
                         tabs: [
+                          { key: `${key}-b-ci`, icon: ciMark[p.ci], label: checks.length > 0 ? `CI ${checks.filter(c => c.state === 'passing').length}/${checks.length}` : 'CI', on: which === 'ci', onPress: pickTab('ci') },
                           { key: `${key}-b-commits`, icon: '•', label: `Commits ${commits.length}`, on: which === 'commits', onPress: pickTab('commits') },
-                          { key: `${key}-b-ci`, icon: '✓', label: checks.length > 0 ? `CI ${checks.filter(c => c.state === 'passing').length}/${checks.length}` : 'CI', on: which === 'ci', onPress: pickTab('ci') },
                         ],
                       })}
                       {/* The tab's content sits one row under the divider, in rows of the same shape: a dim key on
@@ -200,29 +255,34 @@ export function prsTab($: EngineInterface, r: Region, p0: PrsState) {
                         ) : (
                           <Box key={`${key}-commits`} flexDirection="column" gap={0} paddingRight={CHEV}>
                             {commits.map(c => (
-                              <Box key={`${key}-c-${c.sha}`} flexDirection="row" gap={2} minWidth={0}>
-                                <Box flexShrink={0}>{B.Caption({ children: c.sha })}</Box>
+                              <Box key={`${key}-c-${c.sha}`} flexDirection="row" alignItems="center" gap={1} minWidth={0}>
+                                {icon(commitIconSvg(), 'Commit', `${key}-c-icon-${c.sha}`)}
+                                <Box flexShrink={0} paddingRight={1}>{B.Caption({ children: c.sha })}</Box>
                                 <Box flexGrow={1} flexShrink={1} minWidth={0}>
                                   <Text size="caption" color={SUBTEXT} wrap="truncate-end">{c.title}</Text>
                                 </Box>
+                                {c.at != null && <Box flexShrink={0} paddingLeft={1}>{B.Caption({ children: agoOf(clock - c.at) })}</Box>}
                               </Box>
                             ))}
                           </Box>
                         ))}
                       {which === 'ci' && (
                         <Box key={`${key}-checks`} flexDirection="column" gap={0} paddingRight={CHEV}>
+                          {/* The run as a whole first, then each check. */}
                           {B.Caption({
                             color: p.ci === 'failing' ? 'error' : undefined,
-                            children: `${ciWord[p.ci]}${p.ciStart != null ? `  ·  ${durationOf((p.ciEnd ?? clock) - p.ciStart)}` : ''}`,
+                            children: `${ciWord[p.ci]}${p.ciStart != null ? `  ·  ${durationOf((p.ci === 'running' ? nowOrRead() : (p.ciEnd ?? nowOrRead())) - p.ciStart)}` : ''}`,
                           })}
                           {checks.map((c, j) => (
-                            <Box key={`${key}-k-${j}`} flexDirection="row" gap={2} minWidth={0}>
+                            <Box key={`${key}-k-${j}`} flexDirection="row" alignItems="center" gap={1} minWidth={0}>
+                              {icon(checkIconSvg(c.state), c.state === 'passing' ? 'Passed' : c.state === 'failing' ? 'Failed' : c.state === 'running' ? 'Running' : 'No result', `${key}-k-icon-${j}`)}
                               <Box flexGrow={1} flexShrink={1} minWidth={0}>
                                 <Text size="caption" color={SUBTEXT} wrap="truncate-end">{c.name}</Text>
                               </Box>
+                              {/* How long a check that ended ran; a running or failed one says so instead. */}
                               {B.Caption({
                                 color: c.state === 'failing' ? 'error' : c.state === 'running' ? ACCENT_TEXT : undefined,
-                                children: c.state === 'passing' ? 'Passed' : c.state === 'failing' ? 'Failed' : c.state === 'running' ? 'Running' : 'No result',
+                                children: c.state === 'running' ? (c.since != null ? `Running ${durationOf(nowOrRead() - c.since)}` : 'Running') : c.state === 'failing' ? 'Failed' : c.ms != null ? durationOf(c.ms) : c.state === 'passing' ? 'Passed' : 'No result',
                               })}
                             </Box>
                           ))}
