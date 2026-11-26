@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
 import type { ElementConstructor, RenderChildren, RenderInput, SvgProps } from 'claude-code'
-import type { Count, Item, ItemStatus, Live, PrRecord, Runs, Wakeup } from '../types'
+import type { Count, Item, ItemStatus, Job, Live, PrRecord, Runs, Wakeup } from '../types'
 import { prIconSvg, badgeSvg, failedBadgeSvg, needsBadgeSvg, waitsLineSvg } from './bars'
 import { findRef, workOrder } from './model'
 import { deriveNow } from './store'
@@ -17,6 +17,7 @@ const open = atom({ plugin: 'mission-status', key: 'open' } as const, null as st
 const runsAtom = atom({ plugin: 'mission-status', key: 'runs' } as const, {} as Runs)
 const seenAtom = atom({ plugin: 'mission-status', key: 'seenAt' } as const, 0)
 const wakeupsAtom = atom({ plugin: 'mission-status', key: 'wakeups' } as const, [] as Wakeup[])
+const jobsAtom = atom({ plugin: 'mission-status', key: 'jobs' } as const, [] as Job[])
 // The pane's open tab: null is Progress, else a runbook's id.
 const tabAtom = atom({ plugin: 'mission-status', key: 'tab' } as const, null as string | null)
 // The open tab inside each pull request card, by its reference.
@@ -150,6 +151,8 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const running = helpersAll.filter(x => x.status === 'running')
     // Wakeups the session scheduled that are not yet due: they join the Watching strip.
     const due = ((await safe(read($, wakeupsAtom), [])) ?? []).filter(w => w.due > t)
+    // Background jobs in flight (a shell, a Monitor, a workflow): the helper list holds only subagents.
+    const jobs = (await safe(read($, jobsAtom), [])) ?? []
     // The session's pull requests: the newest 20 it made, each from its one record.
     const sessionPrs = ((await safe(read($, prRefsAtom), [])) ?? [])
       .slice(-20)
@@ -312,7 +315,7 @@ export async function renderPane($: EngineInterface, e: Extract<RenderInput, { c
     const hostKey = facts.hostKey
     // A root is an item no item holds in the machine's tree, so an item in a parent loop still shows.
     const isRoot = (x: Item) => !allItems.some(y => machine.kids(y).includes(x))
-    const stage: StageState = { s, machine, allItems, opened, measures, isDone, t, running, due, hostKey, stageState, stageTimeText, badgeFor, needsWord, toggle, itemCards, isRoot }
+    const stage: StageState = { s, machine, allItems, opened, measures, isDone, t, running, due, jobs, hostKey, stageState, stageTimeText, badgeFor, needsWord, toggle, itemCards, isRoot }
 
     // Tabs: Progress, then one tab for each runbook the session follows. A press switches the view.
     const runbooks = s.runbooks ?? []

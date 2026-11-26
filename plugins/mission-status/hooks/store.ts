@@ -1,7 +1,7 @@
 import { openPane } from './surface'
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface } from 'claude-code'
-import type { Fresh, Item, Live, Marks, Runs, Summary, Task, Wakeup } from '../types'
+import type { Fresh, Item, Job, Live, Marks, Runs, Summary, Task, Wakeup } from '../types'
 import { type Derived, type Facts, derive, itemKey, mergeItems, stageKey } from './machine'
 import { MAX_FAILS } from './marker'
 import { AUTO_OPEN_CALLS, CHECK_MS, checkLine, FIRST_REMINDER, TURN_TEXT, HOLD_TEXT, IGNORED_AFTER, IGNORED_LIMIT, REMINDER, REMIND_MS, STALE_STEPS, autoSummary, normalize } from './model'
@@ -24,6 +24,37 @@ export const open = atom({ plugin: 'mission-status', key: 'open' } as const, nul
 // The session's task list, as the app shows it, each step slotted into a stage.
 export const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
 // One ScheduleWakeup call: a new wakeup replaces the one before it (the loop has one), and stop clears it.
+// A tool call that starts a background job: a Bash call with run_in_background, or a Monitor. Its id is read from the
+// result ("... with ID: <id>"); a call whose result names no id adds nothing.
+export function addJob(list: Job[], tool: string, args: Record<string, unknown>, resultText: string, at: number): Job[] {
+  const isShell = tool === 'Bash' && args.run_in_background === true
+  if (!isShell && tool !== 'Monitor') return list
+  const id = /\bID:?\s*([A-Za-z0-9_-]{4,})/.exec(resultText)?.[1]
+  if (id === undefined || list.some(j => j.id === id)) return list
+  const said = [args.description, args.command, args.prompt].find(x => typeof x === 'string' && x.trim() !== '') as string | undefined
+  return [...list, { id, kind: isShell ? 'shell' : 'monitor', description: (said ?? tool).trim().slice(0, 120), at }]
+}
+
+// At a turn end the engine lists every job still in flight: the list replaces the kept one (subagents are left to the
+// helper list), and a job seen before keeps its start time.
+export function jobsAtTurnEnd(list: Job[], tasks: readonly { id?: unknown; type?: unknown; description?: unknown; command?: unknown }[], at: number): Job[] {
+  return tasks
+    .filter(t => typeof t.id === 'string' && t.type !== 'subagent')
+    .map(t => {
+      const id = String(t.id)
+      const was = list.find(j => j.id === id)
+      const said = [t.description, t.command].find(x => typeof x === 'string' && x.trim() !== '') as string | undefined
+      return { id, kind: typeof t.type === 'string' ? t.type : 'job', description: was?.description ?? (said ?? 'Background job').trim().slice(0, 120), at: was?.at ?? at }
+    })
+}
+
+// A finished job leaves the strip: a task notification that names it as completed, failed or killed, or a TaskStop.
+export function endJobs(list: Job[], text: string): Job[] {
+  const ended = new Set<string>()
+  for (const m of text.matchAll(/<task-id>([^<]+)<\/task-id>[\s\S]*?<status>(completed|failed|killed|stopped)<\/status>/g)) ended.add((m[1] ?? '').trim())
+  return ended.size === 0 ? list : list.filter(j => !ended.has(j.id))
+}
+
 export function applyWakeup(list: Wakeup[], args: Record<string, unknown>, at: number): Wakeup[] {
   if (args.stop === true) return []
   const secs = typeof args.delaySeconds === 'number' ? Math.min(3600, Math.max(60, args.delaySeconds)) : null
