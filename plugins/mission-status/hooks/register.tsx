@@ -13,9 +13,6 @@ import { registerDoc } from './doc'
 import { registerMarker } from './marker'
 import { registerQuiet } from './quiet'
 
-// The holdback (metrics.tsx decides it): a measurement session with no pane and no standing rule.
-const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
-
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
@@ -349,7 +346,7 @@ export const register: Register = on => {
     void poll($)
     // An app restart or a resume starts with no state: take back the last saved one.
     await restorePane($).catch(() => false)
-    if ((await read($, summary)) !== null && !(await read($, holdback))) {
+    if ((await read($, summary)) !== null) {
       await paneSeen($).catch(() => undefined)
       void openPane($, { id: PANE, title: TITLE })
     }
@@ -478,14 +475,14 @@ export const register: Register = on => {
   // After each context compaction the standing rule goes back into the agent's context.
   on('classic.SessionStart', async ($, e, next) => {
     const result = await next(e)
-    if (e.source !== 'compact' || (await read($, holdback))) return result
+    if (e.source !== 'compact') return result
     return { ...result, additionalContext: [...(result.additionalContext ?? []), RULE] }
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
 
   // A turn ends while the state is stale: hold the end once and ask the agent for an update.
   on('classic.Stop', async ($, e, next) => {
     const result = await next(e)
-    if (result.block !== undefined || (await read($, holdback))) return result
+    if (result.block !== undefined) return result
     const hold = await atTurnEnd($, e.stop_hook_active)
     return hold === null ? result : { ...result, block: hold }
   }).catch(($, e, next) => (next.called ? undefined : next(e)) as never)
@@ -511,8 +508,6 @@ export const register: Register = on => {
   // A standing rule for the model: keep the pane current and look again at its stages.
   on('prompt.compose', async ($, e, next) => {
     const result = await next(e)
-    // A holdback session runs as if the pane were not installed: no standing rule.
-    if (await read($, holdback)) return result
     return {
       sections: [
         ...result.sections,
@@ -574,10 +569,8 @@ export const register: Register = on => {
     await agentUpdated($, num(args.version))
     await tick($)
     // With no surface attached there is nowhere to open the pane; the state is kept for the next surface.
-    if (!(await read($, holdback))) {
-      await openPane($, { id: PANE, title: TITLE })
-      await paneSeen($).catch(() => undefined)
-    }
+    await openPane($, { id: PANE, title: TITLE })
+    await paneSeen($).catch(() => undefined)
     // Each agent update reads GitHub at once: pull requests, CI and merges.
     void poll($, true)
     // A saved template: the stages this update left, under the person's name for them.

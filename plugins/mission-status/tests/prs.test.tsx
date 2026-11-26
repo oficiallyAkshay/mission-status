@@ -19,7 +19,6 @@ type World = {
   branch?: string
   // A pane that is not placed: the pane is closed.
   closed?: boolean
-  holdback?: boolean
   // What the Bash tool answers.
   bash?: (command: string) => string
   limited?: boolean
@@ -66,10 +65,6 @@ async function boot($: any, on: any, w: World, extra: (on: any) => void = () => 
   on('ui.open', () => ({ value: { isPlaced: true } }))
   on('ui.panes', () => ({ value: w.closed ? [] : [{ id: 'progress', title: 'Progress', isShown: true, isFocused: false, isPlaced: true }] }))
   on('tool.call', { tool: 'Bash' }, (_: unknown, e: { command?: string }) => ({ result: w.bash?.(String(e.command ?? '')) ?? '' }))
-  if (w.holdback)
-    on('state.get', async (_: unknown, e: { plugin: string; key: string }, next: (e: unknown) => unknown) =>
-      e.plugin === 'mission-status' && e.key === 'holdback' ? { value: { value: true, version: 1 } } : next(e),
-    )
   extra(on)
   on('session.start', (_: unknown, e: { cwd: string }) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
@@ -114,14 +109,6 @@ test('one record: one read feeds the item chip, the PRs tab and the Deploy count
   // 1 of 1 merged: the Deploy gate is met.
   expect(await svgAlts(deploy)).toContain('Gate met: every pull request merges')
   await deploy.unmount()
-})
-
-test('holdback: a holdback session makes no gh call at all', async ($, on) => {
-  const w: World = { prs: { 'acme/app#9': pr('acme/app#9') }, holdback: true, bash: () => 'https://github.com/acme/app/pull/9\n' }
-  const { clock, gh } = await boot($, on, w)
-  await bash($, 'gh pr create --fill')
-  await run(clock, 3 * 60_000)
-  expect(gh).toEqual([])
 })
 
 test('a merged pull request is not read again; an open one is read once a minute', async ($, on) => {

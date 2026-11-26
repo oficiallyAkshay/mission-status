@@ -26,7 +26,7 @@ export function switchSvg(isOn: boolean): string {
 }
 // One sentence: what is sent and what is never sent (product plan, Metrics).
 export const CONSENT_LINE =
-  'The pane sends only counts, durations and words from fixed lists with one random install id, and never sends your goals, names, files, branches, commands, links, paths or session and account ids.'
+  'The pane sends only counts, words from fixed lists, one random install id and scrambled ids for projects and pull requests, and never sends your goals, names, files, branches, commands, links, paths or session and account ids.'
 export const CONSENT_CHANGE_LINE = 'You can change this choice at any time.'
 export const FIELDS_URL = 'https://github.com/oficiallyAkshay/mission-status#metrics'
 

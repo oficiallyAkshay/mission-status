@@ -24,7 +24,6 @@ const LINES = 30
 const marksAtom = atom({ plugin: 'mission-status', key: 'marks' } as const, null as Marks | null)
 const summary = atom({ plugin: 'mission-status', key: 'summary' } as const, null as Summary, { shape: 'summary' })
 const tasks = atom({ plugin: 'mission-status', key: 'tasks' } as const, [] as Task[])
-const holdback = atom({ plugin: 'mission-status', key: 'holdback' } as const, false as boolean)
 
 export const EMPTY: Marks = { marks: {}, places: [], fails: 0 }
 
@@ -147,7 +146,7 @@ function reset(): void {
 }
 
 const off = async ($: EngineInterface): Promise<boolean> =>
-  Boolean(await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC').catch(() => undefined)) || (await read($, holdback).catch(() => false))
+  Boolean(await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC').catch(() => undefined))
 
 // Schedule one check after a wait; a later schedule replaces an earlier one (the debounce).
 export function schedule($: EngineInterface, ms: number): void {

@@ -69,7 +69,8 @@ export type Fresh = {
 }
 // The marker's kept marks (marker.ts): a mark per item id, the places of parentless items, and the failed calls in a row.
 export type Marks = { marks: Record<string, { status: 'done' | 'now' | 'failed' | 'needs'; at: number }>; places: { name: string; parent: string }[]; fails: number }
-export type MetricsSession = { holdback: boolean; calls: number; realWork: boolean; paneSent?: boolean }
+// prs: the pull requests this session counted, by number, kept on the device; never sent.
+export type MetricsSession = { calls: number; realWork: boolean; paneSent?: boolean; project?: string | null; prs?: number[] }
 export type Task = { name: string; status: 'done' | 'now' | 'next'; phase: number; since?: number | null; doneAt?: number | null }
 // Running time per node (machine.ts): ms counted, and the time it last became running, or null.
 export type Runs = Record<string, { ms: number; from: number | null }>
@@ -88,7 +89,7 @@ declare module 'claude-code' {
   interface PluginState {
     'mission-status': { summary: Shaped<Summary>; live: Shaped<Live | null>; now: number; open: string[] | null; activity: Activity; tasks: Task[]
       // Wave 1: consent and metrics (metrics.tsx, onboarding.tsx), auto-update (update.tsx)
-      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; holdback: boolean; metricsNoticeShown: boolean; metricsSession: MetricsSession | null; autoUpdate: boolean | null; tab: string | null; prTab: Record<string, string>; prRefs: string[]; prBranches: string[]; turnOpen: boolean; waiting: boolean; runs: Runs; seenAt: number
+      consent: 'yes' | 'no' | null; onboarded: boolean; updateState: { phase: string; version: string | null; failures: number; at: number } | null; metricsNoticeShown: boolean; metricsSession: MetricsSession | null; autoUpdate: boolean | null; tab: string | null; prTab: Record<string, string>; prRefs: string[]; prBranches: string[]; turnOpen: boolean; waiting: boolean; runs: Runs; seenAt: number
       // Wave 1: freshness triggers (store.ts)
       fresh: Fresh; doc: { title: string; path: string } | null
       // The quiet chat's hidden and shown blocks (quiet.tsx), kept across a reload.

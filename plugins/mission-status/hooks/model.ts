@@ -871,7 +871,9 @@ export function applyPatch(items: Item[], patch: unknown[]): Item[] {
 // The state the pane builds by itself when the agent sends none by the 5th tool call: a Custom type whose stages
 // are the task-list steps (2 to 8 of them), or one Work stage. waitingForAgent marks it "Waiting for the agent" (the view
 // renders the words).
-export function autoSummary(steps: Task[], at: number, project = 'This session'): { summary: NonNullable<Summary>; steps: Task[] } {
+// The project name of a pane the agent has not named yet; metrics never count it.
+export const AUTO_PROJECT = 'This session'
+export function autoSummary(steps: Task[], at: number, project = AUTO_PROJECT): { summary: NonNullable<Summary>; steps: Task[] } {
   const byStep = steps.length >= 2 && steps.length <= 8
   const phases = byStep ? steps.map(x => cap(clip(x.name, 40))) : ['Work']
   const current = byStep ? Math.max(0, steps.findIndex(x => x.status !== 'done')) : 0

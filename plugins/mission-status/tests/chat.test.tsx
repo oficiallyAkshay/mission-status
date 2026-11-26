@@ -1,5 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
-import { CONSENT_KEY, FLUSH_MS, ID_KEY, NOTICE_KEY, RELEASE_AT } from '../hooks/metrics'
+import { CONSENT_KEY, FLUSH_MS, ID_KEY, NOTICE_KEY } from '../hooks/metrics'
 import { expand } from '../hooks/doc'
 import { bound } from '../hooks/quiet'
 
@@ -88,7 +88,7 @@ const metricsStart = async ($: any, on: any, opts: { store?: Record<string, unkn
     state.push({ key: e.key, value: e.value })
     return next(e)
   })
-  const clock = mock.clock(on, { now: RELEASE_AT + 86_400_000 })
+  const clock = mock.clock(on, { now: Date.UTC(2026, 11, 16) })
   mock.store(on, opts.store ?? {})
   mock.env(on, {})
   on('command.register', (_: unknown, e: { name: string }) => (commands.push(e.name), { value: { command: e.name } }))
