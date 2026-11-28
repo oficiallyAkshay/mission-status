@@ -7,7 +7,8 @@ import { applyOutput } from './watches'
 
 // The stored values this file reads and writes, declared here by plugin and key (the same storage as store.ts).
 const live = atom({ plugin: 'mission-status', key: 'live' } as const, null as Live | null, { shape: 'live' })
-// Background jobs (watches): the poll reads each running job's new output for HIT, VALUE and other lines.
+// Background jobs (watches): the poll reads each job's new output for HIT, VALUE and other lines, and an ended job's
+// last output once.
 const jobs = atom({ plugin: 'mission-status', key: 'jobs' } as const, [] as Job[])
 const nowAtom = atom({ plugin: 'mission-status', key: 'now' } as const, 0)
 
@@ -438,23 +439,54 @@ export function poll($: EngineInterface, force = false): Promise<void> {
   return current
 }
 
-// Each running job's output since the last read, at most 256 KiB a pass: its watch lines move its hits, readings and
-// progress. A file that cannot be read is tried again next pass.
+const PART = 256 * 1024
+
+// One job's output from where the last read stopped; null when nothing moved. A running job: one part a pass, whole
+// lines only, and a file that cannot be read is tried again next pass. An ended job: every part to the end of the file,
+// once, so the result it printed just before it ended still counts; a failed read ends the reading too. A job stopped
+// from outside (not by its own hit) writes no more, so its tail with no newline is its last line. Late lines count as
+// on-time ones, but the end time stays and a failed job stays failed. A part with no newline at all is one line longer
+// than a part: it is skipped, as the transcript scan does, so the reading never stalls on it.
+async function readJob($: EngineInterface, j: Job, at: number): Promise<Job | null> {
+  const ended = j.endedAt != null
+  const stopped = ended && j.outcome !== 'hit'
+  let job: Job = ended ? { ...j, endedAt: null, outcome: null } : j
+  let offset = j.read ?? 0
+  try {
+    for (;;) {
+      const text = await $.fs.read(j.path as string, { as: 'text', offset, length: PART })
+      if (text === '') break
+      const full = byteLength(text) >= PART
+      const out = applyOutput(job, stopped && !full && !text.endsWith('\n') ? `${text}\n` : text, at)
+      if (out.used > 0) {
+        job = out.job
+        offset += byteLength(text.slice(0, out.used))
+      } else if (full) offset += byteLength(text)
+      else break
+      if (!ended) break
+    }
+  } catch {
+    if (!ended) return null
+  }
+  if (!ended) return offset === (j.read ?? 0) ? null : { ...job, read: offset }
+  return { ...job, read: offset, endedAt: j.endedAt, outcome: j.outcome === 'failed' ? 'failed' : (job.outcome ?? j.outcome), drained: true }
+}
+
+// Each job's output not yet read: its watch lines move its hits, readings and progress.
 async function readJobs($: EngineInterface): Promise<void> {
   const list = (await read($, jobs).catch(() => [])) ?? []
-  const due = list.filter(j => j.endedAt == null && typeof j.path === 'string' && j.path !== '')
+  const due = list.filter(j => j.drained !== true && typeof j.path === 'string' && j.path !== '')
   if (due.length === 0) return
   const at = Date.now()
   const changed = new Map<string, Job>()
   for (const j of due) {
-    try {
-      const text = await $.fs.read(j.path as string, { as: 'text', offset: j.read ?? 0, length: 256 * 1024 })
-      if (text === '') continue
-      const out = applyOutput(j, text, at)
-      if (out.used > 0) changed.set(j.id, { ...out.job, read: (j.read ?? 0) + byteLength(text.slice(0, out.used)) })
-    } catch {}
+    const next = await readJob($, j, at)
+    if (next !== null) changed.set(j.id, next)
   }
-  if (changed.size > 0) await update($, jobs, now => (now ?? []).map(j => changed.get(j.id) ?? j)).catch(() => undefined)
+  // A job that ended while the reads ran keeps that end: the next pass reads the rest of its output.
+  const kept = (now: Job, got: Job): Job =>
+    now.endedAt == null ? got : { ...got, endedAt: now.endedAt, outcome: now.outcome === 'failed' ? 'failed' : (got.outcome ?? now.outcome) }
+  if (changed.size > 0) await update($, jobs, now => (now ?? []).map(j => { const got = changed.get(j.id); return got === undefined ? j : kept(j, got) })).catch(() => undefined)
   // A running watch's time moves on this 5 s read, not on the 1 s clock: a 1 s redraw while a watch runs would
   // rebuild every spinner each second.
   else await update($, nowAtom, () => Date.now()).catch(() => undefined)
