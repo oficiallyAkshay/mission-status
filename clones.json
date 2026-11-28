@@ -1,0 +1,18 @@
+{
+  "badge": "1,985 (7d) \u2022 1,985 (all-time)",
+  "last7": 1985,
+  "last7_short": "1,985",
+  "metric": "clones",
+  "repo": "oficiallyAkshay/mission-status",
+  "schema": 1,
+  "since": "2026-11-12",
+  "total": 1985,
+  "total_short": "1,985",
+  "updated": "2026-11-28",
+  "window": {
+    "count": 1985,
+    "days": 14,
+    "uniques": 353
+  },
+  "window_short": "1,985"
+}
