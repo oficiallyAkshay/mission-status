@@ -51,7 +51,7 @@ A scrambled id is the first 16 hex characters of SHA-256 over a secret and the n
 
 ### Never sent
 
-Prompt text, goal text, project names (only their scrambled id), stage or item names, task-list steps, file names, paths, branch names, commands, pull request numbers, titles and links (only their scrambled id), other links, session titles, session ids, repository names, account ids, email addresses, error messages. The metrics code never reads the session id or the account. The onboarding reads the signed-in account once, to show itself once for each account; it keeps only a one-way hash of it in the plugin's local store and sends nothing about it. The tests send these through a session and fail if any of them, or anything that looks like an id or a path other than `distinct_id` and the scrambled ids, reaches an event.
+Prompt text, goal text, project names (only their scrambled id), stage or item names, task-list steps, file names, paths, branch names, commands, pull request numbers, titles and links (only their scrambled id), other links, session titles, session ids, repository names, account ids, email addresses, error messages. The metrics code never reads the session id or the account. The onboarding reads the signed-in account at each session start and when it ends, to show itself once for each account; it keeps only a one-way hash of it in the plugin's local store and sends nothing about it. The tests send these through a session and fail if any of them, or anything that looks like an id or a path other than `distinct_id` and the scrambled ids, reaches an event.
 
 ## The progress word list
 
@@ -68,6 +68,13 @@ The list is `PROGRESS_WORDS` in `metrics.tsx`. A change to it changes the measur
 ## Where it goes
 
 PostHog Cloud (US), a PostHog project the maintainer runs, with `product: "mission-status"` on each event. The project key in `metrics.tsx` is PostHog's public, write-only key: anyone can read it, and it can only add events. The mod sends with the engine's own `$.http.fetch`: no PostHog SDK, no autocapture, no session recording.
+
+## Text sent to a small model
+
+Apart from these events, two kinds of text go to a small model (Haiku) through the session's own Claude client: no key and no separate account. Both stay off when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set and in a headless session, whatever the metrics choice.
+
+- The step marker (`plugins/mission-status/hooks/marker.ts`) sends the names of the open items and one short line per recent main-loop tool call: the tool name with an ok or error result, a Bash description (or the command when there is none) and its last output line, file base names, search patterns and queries, fetched URLs, helper descriptions and skill names. It never sends file contents.
+- The pull request reader (`plugins/mission-status/hooks/readers.ts`) sends each pull request's title and description, to write its one-line card summary.
 
 ## Deletion requests
 

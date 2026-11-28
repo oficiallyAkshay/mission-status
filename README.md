@@ -75,11 +75,17 @@ The pane opens by itself once a session does real work, and `/mission-status` op
 
 ## Security and limits
 
-No credential needed. The pane runs inside Claude Code on your machine, and it calls no model of its own: the step marker asks your session's own model.
+No credential and no separate account needed. The pane runs inside Claude Code on your machine. Two kinds of text go to a small model (Haiku) through your session's own Claude client:
 
-- ❎ sends your prompts, goals, files, branch names or paths anywhere
+- the step marker: the names of the open items, and one short line per recent tool call: the tool name with an ok or error result, a Bash description (or the command when there is none) and its last output line, file base names, search patterns and queries, fetched URLs, helper descriptions and skill names; never file contents
+- the pull request summaries: each pull request's title and description, to write its one-line card summary
+
+Both stay off when `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` is set and in a headless session.
+
+- ❎ sends your prompts, goals or file contents anywhere
 - ❎ names your account or session in any event
 - ❎ installs an update during a turn
 
+The onboarding reads the signed-in account at each session start and when it ends, to show itself once per account; it keeps only a one-way hash of it on your machine and sends nothing about it.
 
-By default anonymous usage counts are on after the onboarding shows them; `/pane-metrics off` stops them, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops every send. Every event and field is listed in [docs/telemetry.md](docs/telemetry.md). By default the plugin updates itself between turns; the onboarding switch or the pane's Turn on auto-update button sets it.
+By default anonymous usage counts are on after the onboarding shows them; `/pane-metrics off` stops them, a headless session sends none, and `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` stops every send. Every event and field is listed in [docs/telemetry.md](docs/telemetry.md). By default the plugin updates itself between turns; the onboarding switch or the pane's Turn on auto-update button sets it.
